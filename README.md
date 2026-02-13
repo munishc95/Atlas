@@ -291,6 +291,39 @@ Atlas v2.1 adds operator-safe automation while keeping live paper state protecte
   - auto-run enabled/time
   - next scheduled run (IST)
 
+## NSE Trading Calendar + Scheduler Upgrade (v2.2)
+
+Atlas now uses a calendar-aware NSE trading day service (equities by default):
+
+- New shared calendar module: `apps/api/app/services/trading_calendar.py`
+  - `is_trading_day()`
+  - `next_trading_day()`
+  - `previous_trading_day()`
+  - `get_session()` (open/close, special session flag, label)
+- Local-first holiday files:
+  - `data/calendars/nse_equities_holidays_2026.json`
+  - `data/calendars/nse_equities_holidays_2027.json`
+  - supports `special_sessions` (including weekend sessions such as Muhurat)
+- Scheduler now uses the calendar (not weekday-only logic):
+  - runs on special trading sessions even on weekends
+  - skips exchange holidays
+  - dedupes by trading date via `operate_last_auto_run_date`
+- Data quality daily gap checks now use trading days from the same calendar (holiday-aware).
+- Ops health/status now include:
+  - calendar segment
+  - today trading-day status
+  - session window and special-session label
+  - next/previous trading day
+
+Optional calendar refresh tool:
+
+```bash
+python -m app.tools.refresh_calendar --year 2026 --segment EQUITIES
+python -m app.tools.refresh_calendar --year 2026 --segment EQUITIES --from-file data/calendars/nse_equities_holidays_2026.json
+```
+
+If NSE fetch fails, Atlas keeps the existing local file intact.
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:

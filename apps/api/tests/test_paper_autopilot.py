@@ -153,6 +153,9 @@ def _reset_paper_state() -> None:
                 "paper_mode": "strategy",
                 "active_policy_id": None,
                 "allowed_sides": ["BUY"],
+                "operate_mode": "offline",
+                "data_quality_stale_severity": "WARN",
+                "data_quality_stale_severity_override": True,
             }
             session.add(state)
         session.commit()

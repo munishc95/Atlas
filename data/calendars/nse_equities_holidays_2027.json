@@ -1,0 +1,61 @@
+{
+  "year": 2027,
+  "segment": "EQUITIES",
+  "holidays": [
+    {
+      "date": "2027-01-26",
+      "name": "Republic Day",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-03-24",
+      "name": "Holi",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-03-26",
+      "name": "Good Friday",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-04-14",
+      "name": "Dr. Babasaheb Ambedkar Jayanti",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-05-01",
+      "name": "Maharashtra Day",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-08-15",
+      "name": "Independence Day",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-11-05",
+      "name": "Diwali Laxmi Pujan",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2027-12-25",
+      "name": "Christmas",
+      "type": "TRADING_HOLIDAY"
+    }
+  ],
+  "special_sessions": [
+    {
+      "date": "2027-11-07",
+      "open": "18:00",
+      "close": "19:00",
+      "label": "Muhurat Trading"
+    }
+  ],
+  "source": "NSE Exchange Communication Holidays",
+  "last_refreshed": "2026-02-14"
+}

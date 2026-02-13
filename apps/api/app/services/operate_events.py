@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -8,55 +8,18 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import DataQualityReport, OperateEvent, PaperRun, PaperState
+from app.services.trading_calendar import (
+    compute_next_scheduled_run_ist,
+    get_session as calendar_get_session,
+    is_trading_day,
+    next_trading_day,
+    previous_trading_day,
+)
 
 
 ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
 ALLOWED_CATEGORIES = {"DATA", "EXECUTION", "POLICY", "SYSTEM"}
 IST_ZONE = ZoneInfo("Asia/Kolkata")
-
-
-def _parse_auto_run_time(value: str | None, *, default: str = "15:35") -> time:
-    raw = value if isinstance(value, str) and value.strip() else default
-    try:
-        hour, minute = [int(part) for part in raw.split(":", maxsplit=1)]
-        return time(hour=max(0, min(23, hour)), minute=max(0, min(59, minute)))
-    except Exception:  # noqa: BLE001
-        return time(15, 35)
-
-
-def _is_trading_day_ist(day: date) -> bool:
-    return day.weekday() < 5
-
-
-def _next_trading_day_ist(day: date) -> date:
-    current = day
-    while True:
-        current += timedelta(days=1)
-        if _is_trading_day_ist(current):
-            return current
-
-
-def _next_scheduled_run_ist(
-    *,
-    auto_run_enabled: bool,
-    auto_run_time_ist: str,
-    last_run_date: str | None,
-    now_ist: datetime | None = None,
-) -> str | None:
-    if not auto_run_enabled:
-        return None
-    now = now_ist or datetime.now(IST_ZONE)
-    run_time = _parse_auto_run_time(auto_run_time_ist)
-    candidate = now.date()
-    if not _is_trading_day_ist(candidate):
-        candidate = _next_trading_day_ist(candidate)
-    else:
-        if now.time() >= run_time:
-            candidate = _next_trading_day_ist(candidate)
-        if isinstance(last_run_date, str) and last_run_date == candidate.isoformat():
-            candidate = _next_trading_day_ist(candidate)
-    scheduled = datetime.combine(candidate, run_time, tzinfo=IST_ZONE)
-    return scheduled.isoformat()
 
 
 def _safe_upper(value: str, *, allowed: set[str], fallback: str) -> str:
@@ -160,12 +123,22 @@ def get_operate_health_summary(
     auto_run_time_ist = str(
         state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)
     )
+    calendar_segment = str(
+        state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)
+    )
     last_auto_run_date = state_settings.get("operate_last_auto_run_date")
-    next_scheduled_run_ist = _next_scheduled_run_ist(
+    next_scheduled_run_ist = compute_next_scheduled_run_ist(
         auto_run_enabled=auto_run_enabled,
         auto_run_time_ist=auto_run_time_ist,
         last_run_date=(str(last_auto_run_date) if isinstance(last_auto_run_date, str) else None),
+        segment=calendar_segment,
+        settings=settings,
     )
+    today_ist = datetime.now(IST_ZONE).date()
+    today_is_trading_day = is_trading_day(today_ist, segment=calendar_segment, settings=settings)
+    today_session = calendar_get_session(today_ist, segment=calendar_segment, settings=settings)
+    next_day = next_trading_day(today_ist, segment=calendar_segment, settings=settings)
+    prev_day = previous_trading_day(today_ist, segment=calendar_segment, settings=settings)
 
     mode = "NORMAL"
     mode_reason: str | None = None
@@ -186,6 +159,12 @@ def get_operate_health_summary(
         "safe_mode_on_fail": safe_mode_on_fail,
         "safe_mode_action": safe_mode_action,
         "operate_mode": operate_mode,
+        "calendar_segment": calendar_segment,
+        "calendar_today_ist": today_ist.isoformat(),
+        "calendar_is_trading_day_today": today_is_trading_day,
+        "calendar_session_today": today_session,
+        "calendar_next_trading_day": next_day.isoformat(),
+        "calendar_previous_trading_day": prev_day.isoformat(),
         "auto_run_enabled": auto_run_enabled,
         "auto_run_time_ist": auto_run_time_ist,
         "last_auto_run_date": last_auto_run_date,

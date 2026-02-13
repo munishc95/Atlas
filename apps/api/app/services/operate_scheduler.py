@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime
 import threading
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,29 +14,14 @@ from app.db.models import DatasetBundle, PaperRun, PaperState
 from app.db.session import engine
 from app.services.jobs import create_job
 from app.services.operate_events import emit_operate_event
+from app.services.trading_calendar import (
+    compute_next_scheduled_run_ist as calendar_next_scheduled_run_ist,
+    get_session as calendar_get_session,
+    is_trading_day,
+    parse_time_hhmm,
+)
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
-
-
-def parse_auto_run_time(value: str | None, *, default: str = "15:35") -> time:
-    raw = value if isinstance(value, str) and value.strip() else default
-    try:
-        hour, minute = [int(part) for part in raw.split(":", maxsplit=1)]
-        return time(hour=max(0, min(23, hour)), minute=max(0, min(59, minute)))
-    except Exception:  # noqa: BLE001
-        return time(15, 35)
-
-
-def is_trading_day_ist(day: date) -> bool:
-    return day.weekday() < 5
-
-
-def next_trading_day_ist(day: date) -> date:
-    current = day
-    while True:
-        current += timedelta(days=1)
-        if is_trading_day_ist(current):
-            return current
 
 
 def compute_next_scheduled_run_ist(
@@ -44,24 +29,18 @@ def compute_next_scheduled_run_ist(
     auto_run_enabled: bool,
     auto_run_time_ist: str,
     last_run_date: str | None,
+    segment: str = "EQUITIES",
+    settings: Settings | None = None,
     now_ist: datetime | None = None,
 ) -> str | None:
-    if not auto_run_enabled:
-        return None
-    now = now_ist or datetime.now(IST_ZONE)
-    run_time = parse_auto_run_time(auto_run_time_ist)
-    candidate = now.date()
-
-    if not is_trading_day_ist(candidate):
-        candidate = next_trading_day_ist(candidate)
-    else:
-        if now.time() >= run_time:
-            candidate = next_trading_day_ist(candidate)
-        if isinstance(last_run_date, str) and last_run_date == candidate.isoformat():
-            candidate = next_trading_day_ist(candidate)
-
-    scheduled = datetime.combine(candidate, run_time, tzinfo=IST_ZONE)
-    return scheduled.isoformat()
+    return calendar_next_scheduled_run_ist(
+        auto_run_enabled=auto_run_enabled,
+        auto_run_time_ist=auto_run_time_ist,
+        last_run_date=last_run_date,
+        segment=segment,
+        now_ist=now_ist,
+        settings=settings or get_settings(),
+    )
 
 
 def _resolve_scheduler_context(session: Session) -> dict[str, Any]:
@@ -134,13 +113,14 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     if not auto_run_enabled:
         return False
 
-    run_time = parse_auto_run_time(
+    run_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)),
         default=settings.operate_auto_run_time_ist,
     )
+    segment = str(state_settings.get("trading_calendar_segment", settings.trading_calendar_segment))
     now = now_ist or datetime.now(IST_ZONE)
     today = now.date()
-    if not is_trading_day_ist(today) or now.time() < run_time:
+    if not is_trading_day(today, segment=segment, settings=settings) or now.time() < run_time:
         return False
 
     last_run_date = state_settings.get("operate_last_auto_run_date")
@@ -206,6 +186,8 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
             "bundle_id": bundle_id,
             "timeframe": timeframe,
             "policy_id": policy_id,
+            "calendar_segment": segment,
+            "session": calendar_get_session(today, segment=segment, settings=settings),
             "queued_jobs": queued_jobs,
         },
         correlation_id=queued_jobs.get("paper_step"),

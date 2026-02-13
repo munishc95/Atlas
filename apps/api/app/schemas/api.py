@@ -174,6 +174,7 @@ class RuntimeSettingsRequest(BaseModel):
     futures_initial_margin_pct: float | None = None
     futures_symbol_mapping_strategy: str | None = None
     paper_use_simulator_engine: bool | None = None
+    trading_calendar_segment: str | None = None
     operate_safe_mode_on_fail: bool | None = None
     operate_safe_mode_action: str | None = None
     operate_mode: str | None = None

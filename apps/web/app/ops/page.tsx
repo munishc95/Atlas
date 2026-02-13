@@ -155,6 +155,17 @@ export default function OpsPage() {
   const nextScheduledRun = String(
     healthQuery.data?.next_scheduled_run_ist ?? statusQuery.data?.next_scheduled_run_ist ?? "-",
   );
+  const calendarSegment = String(
+    healthQuery.data?.calendar_segment ?? statusQuery.data?.calendar_segment ?? "EQUITIES",
+  );
+  const tradingDayToday = Boolean(
+    healthQuery.data?.calendar_is_trading_day_today ?? statusQuery.data?.calendar_is_trading_day_today,
+  );
+  const calendarSession =
+    healthQuery.data?.calendar_session_today ?? statusQuery.data?.calendar_session_today ?? null;
+  const nextTradingDay = String(
+    healthQuery.data?.calendar_next_trading_day ?? statusQuery.data?.calendar_next_trading_day ?? "-",
+  );
   const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
 
   return (
@@ -191,6 +202,26 @@ export default function OpsPage() {
             Next scheduled run: {nextScheduledRun}
           </p>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Calendar: {calendarSegment}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Today: {tradingDayToday ? "Trading day" : "Holiday/Closed"}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Next trading day: {nextTradingDay}
+          </p>
+        </div>
+        <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+          Session:{" "}
+          {calendarSession?.open_time && calendarSession?.close_time
+            ? `${calendarSession.open_time} - ${calendarSession.close_time} IST`
+            : "Closed"}
+          {calendarSession?.is_special ? " (Special session)" : ""}
+          {calendarSession?.label ? ` - ${calendarSession.label}` : ""}
+          {calendarSession?.holiday_name ? ` - ${calendarSession.holiday_name}` : ""}
+        </p>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">

@@ -269,6 +269,19 @@ export type ApiOperateStatus = {
   safe_mode_on_fail?: boolean;
   safe_mode_action?: string;
   operate_mode?: string;
+  calendar_segment?: string;
+  calendar_today_ist?: string;
+  calendar_is_trading_day_today?: boolean;
+  calendar_session_today?: {
+    open_time?: string | null;
+    close_time?: string | null;
+    is_special?: boolean;
+    label?: string | null;
+    is_trading_day?: boolean;
+    holiday_name?: string | null;
+  } | null;
+  calendar_next_trading_day?: string | null;
+  calendar_previous_trading_day?: string | null;
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
   last_auto_run_date?: string | null;
@@ -323,6 +336,19 @@ export type ApiOperateHealth = {
   safe_mode_on_fail: boolean;
   safe_mode_action: string;
   operate_mode?: string;
+  calendar_segment?: string;
+  calendar_today_ist?: string;
+  calendar_is_trading_day_today?: boolean;
+  calendar_session_today?: {
+    open_time?: string | null;
+    close_time?: string | null;
+    is_special?: boolean;
+    label?: string | null;
+    is_trading_day?: boolean;
+    holiday_name?: string | null;
+  } | null;
+  calendar_next_trading_day?: string | null;
+  calendar_previous_trading_day?: string | null;
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
   last_auto_run_date?: string | null;

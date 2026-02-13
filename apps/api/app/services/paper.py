@@ -118,6 +118,7 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "futures_initial_margin_pct": settings.futures_initial_margin_pct,
             "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
             "paper_use_simulator_engine": settings.paper_use_simulator_engine,
+            "trading_calendar_segment": settings.trading_calendar_segment,
             "operate_safe_mode_on_fail": settings.operate_safe_mode_on_fail,
             "operate_safe_mode_action": settings.operate_safe_mode_action,
             "operate_mode": settings.operate_mode,

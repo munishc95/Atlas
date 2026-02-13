@@ -1,0 +1,67 @@
+{
+  "year": 2026,
+  "segment": "EQUITIES",
+  "holidays": [
+    {
+      "date": "2026-01-26",
+      "name": "Republic Day",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-03-04",
+      "name": "Holi",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-03-27",
+      "name": "Good Friday",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-04-14",
+      "name": "Dr. Babasaheb Ambedkar Jayanti",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-05-01",
+      "name": "Maharashtra Day",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-10-02",
+      "name": "Mahatma Gandhi Jayanti",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-11-12",
+      "name": "Diwali Laxmi Pujan",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-11-13",
+      "name": "Diwali Balipratipada",
+      "type": "TRADING_HOLIDAY"
+    },
+    {
+      "date": "2026-12-25",
+      "name": "Christmas",
+      "type": "TRADING_HOLIDAY"
+    }
+  ],
+  "special_sessions": [
+    {
+      "date": "2026-02-01",
+      "open": "09:15",
+      "close": "15:30",
+      "label": "Special Live Trading Session"
+    },
+    {
+      "date": "2026-11-08",
+      "open": "18:00",
+      "close": "19:00",
+      "label": "Muhurat Trading"
+    }
+  ],
+  "source": "NSE Exchange Communication Holidays",
+  "last_refreshed": "2026-02-14"
+}

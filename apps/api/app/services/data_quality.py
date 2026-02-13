@@ -5,17 +5,26 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from zoneinfo import ZoneInfo
 from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import DataQualityReport
 from app.services.data_store import DataStore
 from app.services.operate_events import emit_operate_event
+from app.services.trading_calendar import (
+    get_session as calendar_get_session,
+    is_trading_day,
+    list_trading_days,
+    parse_time_hhmm,
+    previous_trading_day,
+)
 
 
 STATUS_OK = "OK"
 STATUS_WARN = "WARN"
 STATUS_FAIL = "FAIL"
+IST_ZONE = ZoneInfo("Asia/Kolkata")
 
 
 def _issue(
@@ -50,6 +59,12 @@ def _safe_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _calendar_segment(*, settings: Settings, overrides: dict[str, Any] | None = None) -> str:
+    state = overrides or {}
+    token = str(state.get("trading_calendar_segment", settings.trading_calendar_segment)).strip().upper()
+    return token or "EQUITIES"
 
 
 def _stale_limit_minutes(
@@ -104,13 +119,25 @@ def _stale_severity(
     return STATUS_FAIL if token == STATUS_FAIL else STATUS_WARN
 
 
-def _coverage_pct(frame: pd.DataFrame) -> float:
+def _coverage_pct(
+    frame: pd.DataFrame,
+    *,
+    settings: Settings,
+    segment: str,
+) -> float:
     if frame.empty:
         return 0.0
     dt = pd.to_datetime(frame["datetime"], utc=True).sort_values()
     first = dt.iloc[0].date()
     last = dt.iloc[-1].date()
-    expected = len(pd.bdate_range(first, last))
+    expected = len(
+        list_trading_days(
+            start_date=first,
+            end_date=last,
+            segment=segment,
+            settings=settings,
+        )
+    )
     observed = len(pd.Series(dt.dt.date).drop_duplicates())
     if expected <= 0:
         return 100.0
@@ -122,6 +149,8 @@ def _gap_issues_daily(
     symbol: str,
     frame: pd.DataFrame,
     max_gap_bars: int,
+    settings: Settings,
+    segment: str,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if frame.empty:
@@ -132,18 +161,29 @@ def _gap_issues_daily(
     for idx in range(1, len(dt)):
         prev_day = dt.iloc[idx - 1].date()
         next_day = dt.iloc[idx].date()
-        business_gap = int(np.busday_count(prev_day, next_day)) - 1
-        if business_gap > max_gap_bars:
+        expected_days = list_trading_days(
+            start_date=prev_day,
+            end_date=next_day,
+            segment=segment,
+            settings=settings,
+        )
+        missing_days = [day for day in expected_days if prev_day < day < next_day]
+        missing_count = len(missing_days)
+        if missing_count > max_gap_bars:
             issues.append(
                 _issue(
                     severity=STATUS_FAIL,
                     code="gap_exceeds_threshold",
                     symbol=symbol,
                     message=(
-                        f"Detected {business_gap} missing business bars between "
+                        f"Detected {missing_count} missing trading bars between "
                         f"{prev_day.isoformat()} and {next_day.isoformat()}."
                     ),
-                    details={"missing_bars": business_gap, "max_gap_bars": int(max_gap_bars)},
+                    details={
+                        "missing_bars": missing_count,
+                        "max_gap_bars": int(max_gap_bars),
+                        "missing_dates": [day.isoformat() for day in missing_days[:10]],
+                    },
                 )
             )
     return issues
@@ -198,6 +238,8 @@ def _validate_symbol_frame(
     timeframe: str,
     max_gap_bars: int,
     zscore_threshold: float,
+    settings: Settings,
+    segment: str,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if frame.empty:
@@ -251,7 +293,15 @@ def _validate_symbol_frame(
         )
 
     if str(timeframe).lower() == "1d":
-        issues.extend(_gap_issues_daily(symbol=symbol, frame=frame, max_gap_bars=max_gap_bars))
+        issues.extend(
+            _gap_issues_daily(
+                symbol=symbol,
+                frame=frame,
+                max_gap_bars=max_gap_bars,
+                settings=settings,
+                segment=segment,
+            )
+        )
     issues.extend(_outlier_issues(symbol=symbol, frame=frame, zscore_threshold=zscore_threshold))
     return issues
 
@@ -279,6 +329,7 @@ def run_data_quality_report(
     )
     stale_limit = _stale_limit_minutes(tf, settings=settings, overrides=state)
     stale_severity = _stale_severity(settings=settings, overrides=state)
+    segment = _calendar_segment(settings=settings, overrides=state)
 
     symbols = store.get_bundle_symbols(session, bundle_id, timeframe=tf)
     issues: list[dict[str, Any]] = []
@@ -292,7 +343,7 @@ def run_data_quality_report(
             symbol_last = frame["datetime"].max().to_pydatetime()
             if last_bar_ts is None or symbol_last > last_bar_ts:
                 last_bar_ts = symbol_last
-            coverage_values.append(_coverage_pct(frame))
+            coverage_values.append(_coverage_pct(frame, settings=settings, segment=segment))
         issues.extend(
             _validate_symbol_frame(
                 symbol=symbol,
@@ -300,6 +351,8 @@ def run_data_quality_report(
                 timeframe=tf,
                 max_gap_bars=max_gap_bars,
                 zscore_threshold=zscore_threshold,
+                settings=settings,
+                segment=segment,
             )
         )
 
@@ -323,7 +376,34 @@ def run_data_quality_report(
         )
     else:
         age_minutes = (now - last_bar_ts).total_seconds() / 60.0
-        if age_minutes > stale_limit:
+        stale = age_minutes > stale_limit
+        stale_context: dict[str, Any] = {"age_minutes": age_minutes, "stale_limit_minutes": stale_limit}
+        if tf.lower() == "1d":
+            now_ist = now.astimezone(IST_ZONE)
+            last_bar_day_ist = last_bar_ts.astimezone(IST_ZONE).date()
+            today_ist = now_ist.date()
+            if is_trading_day(today_ist, segment=segment, settings=settings):
+                session_info = calendar_get_session(today_ist, segment=segment, settings=settings)
+                close_cutoff = parse_time_hhmm(
+                    session_info.get("close_time"),
+                    default=settings.nse_equities_close_time_ist,
+                )
+                expected_day = (
+                    today_ist
+                    if now_ist.time() >= close_cutoff
+                    else previous_trading_day(today_ist, segment=segment, settings=settings)
+                )
+            else:
+                expected_day = previous_trading_day(today_ist, segment=segment, settings=settings)
+            stale = last_bar_day_ist < expected_day
+            stale_context.update(
+                {
+                    "last_bar_day_ist": last_bar_day_ist.isoformat(),
+                    "expected_latest_trading_day": expected_day.isoformat(),
+                    "calendar_segment": segment,
+                }
+            )
+        if stale:
             issues.append(
                 _issue(
                     severity=stale_severity,
@@ -332,7 +412,7 @@ def run_data_quality_report(
                         f"Latest bar is stale by {age_minutes:.0f} minutes "
                         f"(limit {stale_limit} minutes)."
                     ),
-                    details={"age_minutes": age_minutes, "stale_limit_minutes": stale_limit},
+                    details=stale_context,
                 )
             )
 

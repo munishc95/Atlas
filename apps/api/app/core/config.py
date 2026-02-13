@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     duckdb_path: str = "apps/api/.atlas/ohlcv.duckdb"
     parquet_root: str = "data/parquet"
     feature_cache_root: str = "data/features"
+    calendar_data_root: str = "data/calendars"
     sample_data_root: str = "data/sample"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "atlas"
@@ -51,6 +52,9 @@ class Settings(BaseSettings):
     futures_initial_margin_pct: float = 0.18
     futures_symbol_mapping_strategy: str = "underlying_lookup"
     paper_use_simulator_engine: bool = True
+    trading_calendar_segment: str = "EQUITIES"
+    nse_equities_open_time_ist: str = "09:15"
+    nse_equities_close_time_ist: str = "15:30"
     operate_safe_mode_on_fail: bool = True
     operate_safe_mode_action: str = "exits_only"
     operate_mode: str = "offline"
@@ -98,6 +102,7 @@ class Settings(BaseSettings):
         Path("apps/api/.atlas").mkdir(parents=True, exist_ok=True)
         Path(self.parquet_root).mkdir(parents=True, exist_ok=True)
         Path(self.feature_cache_root).mkdir(parents=True, exist_ok=True)
+        Path(self.calendar_data_root).mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)
