@@ -232,6 +232,38 @@ Paper execution now supports a simulator adapter path that uses the same determi
   - default: `true`
   - set to `false` to temporarily use the legacy paper execution path.
 
+## Data Integrity + Safe Mode (v2.0)
+
+Atlas now includes explicit operate-time guardrails for data integrity and operator confidence:
+
+- Data quality service (`DataQualityReport`) checks bundle/timeframe health:
+  - missing bars/gaps, duplicate/non-monotonic timestamps
+  - invalid OHLC bounds
+  - stale data detection and outlier/corporate-action anomaly warnings
+- Operate event stream (`OperateEvent`) captures:
+  - data quality WARN/FAIL
+  - safe-mode activations
+  - policy health actions and evaluation decisions
+  - digest mismatch and job exception boundaries
+- Safe mode behavior in paper run-step:
+  - on quality `FAIL`, Atlas activates safe mode and blocks new entries
+  - exits/stop handling remains active (`exits_only`) so risk can be reduced safely
+- Reproducibility guard:
+  - each paper run stores a `result_digest`
+  - rerunning same day/config/seed with unchanged `data_digest` but changed result emits `digest_mismatch`
+
+New APIs:
+
+- `POST /api/data/quality/run`
+- `GET /api/data/quality/latest?bundle_id=&timeframe=`
+- `GET /api/data/quality/history?bundle_id=&timeframe=&days=`
+- `GET /api/operate/events?since=&severity=&category=`
+- `GET /api/operate/health`
+
+New frontend page:
+
+- `Ops` page (`/ops`) with current mode (`NORMAL` / `SAFE MODE`), latest quality report, recent operate events, and quick actions.
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:

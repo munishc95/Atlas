@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     futures_initial_margin_pct: float = 0.18
     futures_symbol_mapping_strategy: str = "underlying_lookup"
     paper_use_simulator_engine: bool = True
+    operate_safe_mode_on_fail: bool = True
+    operate_safe_mode_action: str = "exits_only"
+    operate_max_stale_minutes_1d: int = 2880
+    operate_max_stale_minutes_4h_ish: int = 720
+    operate_max_gap_bars: int = 3
+    operate_outlier_zscore: float = 8.0
+    operate_cost_ratio_spike_threshold: float = 0.5
+    operate_cost_ratio_spike_days: int = 3
+    operate_cost_spike_risk_scale: float = 0.5
+    operate_scan_truncated_warn_days: int = 3
+    operate_scan_truncated_reduce_to: int = 80
     max_position_value_pct_adv: float = 0.01
     diversification_corr_threshold: float = 0.75
     allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])

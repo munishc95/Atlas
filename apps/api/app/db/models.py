@@ -184,6 +184,40 @@ class PaperRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class DataQualityReport(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_dataquality_bundle_timeframe_created", "bundle_id", "timeframe", "created_at"),
+        Index("ix_dataquality_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    status: str = Field(default="OK", index=True, max_length=8)
+    issues_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    last_bar_ts: datetime | None = Field(default=None, index=True)
+    coverage_pct: float = 100.0
+    checked_symbols: int = 0
+    total_symbols: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class OperateEvent(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_operateevent_ts", "ts"),
+        Index("ix_operateevent_severity_ts", "severity", "ts"),
+        Index("ix_operateevent_category_ts", "category", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utc_now)
+    severity: str = Field(default="INFO", max_length=8, index=True)
+    category: str = Field(default="SYSTEM", max_length=16, index=True)
+    message: str = Field(max_length=256)
+    details_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    correlation_id: str | None = Field(default=None, max_length=64, index=True)
+
+
 class DailyReport(SQLModel, table=True):
     __table_args__ = (
         Index("ix_dailyreport_date_bundle_policy", "date", "bundle_id", "policy_id"),

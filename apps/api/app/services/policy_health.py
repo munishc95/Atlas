@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import PaperRun, Policy, PolicyHealthSnapshot
+from app.services.operate_events import emit_operate_event
 
 
 HEALTHY = "HEALTHY"
@@ -431,6 +432,21 @@ def apply_policy_health_actions(
             settings.drift_warning_risk_scale,
         )
         result["action"] = "RISK_SCALE_WARNING"
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="POLICY",
+            message="Policy health warning triggered risk scaling.",
+            details={
+                "policy_id": int(policy.id),
+                "snapshot_id": int(snapshot.id) if snapshot.id is not None else None,
+                "window_days": int(snapshot.window_days),
+                "status": snapshot.status,
+                "action": result["action"],
+                "risk_scale_override": result["risk_scale_override"],
+                "reasons": list(snapshot.reasons_json or []),
+            },
+        )
         return result
 
     if snapshot.status != DEGRADED:
@@ -455,6 +471,22 @@ def apply_policy_health_actions(
     session.refresh(policy)
     result["policy_status"] = str(policy.definition_json.get("status", "ACTIVE")).upper()
     result["action"] = f"DEGRADED_{action}"
+    emit_operate_event(
+        session,
+        severity="ERROR" if action in {"PAUSE", "RETIRED"} else "WARN",
+        category="POLICY",
+        message="Policy health degraded action applied.",
+        details={
+            "policy_id": int(policy.id),
+            "snapshot_id": int(snapshot.id) if snapshot.id is not None else None,
+            "window_days": int(snapshot.window_days),
+            "status": snapshot.status,
+            "action": result["action"],
+            "policy_status": result["policy_status"],
+            "risk_scale_override": result["risk_scale_override"],
+            "reasons": list(snapshot.reasons_json or []),
+        },
+    )
     return result
 
 

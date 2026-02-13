@@ -31,6 +31,14 @@ export const qk = {
   paperSignalsPreview: (datasetId: number | null, regime: string) =>
     ["paperSignalsPreview", datasetId, regime] as const,
   operateStatus: ["operateStatus"] as const,
+  operateHealth: (bundleId?: number | null, timeframe?: string | null) =>
+    ["operateHealth", bundleId ?? "active", timeframe ?? "active"] as const,
+  operateEvents: (severity?: string | null, category?: string | null, limit = 20) =>
+    ["operateEvents", severity ?? "all", category ?? "all", limit] as const,
+  dataQualityLatest: (bundleId?: number | null, timeframe = "1d") =>
+    ["dataQualityLatest", bundleId ?? "none", timeframe] as const,
+  dataQualityHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>
+    ["dataQualityHistory", bundleId ?? "all", timeframe ?? "all", days] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,

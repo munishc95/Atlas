@@ -184,6 +184,33 @@ def _ensure_indexes_and_columns() -> None:
                 "ON monthlyreport (month, bundle_id, policy_id)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataquality_bundle_timeframe_created "
+                "ON dataqualityreport (bundle_id, timeframe, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataquality_status_created "
+                "ON dataqualityreport (status, created_at)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_operateevent_severity_ts "
+                "ON operateevent (severity, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_operateevent_category_ts "
+                "ON operateevent (category, ts)"
+            )
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

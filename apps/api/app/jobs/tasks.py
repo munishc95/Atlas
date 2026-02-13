@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from redis.exceptions import RedisError
@@ -13,14 +13,17 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.services.backtests import execute_backtest
 from app.services.data_store import DataStore
+from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
 from app.services.importer import import_ohlcv_bytes
 from app.services.jobs import append_job_log, update_job
+from app.services.operate_events import emit_operate_event
 from app.services.paper import run_paper_step
 from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
+from app.db.models import PaperState
 
 
 def _store() -> DataStore:
@@ -36,6 +39,23 @@ def _set_progress(session: Session, job_id: str, progress: int, message: str | N
     update_job(session, job_id, progress=progress)
     if message:
         append_job_log(session, job_id, message)
+
+
+def _emit_job_error_event(
+    session: Session,
+    *,
+    job_id: str,
+    job_type: str,
+    exc: Exception,
+) -> None:
+    emit_operate_event(
+        session,
+        severity="ERROR",
+        category="SYSTEM",
+        message=f"{job_type} job failed.",
+        details={"job_id": job_id, "job_type": job_type, "error": str(exc)},
+        correlation_id=job_id,
+    )
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -114,6 +134,7 @@ def run_backtest_job(
             append_job_log(session, job_id, "Backtest job finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Backtest failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="backtest", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -158,6 +179,7 @@ def run_walkforward_job(
             append_job_log(session, job_id, "Walk-forward job finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Walk-forward failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="walkforward", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -209,6 +231,7 @@ def run_import_job(
             append_job_log(session, job_id, "Import job finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Import failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="data_import", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -216,6 +239,83 @@ def run_import_job(
                 progress=100,
                 result={"error": {"code": "import_failed", "message": str(exc)}},
             )
+
+
+def run_data_quality_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Data quality run started")
+            result = _execute_with_retry(
+                fn=lambda: _data_quality_result(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    payload=payload,
+                    job_id=job_id,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="data_quality",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Data quality run finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Data quality run failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="data_quality", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "data_quality_failed", "message": str(exc)}},
+            )
+
+
+def _data_quality_result(
+    *,
+    session: Session,
+    settings,
+    store: DataStore,
+    payload: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    bundle_id = int(payload.get("bundle_id") or 0)
+    if bundle_id <= 0:
+        raise ValueError("bundle_id is required for data quality run")
+    timeframe = str(payload.get("timeframe") or "1d")
+    state = session.get(PaperState, 1)
+    overrides = dict(state.settings_json or {}) if state is not None else {}
+    report = run_data_quality_report(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        overrides=overrides,
+        reference_ts=datetime.now(timezone.utc),
+        correlation_id=job_id,
+    )
+    return {
+        "id": int(report.id) if report.id is not None else None,
+        "bundle_id": report.bundle_id,
+        "timeframe": report.timeframe,
+        "status": report.status,
+        "issues_json": report.issues_json,
+        "last_bar_ts": report.last_bar_ts.isoformat() if report.last_bar_ts is not None else None,
+        "coverage_pct": report.coverage_pct,
+        "checked_symbols": report.checked_symbols,
+        "total_symbols": report.total_symbols,
+        "created_at": report.created_at.isoformat(),
+    }
 
 
 def run_paper_step_job(
@@ -240,6 +340,7 @@ def run_paper_step_job(
             append_job_log(session, job_id, "Paper step finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Paper step failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="paper_step", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -284,6 +385,7 @@ def run_research_job(
             append_job_log(session, job_id, "Auto Research job finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Auto Research failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="research", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -320,6 +422,7 @@ def run_daily_report_job(
             append_job_log(session, job_id, "Daily report generation finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Daily report failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="daily_report", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -356,6 +459,7 @@ def run_monthly_report_job(
             append_job_log(session, job_id, "Monthly report generation finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Monthly report failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="monthly_report", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -452,6 +556,7 @@ def run_evaluation_job(
             append_job_log(session, job_id, "Policy evaluation finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Policy evaluation failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="evaluation", exc=exc)
             update_job(
                 session,
                 job_id,
@@ -498,6 +603,7 @@ def run_replay_job(
             append_job_log(session, job_id, "Replay run finished")
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Replay run failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="replay", exc=exc)
             update_job(
                 session,
                 job_id,

@@ -92,6 +92,11 @@ class DailyReportGenerateRequest(BaseModel):
     policy_id: int | None = None
 
 
+class DataQualityRunRequest(BaseModel):
+    bundle_id: int
+    timeframe: str = "1d"
+
+
 class MonthlyReportGenerateRequest(BaseModel):
     month: str | None = None  # YYYY-MM
     bundle_id: int | None = None
@@ -169,3 +174,14 @@ class RuntimeSettingsRequest(BaseModel):
     futures_initial_margin_pct: float | None = None
     futures_symbol_mapping_strategy: str | None = None
     paper_use_simulator_engine: bool | None = None
+    operate_safe_mode_on_fail: bool | None = None
+    operate_safe_mode_action: str | None = None
+    operate_max_stale_minutes_1d: int | None = None
+    operate_max_stale_minutes_4h_ish: int | None = None
+    operate_max_gap_bars: int | None = None
+    operate_outlier_zscore: float | None = None
+    operate_cost_ratio_spike_threshold: float | None = None
+    operate_cost_ratio_spike_days: int | None = None
+    operate_cost_spike_risk_scale: float | None = None
+    operate_scan_truncated_warn_days: int | None = None
+    operate_scan_truncated_reduce_to: int | None = None

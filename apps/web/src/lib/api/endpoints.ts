@@ -10,6 +10,9 @@ import type {
   ApiPolicyHealthSnapshot,
   ApiPolicy,
   ApiDailyReport,
+  ApiDataQualityReport,
+  ApiOperateEvent,
+  ApiOperateHealth,
   ApiOperateStatus,
   ApiMonthlyReport,
   ApiResearchCandidate,
@@ -32,6 +35,24 @@ export const atlasApi = {
   strategyTemplates: () => apiFetch<Array<Record<string, unknown>>>("/api/strategies/templates"),
   strategies: () => apiFetch<Array<Record<string, unknown>>>("/api/strategies"),
   dataStatus: () => apiFetch<Array<Record<string, unknown>>>("/api/data/status"),
+  runDataQuality: (payload: { bundle_id: number; timeframe?: string }) =>
+    apiFetch<JobStart>("/api/data/quality/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  dataQualityLatest: (bundleId: number, timeframe = "1d") =>
+    apiFetch<ApiDataQualityReport>(
+      `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,
+    ),
+  dataQualityHistory: (params?: { bundle_id?: number; timeframe?: string; days?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (params?.days) search.set("days", String(params.days));
+    return apiFetch<ApiDataQualityReport[]>(
+      `/api/data/quality/history${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
   regimeCurrent: (symbol?: string) =>
     apiFetch<{ symbol: string; timeframe: string; regime: string }>(
       `/api/regime/current${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`,
@@ -152,6 +173,29 @@ export const atlasApi = {
       body: JSON.stringify(payload),
     }),
   operateStatus: () => apiFetch<ApiOperateStatus>("/api/operate/status"),
+  operateEvents: (params?: {
+    since?: string;
+    severity?: "INFO" | "WARN" | "ERROR";
+    category?: "DATA" | "EXECUTION" | "POLICY" | "SYSTEM";
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.since) search.set("since", params.since);
+    if (params?.severity) search.set("severity", params.severity);
+    if (params?.category) search.set("category", params.category);
+    if (params?.limit) search.set("limit", String(params.limit));
+    return apiFetch<ApiOperateEvent[]>(
+      `/api/operate/events${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  operateHealth: (params?: { bundle_id?: number; timeframe?: string }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    return apiFetch<ApiOperateHealth>(
+      `/api/operate/health${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
   generateDailyReport: (payload: { date?: string; bundle_id?: number; policy_id?: number }) =>
     apiFetch<JobStart>("/api/reports/daily/generate", {
       method: "POST",

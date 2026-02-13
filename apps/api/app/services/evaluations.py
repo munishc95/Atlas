@@ -9,6 +9,7 @@ from app.core.config import Settings
 from app.core.exceptions import APIError
 from app.db.models import Policy, PolicyEvaluation, PolicyShadowRun
 from app.services.data_store import DataStore
+from app.services.operate_events import emit_operate_event
 from app.services.paper import get_or_create_paper_state
 from app.services.policy_simulation import simulate_policy_on_bundle
 
@@ -291,6 +292,22 @@ def execute_policy_evaluation(
     evaluation.summary_json = summary_json
     evaluation.notes = "; ".join(reasons[:6]) if reasons else None
     session.add(evaluation)
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="POLICY",
+        message="Champion-challenger evaluation completed.",
+        details={
+            "evaluation_id": int(evaluation.id) if evaluation.id is not None else None,
+            "bundle_id": bundle_id,
+            "champion_policy_id": champion_policy_id,
+            "recommended_policy_id": recommended_id,
+            "decision": decision,
+            "auto_promoted": auto_promoted,
+            "window_days": window_days,
+        },
+        correlation_id=str(evaluation.id) if evaluation.id is not None else None,
+    )
     session.commit()
     session.refresh(evaluation)
 

@@ -196,6 +196,12 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const targetBundle = bundles.find((bundle) => (bundle.symbols ?? []).includes("NIFTY500")) ?? bundles[0];
   const bundleId = Number(targetBundle?.id ?? 0);
   expect(bundleId > 0).toBeTruthy();
+  const qualityRunRes = await request.post(`${apiBase}/api/data/quality/run`, {
+    data: { bundle_id: bundleId, timeframe: "1d" },
+  });
+  expect(qualityRunRes.ok()).toBeTruthy();
+  const qualityRunBody = await qualityRunRes.json();
+  await waitForJob(request, apiBase, qualityRunBody.data.job_id, 180_000);
 
   const runResearchApi = await request.post(`${apiBase}/api/research/run`, {
     data: {
@@ -370,6 +376,17 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const policyHealthBody = await policyHealthRes.json();
   expect(policyHealthBody?.data?.policy_id).toBe(policyId);
   expect(policyHealthBody?.data?.status).toBeTruthy();
+
+  await page.goto("/ops");
+  await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("heading", { name: "Recent operate events" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("button", { name: "Run Data Quality" })).toBeVisible({
+    timeout: 20_000,
+  });
 
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible({

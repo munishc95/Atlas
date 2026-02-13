@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlmodel import Session, select
+
+from app.core.config import Settings
+from app.db.models import DataQualityReport, OperateEvent, PaperRun, PaperState
+
+
+ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
+ALLOWED_CATEGORIES = {"DATA", "EXECUTION", "POLICY", "SYSTEM"}
+
+
+def _safe_upper(value: str, *, allowed: set[str], fallback: str) -> str:
+    token = str(value or "").strip().upper()
+    if token in allowed:
+        return token
+    return fallback
+
+
+def emit_operate_event(
+    session: Session,
+    *,
+    severity: str,
+    category: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    correlation_id: str | None = None,
+    commit: bool = False,
+) -> OperateEvent:
+    event = OperateEvent(
+        severity=_safe_upper(severity, allowed=ALLOWED_SEVERITIES, fallback="INFO"),
+        category=_safe_upper(category, allowed=ALLOWED_CATEGORIES, fallback="SYSTEM"),
+        message=str(message).strip()[:256],
+        details_json=dict(details or {}),
+        correlation_id=(str(correlation_id)[:64] if correlation_id else None),
+    )
+    session.add(event)
+    if commit:
+        session.commit()
+        session.refresh(event)
+    return event
+
+
+def list_operate_events(
+    session: Session,
+    *,
+    since: datetime | None = None,
+    severity: str | None = None,
+    category: str | None = None,
+    limit: int = 200,
+) -> list[OperateEvent]:
+    stmt = select(OperateEvent).order_by(OperateEvent.ts.desc(), OperateEvent.id.desc())
+    if since is not None:
+        stmt = stmt.where(OperateEvent.ts >= since)
+    if severity:
+        stmt = stmt.where(OperateEvent.severity == _safe_upper(severity, allowed=ALLOWED_SEVERITIES, fallback="INFO"))
+    if category:
+        stmt = stmt.where(OperateEvent.category == _safe_upper(category, allowed=ALLOWED_CATEGORIES, fallback="SYSTEM"))
+    stmt = stmt.limit(max(1, min(int(limit), 500)))
+    return list(session.exec(stmt).all())
+
+
+def _latest_data_quality_report(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> DataQualityReport | None:
+    stmt = select(DataQualityReport)
+    if bundle_id is not None:
+        stmt = stmt.where(DataQualityReport.bundle_id == bundle_id)
+    if timeframe:
+        stmt = stmt.where(DataQualityReport.timeframe == timeframe)
+    stmt = stmt.order_by(DataQualityReport.created_at.desc(), DataQualityReport.id.desc()).limit(1)
+    return session.exec(stmt).first()
+
+
+def get_operate_health_summary(
+    session: Session,
+    settings: Settings,
+    *,
+    bundle_id: int | None = None,
+    timeframe: str | None = None,
+) -> dict[str, Any]:
+    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    target_bundle_id = bundle_id if bundle_id is not None else (latest_run.bundle_id if latest_run is not None else None)
+    target_timeframe = timeframe
+    if not target_timeframe and latest_run is not None:
+        summary = latest_run.summary_json if isinstance(latest_run.summary_json, dict) else {}
+        tfs = summary.get("timeframes", [])
+        if isinstance(tfs, list) and tfs:
+            target_timeframe = str(tfs[0])
+    if not target_timeframe:
+        target_timeframe = "1d"
+
+    latest_quality = _latest_data_quality_report(
+        session,
+        bundle_id=target_bundle_id,
+        timeframe=target_timeframe,
+    )
+    state = session.get(PaperState, 1)
+    state_settings = dict(state.settings_json or {}) if state is not None else {}
+    safe_mode_on_fail = bool(state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail))
+    safe_mode_action = str(
+        state_settings.get("operate_safe_mode_action", settings.operate_safe_mode_action)
+    )
+
+    mode = "NORMAL"
+    mode_reason: str | None = None
+    if latest_quality is not None and str(latest_quality.status).upper() == "FAIL" and safe_mode_on_fail:
+        mode = "SAFE MODE"
+        mode_reason = "data_quality_fail_safe_mode"
+
+    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    recent_events = list_operate_events(session, since=since_24h, limit=500)
+    severity_counts = {"INFO": 0, "WARN": 0, "ERROR": 0}
+    for row in recent_events:
+        key = str(row.severity).upper()
+        severity_counts[key] = severity_counts.get(key, 0) + 1
+
+    return {
+        "mode": mode,
+        "mode_reason": mode_reason,
+        "safe_mode_on_fail": safe_mode_on_fail,
+        "safe_mode_action": safe_mode_action,
+        "active_bundle_id": target_bundle_id,
+        "active_timeframe": target_timeframe,
+        "latest_data_quality": latest_quality.model_dump() if latest_quality is not None else None,
+        "latest_paper_run_id": int(latest_run.id) if latest_run is not None and latest_run.id is not None else None,
+        "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
+        "recent_event_counts_24h": severity_counts,
+    }
+

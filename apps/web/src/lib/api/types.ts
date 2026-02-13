@@ -264,15 +264,63 @@ export type ApiReplayRun = {
 };
 
 export type ApiOperateStatus = {
+  mode?: "NORMAL" | "SAFE MODE";
+  mode_reason?: string | null;
   active_policy_id?: number | null;
   active_policy_name?: string | null;
   active_bundle_id?: number | null;
   current_regime?: string | null;
   last_run_step_at?: string | null;
   latest_run?: Record<string, unknown> | null;
+  latest_data_quality?: ApiDataQualityReport | null;
+  recent_event_counts_24h?: Record<string, number>;
   health_short?: ApiPolicyHealthSnapshot | null;
   health_long?: ApiPolicyHealthSnapshot | null;
   paper_state: Record<string, unknown>;
+};
+
+export type ApiDataQualityIssue = {
+  severity: "OK" | "WARN" | "FAIL";
+  code: string;
+  message: string;
+  symbol?: string;
+  details?: Record<string, unknown>;
+};
+
+export type ApiDataQualityReport = {
+  id: number;
+  bundle_id?: number | null;
+  timeframe: string;
+  status: "OK" | "WARN" | "FAIL";
+  issues_json: ApiDataQualityIssue[];
+  last_bar_ts?: string | null;
+  coverage_pct: number;
+  checked_symbols: number;
+  total_symbols: number;
+  created_at: string;
+};
+
+export type ApiOperateEvent = {
+  id: number;
+  ts: string;
+  severity: "INFO" | "WARN" | "ERROR";
+  category: "DATA" | "EXECUTION" | "POLICY" | "SYSTEM";
+  message: string;
+  details_json?: Record<string, unknown>;
+  correlation_id?: string | null;
+};
+
+export type ApiOperateHealth = {
+  mode: "NORMAL" | "SAFE MODE";
+  mode_reason?: string | null;
+  safe_mode_on_fail: boolean;
+  safe_mode_action: string;
+  active_bundle_id?: number | null;
+  active_timeframe: string;
+  latest_data_quality?: ApiDataQualityReport | null;
+  latest_paper_run_id?: number | null;
+  last_run_step_at?: string | null;
+  recent_event_counts_24h: Record<string, number>;
 };
 
 export type ApiUniverseBundle = {

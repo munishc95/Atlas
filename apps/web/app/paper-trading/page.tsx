@@ -153,6 +153,8 @@ export default function PaperTradingPage() {
       : ((policiesQuery.data ?? []).find((policy) => policy.id === activePolicyId) ?? null);
   const healthStatus = operateQuery.data?.health_short?.status ?? "HEALTHY";
   const healthReasons = operateQuery.data?.health_short?.reasons_json ?? [];
+  const operateMode = String(operateQuery.data?.mode ?? "NORMAL");
+  const latestQuality = operateQuery.data?.latest_data_quality;
 
   useEffect(() => {
     if (bundleId !== null) {
@@ -298,6 +300,15 @@ export default function PaperTradingPage() {
           Policy health: {healthStatus}
           {healthReasons.length > 0 ? ` - ${healthReasons[0]}` : ""}
         </p>
+        {operateMode === "SAFE MODE" ? (
+          <p className="mt-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+            SAFE MODE active. New entries are blocked until data quality recovers.
+          </p>
+        ) : latestQuality?.status === "WARN" ? (
+          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            Data quality warning: {String(latestQuality.issues_json?.[0]?.message ?? "Check Ops page for details.")}
+          </p>
+        ) : null}
         <div className="mt-3">
           <label className="text-xs text-muted">
             Universe bundle
@@ -653,6 +664,15 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Signals source:</span> {String(latestDecision.signals_source ?? "-")}
+            </p>
+            <p>
+              <span className="text-muted">Safe mode:</span>{" "}
+              {String((latestDecision.safe_mode as Record<string, unknown> | undefined)?.active ? "active" : "inactive")}
+              {(() => {
+                const mode = latestDecision.safe_mode as Record<string, unknown> | undefined;
+                const reason = mode?.reason;
+                return reason ? ` (${String(reason)})` : "";
+              })()}
             </p>
             <p>
               <span className="text-muted">Selected:</span> {selectedSignals.length} |{" "}

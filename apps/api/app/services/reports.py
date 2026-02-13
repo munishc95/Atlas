@@ -171,11 +171,15 @@ def build_daily_report_content(
                 "costs": 0.0,
                 "drawdown": 0.0,
                 "kill_switch_active": False,
+                "safe_mode_active": False,
+                "safe_mode_runs": 0,
+                "data_quality_status": None,
             },
             "explainability": {
                 "selected_reason_histogram": {},
                 "skipped_reason_histogram": {},
                 "scan_truncated_runs": 0,
+                "data_quality_warning_messages": [],
             },
             "risk": {
                 "avg_exposure": 0.0,
@@ -199,6 +203,29 @@ def build_daily_report_content(
     selected_hist = _histogram(rows, "selected_reason_histogram")
     skipped_hist = _histogram(rows, "skipped_reason_histogram")
     scan_truncated = int(sum(1 for row in rows if bool(row.scan_truncated)))
+    safe_mode_runs = int(
+        sum(
+            1
+            for row in rows
+            if bool(((row.summary_json or {}) if isinstance(row.summary_json, dict) else {}).get("safe_mode_active"))
+        )
+    )
+    quality_warning_messages: list[str] = []
+    for row in rows:
+        summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+        warnings = summary.get("data_quality_warn_summary", [])
+        if not isinstance(warnings, list):
+            continue
+        for item in warnings:
+            if not isinstance(item, dict):
+                continue
+            message = str(item.get("message", "")).strip()
+            if message and message not in quality_warning_messages:
+                quality_warning_messages.append(message)
+            if len(quality_warning_messages) >= 5:
+                break
+        if len(quality_warning_messages) >= 5:
+            break
     avg_exposure = float(
         sum(_safe_float((row.summary_json or {}).get("exposure"), 0.0) for row in rows)
         / max(1, len(rows))
@@ -223,6 +250,9 @@ def build_daily_report_content(
             "costs": total_cost,
             "drawdown": _safe_float(last_summary.get("drawdown"), 0.0),
             "kill_switch_active": bool(last_summary.get("kill_switch_active", False)),
+            "safe_mode_active": bool(last_summary.get("safe_mode_active", False)),
+            "safe_mode_runs": safe_mode_runs,
+            "data_quality_status": last_summary.get("data_quality_status"),
             "signals_source": str(last.signals_source),
             "regime": str(last.regime),
         },
@@ -230,6 +260,7 @@ def build_daily_report_content(
             "selected_reason_histogram": selected_hist,
             "skipped_reason_histogram": skipped_hist,
             "scan_truncated_runs": scan_truncated,
+            "data_quality_warning_messages": quality_warning_messages,
             "scanned_symbols": int(sum(_safe_int(row.scanned_symbols, 0) for row in rows)),
             "evaluated_candidates": int(
                 sum(_safe_int(row.evaluated_candidates, 0) for row in rows)

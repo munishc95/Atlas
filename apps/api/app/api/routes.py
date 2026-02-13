@@ -30,6 +30,7 @@ from app.db.session import engine, get_session
 from app.jobs.queue import get_queue
 from app.jobs.tasks import (
     run_backtest_job,
+    run_data_quality_job,
     run_import_job,
     run_evaluation_job,
     run_paper_step_job,
@@ -42,6 +43,7 @@ from app.jobs.tasks import (
 from app.schemas.api import (
     BacktestRunRequest,
     CreatePolicyRequest,
+    DataQualityRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
     PaperSignalsPreviewRequest,
@@ -54,8 +56,13 @@ from app.schemas.api import (
     WalkForwardRunRequest,
 )
 from app.services.data_store import DataStore
+from app.services.data_quality import (
+    get_latest_data_quality_report,
+    list_data_quality_history,
+)
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
+from app.services.operate_events import get_operate_health_summary, list_operate_events
 from app.services.paper import (
     activate_policy_mode,
     get_orders,
@@ -309,6 +316,58 @@ def data_status(
     store: DataStore = Depends(get_store),
 ) -> dict[str, Any]:
     return _data(store.data_status(session))
+
+
+@router.post("/data/quality/run")
+def run_data_quality(
+    payload: DataQualityRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="data_quality",
+        task_path="app.jobs.tasks.run_data_quality_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_data_quality_job,
+    )
+
+
+@router.get("/data/quality/latest")
+def latest_data_quality(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_latest_data_quality_report(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if row is None:
+        raise APIError(code="not_found", message="No data quality report found", status_code=404)
+    return _data(row.model_dump())
+
+
+@router.get("/data/quality/history")
+def data_quality_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    days: int = Query(default=7, ge=1, le=365),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_data_quality_history(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        days=days,
+    )
+    return _data([row.model_dump() for row in rows])
 
 
 @router.post("/backtests/run")
@@ -902,6 +961,7 @@ def operate_status(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    health_summary = get_operate_health_summary(session, settings)
     state_payload = get_paper_state_payload(session, settings)
     state = state_payload["state"]
     active_policy_id = state.get("settings_json", {}).get("active_policy_id")
@@ -941,16 +1001,61 @@ def operate_status(
         ).model_dump()
     return _data(
         {
+            "mode": health_summary.get("mode"),
+            "mode_reason": health_summary.get("mode_reason"),
             "active_policy_id": policy.id if policy is not None else None,
             "active_policy_name": policy.name if policy is not None else None,
             "active_bundle_id": latest_run.bundle_id if latest_run is not None else None,
             "current_regime": latest_run.regime if latest_run is not None else None,
             "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
+            "latest_data_quality": health_summary.get("latest_data_quality"),
+            "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "health_short": health_short,
             "health_long": health_long,
             "paper_state": state,
         }
+    )
+
+
+@router.get("/operate/events")
+def operate_events(
+    since: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    since_dt: datetime | None = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise APIError(code="invalid_since", message="since must be an ISO datetime string") from exc
+    rows = list_operate_events(
+        session,
+        since=since_dt,
+        severity=severity,
+        category=category,
+        limit=limit,
+    )
+    return _data([row.model_dump() for row in rows])
+
+
+@router.get("/operate/health")
+def operate_health(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(
+        get_operate_health_summary(
+            session,
+            settings,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+        )
     )
 
 
@@ -1235,6 +1340,17 @@ def get_settings_payload(
         "futures_initial_margin_pct": settings.futures_initial_margin_pct,
         "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
         "paper_use_simulator_engine": settings.paper_use_simulator_engine,
+        "operate_safe_mode_on_fail": settings.operate_safe_mode_on_fail,
+        "operate_safe_mode_action": settings.operate_safe_mode_action,
+        "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
+        "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
+        "operate_max_gap_bars": settings.operate_max_gap_bars,
+        "operate_outlier_zscore": settings.operate_outlier_zscore,
+        "operate_cost_ratio_spike_threshold": settings.operate_cost_ratio_spike_threshold,
+        "operate_cost_ratio_spike_days": settings.operate_cost_ratio_spike_days,
+        "operate_cost_spike_risk_scale": settings.operate_cost_spike_risk_scale,
+        "operate_scan_truncated_warn_days": settings.operate_scan_truncated_warn_days,
+        "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

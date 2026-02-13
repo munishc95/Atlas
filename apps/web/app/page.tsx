@@ -146,6 +146,9 @@ export default function DashboardPage() {
             <p className="rounded-xl border border-border px-3 py-2 text-sm">
               Last run-step: {todayStatus?.last_run_step_at ?? "-"}
             </p>
+            <p className="rounded-xl border border-border px-3 py-2 text-sm">
+              Mode: {todayStatus?.mode ?? "NORMAL"}
+            </p>
           </div>
         )}
       </section>

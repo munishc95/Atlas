@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+import hashlib
+import json
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,7 +30,13 @@ from app.engine.costs import (
     estimate_intraday_cost,
 )
 from app.engine.signal_engine import SignalGenerationResult, generate_signals_for_policy
+from app.services.data_quality import (
+    STATUS_FAIL as DATA_QUALITY_FAIL,
+    STATUS_WARN as DATA_QUALITY_WARN,
+    run_data_quality_report,
+)
 from app.services.data_store import DataStore
+from app.services.operate_events import emit_operate_event
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
 from app.services.policy_health import (
     DEGRADED,
@@ -109,6 +117,17 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "futures_initial_margin_pct": settings.futures_initial_margin_pct,
             "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
             "paper_use_simulator_engine": settings.paper_use_simulator_engine,
+            "operate_safe_mode_on_fail": settings.operate_safe_mode_on_fail,
+            "operate_safe_mode_action": settings.operate_safe_mode_action,
+            "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
+            "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
+            "operate_max_gap_bars": settings.operate_max_gap_bars,
+            "operate_outlier_zscore": settings.operate_outlier_zscore,
+            "operate_cost_ratio_spike_threshold": settings.operate_cost_ratio_spike_threshold,
+            "operate_cost_ratio_spike_days": settings.operate_cost_ratio_spike_days,
+            "operate_cost_spike_risk_scale": settings.operate_cost_spike_risk_scale,
+            "operate_scan_truncated_warn_days": settings.operate_scan_truncated_warn_days,
+            "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
             "paper_mode": "strategy",
             "active_policy_id": None,
         },
@@ -136,6 +155,254 @@ def _dump_model(value: Any) -> Any:
     if isinstance(fields, dict):
         return jsonable_encoder({key: getattr(value, key, None) for key in fields})
     return jsonable_encoder(value)
+
+
+def _stable_hash(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _result_digest(summary: dict[str, Any], cost_summary: dict[str, Any]) -> str:
+    payload = {
+        "signals_source": summary.get("signals_source"),
+        "generated_signals_count": summary.get("generated_signals_count"),
+        "selected_signals_count": summary.get("selected_signals_count"),
+        "skipped_signals_count": summary.get("skipped_signals_count"),
+        "selected_reason_histogram": summary.get("selected_reason_histogram", {}),
+        "skipped_reason_histogram": summary.get("skipped_reason_histogram", {}),
+        "equity_after": summary.get("equity_after"),
+        "cash_after": summary.get("cash_after"),
+        "net_pnl": summary.get("net_pnl"),
+        "paper_engine": summary.get("paper_engine"),
+        "engine_version": summary.get("engine_version"),
+        "data_digest": summary.get("data_digest"),
+        "seed": summary.get("seed"),
+        "cost_summary": {
+            "entry_cost_total": cost_summary.get("entry_cost_total"),
+            "exit_cost_total": cost_summary.get("exit_cost_total"),
+            "total_cost": cost_summary.get("total_cost"),
+            "entry_slippage_cost": cost_summary.get("entry_slippage_cost"),
+            "exit_slippage_cost": cost_summary.get("exit_slippage_cost"),
+        },
+    }
+    return _stable_hash(payload)
+
+
+def _cost_ratio_spike_active(
+    session: Session,
+    *,
+    state_settings: dict[str, Any],
+    settings: Settings,
+) -> tuple[bool, dict[str, Any]]:
+    days = max(
+        1,
+        int(
+            state_settings.get(
+                "operate_cost_ratio_spike_days",
+                settings.operate_cost_ratio_spike_days,
+            )
+        ),
+    )
+    threshold = float(
+        state_settings.get(
+            "operate_cost_ratio_spike_threshold",
+            settings.operate_cost_ratio_spike_threshold,
+        )
+    )
+    rows = session.exec(select(PaperRun).order_by(PaperRun.asof_ts.desc()).limit(days)).all()
+    if len(rows) < days:
+        return False, {"days": days, "threshold": threshold, "ratios": []}
+    ratios: list[float] = []
+    for row in rows:
+        summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+        cost_summary = row.cost_summary_json if isinstance(row.cost_summary_json, dict) else {}
+        total_cost = float(summary.get("total_cost", cost_summary.get("total_cost", 0.0)))
+        gross_pnl = abs(float(summary.get("gross_pnl", 0.0)))
+        if gross_pnl <= 1e-9:
+            return False, {"days": days, "threshold": threshold, "ratios": ratios}
+        ratios.append(total_cost / gross_pnl)
+    return all(value >= threshold for value in ratios), {
+        "days": days,
+        "threshold": threshold,
+        "ratios": ratios,
+    }
+
+
+def _scan_truncation_guard(
+    session: Session,
+    *,
+    state_settings: dict[str, Any],
+    settings: Settings,
+) -> tuple[bool, dict[str, Any]]:
+    days = max(
+        1,
+        int(
+            state_settings.get(
+                "operate_scan_truncated_warn_days",
+                settings.operate_scan_truncated_warn_days,
+            )
+        ),
+    )
+    reduced_to = max(
+        5,
+        int(
+            state_settings.get(
+                "operate_scan_truncated_reduce_to",
+                settings.operate_scan_truncated_reduce_to,
+            )
+        ),
+    )
+    rows = session.exec(select(PaperRun).order_by(PaperRun.asof_ts.desc()).limit(days)).all()
+    if len(rows) < days:
+        return False, {"days": days, "reduced_to": reduced_to, "truncated_count": 0}
+    truncated_count = int(sum(1 for row in rows if bool(row.scan_truncated)))
+    return truncated_count >= days, {
+        "days": days,
+        "reduced_to": reduced_to,
+        "truncated_count": truncated_count,
+    }
+
+
+def _data_quality_guard(
+    *,
+    session: Session,
+    settings: Settings,
+    store: DataStore,
+    state_settings: dict[str, Any],
+    bundle_id: int | None,
+    timeframe: str,
+    asof_ts: datetime | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    if bundle_id is None:
+        return {
+            "status": None,
+            "active": False,
+            "action": "none",
+            "safe_mode_reason": None,
+            "warn_summary": [],
+            "report": None,
+        }
+    report = run_data_quality_report(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=int(bundle_id),
+        timeframe=str(timeframe),
+        overrides=state_settings,
+        reference_ts=asof_ts,
+        correlation_id=correlation_id,
+    )
+    status = str(report.status).upper()
+    safe_mode_on_fail = bool(
+        state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail)
+    )
+    action = str(
+        state_settings.get("operate_safe_mode_action", settings.operate_safe_mode_action)
+    ).lower()
+    safe_mode_active = bool(status == DATA_QUALITY_FAIL and safe_mode_on_fail)
+    reason = "data_quality_fail_safe_mode" if safe_mode_active else None
+    warn_summary = [
+        {
+            "code": str(item.get("code")),
+            "message": str(item.get("message")),
+            "severity": str(item.get("severity")),
+        }
+        for item in (report.issues_json or [])[:5]
+    ]
+    if safe_mode_active:
+        emit_operate_event(
+            session,
+            severity="ERROR",
+            category="DATA",
+            message="Safe mode activated due to data quality failure.",
+            details={
+                "bundle_id": bundle_id,
+                "timeframe": timeframe,
+                "report_id": report.id,
+                "safe_mode_action": action,
+                "reason": reason,
+            },
+            correlation_id=correlation_id,
+        )
+    elif status == DATA_QUALITY_WARN:
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="Data quality warnings detected for active run context.",
+            details={
+                "bundle_id": bundle_id,
+                "timeframe": timeframe,
+                "report_id": report.id,
+                "warning_count": len(report.issues_json or []),
+            },
+            correlation_id=correlation_id,
+        )
+    return {
+        "status": status,
+        "active": safe_mode_active,
+        "action": action,
+        "safe_mode_reason": reason,
+        "warn_summary": warn_summary,
+        "report": report,
+    }
+
+
+def _emit_digest_mismatch_if_any(
+    *,
+    session: Session,
+    run_row: PaperRun,
+    run_summary: dict[str, Any],
+) -> None:
+    data_digest = str(run_summary.get("data_digest", ""))
+    seed = run_summary.get("seed")
+    result_digest = str(run_summary.get("result_digest", ""))
+    if not data_digest or result_digest == "":
+        return
+    asof = run_row.asof_ts
+    day_start = datetime.combine(asof.date(), time.min, tzinfo=timezone.utc)
+    day_end = datetime.combine(asof.date(), time.max, tzinfo=timezone.utc)
+    rows = session.exec(
+        select(PaperRun)
+        .where(PaperRun.id != run_row.id)
+        .where(PaperRun.asof_ts >= day_start)
+        .where(PaperRun.asof_ts <= day_end)
+        .order_by(PaperRun.created_at.desc())
+    ).all()
+    for row in rows:
+        prev = row.summary_json if isinstance(row.summary_json, dict) else {}
+        if str(prev.get("data_digest", "")) != data_digest:
+            continue
+        if prev.get("seed") != seed:
+            continue
+        prev_digest = str(prev.get("result_digest", ""))
+        if not prev_digest:
+            continue
+        if prev_digest != result_digest:
+            mismatch_payload = {
+                "message": "digest_mismatch",
+                "current_run_id": run_row.id,
+                "previous_run_id": row.id,
+                "asof_date": asof.date().isoformat(),
+                "bundle_id": run_row.bundle_id,
+                "policy_id": run_row.policy_id,
+                "seed": seed,
+                "data_digest": data_digest,
+                "previous_result_digest": prev_digest,
+                "current_result_digest": result_digest,
+            }
+            _log(session, "digest_mismatch", mismatch_payload)
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="SYSTEM",
+                message="Digest mismatch detected for same day/config/data digest.",
+                details=mismatch_payload,
+                correlation_id=str(run_row.id),
+            )
+        return
 
 
 def _position_size(equity: float, risk_per_trade: float, stop_distance: float) -> int:
@@ -887,6 +1154,15 @@ def _run_paper_step_with_simulator_engine(
     generated_meta: SignalGenerationResult,
     generated_signals_count: int,
     signals_source: str,
+    safe_mode_active: bool,
+    safe_mode_action: str,
+    safe_mode_reason: str | None,
+    quality_status: str | None,
+    quality_warn_summary: list[dict[str, Any]],
+    cost_spike_active: bool,
+    cost_spike_meta: dict[str, Any],
+    scan_guard_active: bool,
+    scan_guard_meta: dict[str, Any],
     resolved_bundle_id: int | None,
     resolved_dataset_id: int | None,
     resolved_timeframes: list[str],
@@ -1018,6 +1294,15 @@ def _run_paper_step_with_simulator_engine(
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
         "health_status": policy.get("health_status"),
+        "safe_mode_active": bool(safe_mode_active),
+        "safe_mode_action": safe_mode_action,
+        "safe_mode_reason": safe_mode_reason,
+        "data_quality_status": quality_status,
+        "data_quality_warn_summary": quality_warn_summary,
+        "cost_ratio_spike_active": bool(cost_spike_active),
+        "cost_ratio_spike_meta": cost_spike_meta,
+        "scan_guard_active": bool(scan_guard_active),
+        "scan_guard_meta": scan_guard_meta,
         "signals_source": signals_source,
         "bundle_id": resolved_bundle_id,
         "dataset_id": resolved_dataset_id,
@@ -1068,6 +1353,7 @@ def _run_paper_step_with_simulator_engine(
         "seed": sim_execution.metadata.get("seed"),
         "paper_engine": "simulator",
     }
+    run_summary["result_digest"] = _result_digest(run_summary, cost_summary)
     policy_id_value: int | None = None
     try:
         if policy.get("policy_id") is not None:
@@ -1092,6 +1378,8 @@ def _run_paper_step_with_simulator_engine(
     session.add(run_row)
     session.commit()
     session.refresh(run_row)
+    _emit_digest_mismatch_if_any(session=session, run_row=run_row, run_summary=run_summary)
+    session.commit()
 
     health_short_payload: dict[str, Any] | None = None
     health_long_payload: dict[str, Any] | None = None
@@ -1257,6 +1545,19 @@ def _run_paper_step_with_simulator_engine(
             "selected_signals_count": executed_count,
             "selected_signals": executed_signals,
             "skipped_signals": skipped_signals,
+            "safe_mode": {
+                "active": bool(safe_mode_active),
+                "action": safe_mode_action,
+                "reason": safe_mode_reason,
+                "status": quality_status,
+                "warnings": quality_warn_summary,
+            },
+            "guardrails": {
+                "cost_ratio_spike_active": bool(cost_spike_active),
+                "cost_ratio_spike_meta": cost_spike_meta,
+                "scan_guard_active": bool(scan_guard_active),
+                "scan_guard_meta": scan_guard_meta,
+            },
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
             "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -1269,6 +1570,7 @@ def _run_paper_step_with_simulator_engine(
             "data_digest": sim_execution.metadata.get("data_digest"),
             "seed": sim_execution.metadata.get("seed"),
             "paper_engine": "simulator",
+            "result_digest": run_summary.get("result_digest"),
             "report_id": generated_report_id,
             "health_short": health_short_payload,
             "health_long": health_long_payload,
@@ -1387,10 +1689,6 @@ def run_paper_step(
         )
 
     provided_signals = [dict(item) for item in payload.get("signals", []) if isinstance(item, dict)]
-    auto_generate = bool(payload.get("auto_generate_signals", False))
-    should_generate = auto_generate or (
-        policy.get("mode") == "policy" and len(provided_signals) == 0
-    )
     signals_source = "provided"
     generated_signals_count = 0
     generated_meta = SignalGenerationResult(
@@ -1400,18 +1698,111 @@ def run_paper_step(
         evaluated_candidates=0,
         total_symbols=0,
     )
-    resolved_bundle_id: int | None = None
-    resolved_dataset_id: int | None = None
-    resolved_timeframes: list[str] = []
+    resolved_timeframes: list[str] = _resolve_timeframes(payload, policy)
+    resolved_bundle_id: int | None = _resolve_bundle_id(session, payload, policy)
+    resolved_dataset_id: int | None = _resolve_dataset_id(
+        session,
+        payload,
+        policy,
+        resolved_timeframes,
+    )
+    primary_timeframe = resolved_timeframes[0] if resolved_timeframes else "1d"
+    seed = _resolve_seed(payload, policy)
+
+    cost_spike_active, cost_spike_meta = _cost_ratio_spike_active(
+        session,
+        state_settings=state_settings,
+        settings=settings,
+    )
+    if cost_spike_active:
+        risk_scale = float(
+            state_settings.get("operate_cost_spike_risk_scale", settings.operate_cost_spike_risk_scale)
+        )
+        current_risk = float(policy.get("risk_per_trade", base_risk_per_trade))
+        policy["risk_per_trade"] = max(0.0001, current_risk * max(0.1, risk_scale))
+        policy["max_positions"] = max(1, min(int(policy.get("max_positions", 1)), base_max_positions))
+        policy["selection_reason"] = (
+            f"{policy.get('selection_reason', '')} Risk throttled due to cost-ratio spike."
+        ).strip()
+        _log(
+            session,
+            "cost_ratio_spike_throttle",
+            {
+                "meta": cost_spike_meta,
+                "risk_scale": risk_scale,
+                "risk_per_trade": policy["risk_per_trade"],
+            },
+        )
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="EXECUTION",
+            message="Cost ratio spike detected. Risk throttling applied.",
+            details={
+                "meta": cost_spike_meta,
+                "risk_scale": risk_scale,
+                "risk_per_trade": policy["risk_per_trade"],
+            },
+            correlation_id=str(seed),
+        )
+
+    scan_guard_active, scan_guard_meta = _scan_truncation_guard(
+        session,
+        state_settings=state_settings,
+        settings=settings,
+    )
+    if scan_guard_active:
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="EXECUTION",
+            message="Frequent scan truncation detected. Reducing scan size guardrail.",
+            details=scan_guard_meta,
+            correlation_id=str(seed),
+        )
+
+    quality_guard = _data_quality_guard(
+        session=session,
+        settings=settings,
+        store=store,
+        state_settings=state_settings,
+        bundle_id=resolved_bundle_id,
+        timeframe=primary_timeframe,
+        asof_ts=asof_dt,
+        correlation_id=str(seed),
+    )
+    safe_mode_active = bool(quality_guard.get("active"))
+    safe_mode_action = str(quality_guard.get("action", "none"))
+    safe_mode_reason = quality_guard.get("safe_mode_reason")
+    quality_status = quality_guard.get("status")
+    quality_warn_summary = quality_guard.get("warn_summary", [])
+    if safe_mode_active:
+        _log(
+            session,
+            "data_quality_fail_safe_mode",
+            {
+                "reason": safe_mode_reason,
+                "action": safe_mode_action,
+                "bundle_id": resolved_bundle_id,
+                "dataset_id": resolved_dataset_id,
+                "timeframe": primary_timeframe,
+                "status": quality_status,
+            },
+        )
+
+    auto_generate = bool(payload.get("auto_generate_signals", False))
+    should_generate = auto_generate or (
+        policy.get("mode") == "policy" and len(provided_signals) == 0
+    )
+    if safe_mode_active and safe_mode_action in {"exits_only", "shadow_only"}:
+        should_generate = False
 
     if should_generate:
-        resolved_timeframes = _resolve_timeframes(payload, policy)
-        resolved_bundle_id = _resolve_bundle_id(session, payload, policy)
-        resolved_dataset_id = _resolve_dataset_id(session, payload, policy, resolved_timeframes)
         symbol_scope = _resolve_symbol_scope(payload, policy)
         max_symbols_scan = _resolve_max_symbols_scan(payload, policy, state_settings, settings)
+        if scan_guard_active:
+            max_symbols_scan = min(max_symbols_scan, int(scan_guard_meta["reduced_to"]))
         max_runtime_seconds = _resolve_max_runtime_seconds(payload, state_settings, settings)
-        seed = _resolve_seed(payload, policy)
         ranking_weights = policy.get("ranking_weights", {})
 
         if resolved_bundle_id is None and resolved_dataset_id is None:
@@ -1467,14 +1858,6 @@ def run_paper_step(
             )
         signals_source = "generated"
 
-    if not resolved_timeframes:
-        resolved_timeframes = _resolve_timeframes(payload, policy)
-    if resolved_bundle_id is None:
-        resolved_bundle_id = _resolve_bundle_id(session, payload, policy)
-    if resolved_dataset_id is None:
-        resolved_dataset_id = _resolve_dataset_id(session, payload, policy, resolved_timeframes)
-    primary_timeframe = resolved_timeframes[0] if resolved_timeframes else "1d"
-
     current_positions = list(positions_before)
     open_symbols = {p.symbol for p in current_positions}
     open_underlyings = {
@@ -1502,6 +1885,24 @@ def run_paper_step(
         key=lambda item: float(item.get("signal_strength", 0.0)),
         reverse=True,
     )
+    if safe_mode_active and safe_mode_action in {"exits_only", "shadow_only"}:
+        for signal in candidates:
+            skipped_signals.append(
+                {
+                    "symbol": str(signal.get("symbol", "")).upper(),
+                    "underlying_symbol": str(
+                        signal.get("underlying_symbol", signal.get("symbol", ""))
+                    ).upper(),
+                    "template": str(signal.get("template", "trend_breakout")),
+                    "side": str(signal.get("side", "BUY")).upper(),
+                    "instrument_kind": str(signal.get("instrument_kind", "EQUITY_CASH")).upper(),
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                    "policy_name": policy.get("policy_name"),
+                    "reason": "data_quality_fail_safe_mode",
+                }
+            )
+        candidates = []
     candidate_symbols = {
         str(item.get("symbol", "")).upper() for item in candidates if str(item.get("symbol", "")).strip()
     }
@@ -1725,6 +2126,15 @@ def run_paper_step(
             generated_meta=generated_meta,
             generated_signals_count=generated_signals_count,
             signals_source=signals_source,
+            safe_mode_active=safe_mode_active,
+            safe_mode_action=safe_mode_action,
+            safe_mode_reason=safe_mode_reason,
+            quality_status=quality_status,
+            quality_warn_summary=quality_warn_summary,
+            cost_spike_active=cost_spike_active,
+            cost_spike_meta=cost_spike_meta,
+            scan_guard_active=scan_guard_active,
+            scan_guard_meta=scan_guard_meta,
             resolved_bundle_id=resolved_bundle_id,
             resolved_dataset_id=resolved_dataset_id,
             resolved_timeframes=resolved_timeframes,
@@ -2123,6 +2533,15 @@ def run_paper_step(
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
         "health_status": policy.get("health_status"),
+        "safe_mode_active": bool(safe_mode_active),
+        "safe_mode_action": safe_mode_action,
+        "safe_mode_reason": safe_mode_reason,
+        "data_quality_status": quality_status,
+        "data_quality_warn_summary": quality_warn_summary,
+        "cost_ratio_spike_active": bool(cost_spike_active),
+        "cost_ratio_spike_meta": cost_spike_meta,
+        "scan_guard_active": bool(scan_guard_active),
+        "scan_guard_meta": scan_guard_meta,
         "signals_source": signals_source,
         "bundle_id": resolved_bundle_id,
         "dataset_id": resolved_dataset_id,
@@ -2170,6 +2589,18 @@ def run_paper_step(
         "kill_switch_active": bool(state.kill_switch_active),
         "paper_engine": "legacy",
     }
+    if "data_digest" not in run_summary:
+        run_summary["data_digest"] = _stable_hash(
+            {
+                "bundle_id": resolved_bundle_id,
+                "dataset_id": resolved_dataset_id,
+                "timeframes": resolved_timeframes,
+                "asof_date": asof_dt.date().isoformat(),
+                "seed": seed,
+            }
+        )
+    run_summary["seed"] = seed
+    run_summary["result_digest"] = _result_digest(run_summary, cost_summary)
     policy_id_value: int | None = None
     try:
         if policy.get("policy_id") is not None:
@@ -2194,6 +2625,8 @@ def run_paper_step(
     session.add(run_row)
     session.commit()
     session.refresh(run_row)
+    _emit_digest_mismatch_if_any(session=session, run_row=run_row, run_summary=run_summary)
+    session.commit()
 
     health_short_payload: dict[str, Any] | None = None
     health_long_payload: dict[str, Any] | None = None
@@ -2359,6 +2792,19 @@ def run_paper_step(
             "selected_signals_count": executed_count,
             "selected_signals": executed_signals,
             "skipped_signals": skipped_signals,
+            "safe_mode": {
+                "active": bool(safe_mode_active),
+                "action": safe_mode_action,
+                "reason": safe_mode_reason,
+                "status": quality_status,
+                "warnings": quality_warn_summary,
+            },
+            "guardrails": {
+                "cost_ratio_spike_active": bool(cost_spike_active),
+                "cost_ratio_spike_meta": cost_spike_meta,
+                "scan_guard_active": bool(scan_guard_active),
+                "scan_guard_meta": scan_guard_meta,
+            },
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
             "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -2368,6 +2814,7 @@ def run_paper_step(
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
             "paper_engine": "legacy",
+            "result_digest": run_summary.get("result_digest"),
             "report_id": generated_report_id,
             "health_short": health_short_payload,
             "health_long": health_long_payload,
