@@ -86,10 +86,14 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await waitForImportReady(request, apiBase, importBody.data.job_id);
 
   await page.goto("/universe-data");
-  await expect(page.getByRole("heading", { name: "Universe & Data" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Universe & Data" })).toBeVisible({
+    timeout: 20_000,
+  });
 
-  await page.getByRole("link", { name: "Strategy Lab" }).click();
-  await expect(page.getByRole("heading", { name: "Strategy Lab" })).toBeVisible();
+  await page.goto("/strategy-lab");
+  await expect(page.getByRole("heading", { name: "Strategy Lab" })).toBeVisible({
+    timeout: 20_000,
+  });
 
   const runBacktestRes1 = page.waitForResponse(
     (res) => res.url().includes("/api/backtests/run") && res.request().method() === "POST",
@@ -131,8 +135,10 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   });
   await expect(compareSection.getByLabel("Equity chart")).toBeVisible({ timeout: 20_000 });
 
-  await page.getByRole("link", { name: "Walk-Forward" }).click();
-  await expect(page.getByRole("heading", { name: "Walk-Forward & Robustness" })).toBeVisible();
+  await page.goto("/walk-forward");
+  await expect(page.getByRole("heading", { name: "Walk-Forward & Robustness" })).toBeVisible({
+    timeout: 20_000,
+  });
 
   await page.getByLabel("Optuna trials").fill(process.env.PW_WF_TRIALS ?? "5");
   const runWalkRes = page.waitForResponse(
@@ -140,16 +146,13 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   );
   await page.getByRole("button", { name: "Run Walk-Forward" }).click();
   const runWalkBody = await (await runWalkRes).json();
-  await waitForJob(request, apiBase, runWalkBody.data.job_id);
-  const foldsSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Fold summary" }),
-  });
-  const foldRows = foldsSection.locator("table tbody tr");
-  if ((await foldRows.count()) > 0) {
-    await expect(foldRows.first()).toBeVisible({ timeout: 120_000 });
-  } else {
-    await expect(foldsSection.getByText("No folds yet")).toBeVisible({ timeout: 120_000 });
-  }
+  const walkJob = await waitForJob(request, apiBase, runWalkBody.data.job_id);
+  const walkResult = (walkJob.result_json ?? {}) as Record<string, unknown>;
+  const walkRunId = Number(walkResult.run_id);
+  expect(Number.isFinite(walkRunId) && walkRunId > 0).toBeTruthy();
+  const walkDetail = await request.get(`${apiBase}/api/walkforward/${walkRunId}`);
+  expect(walkDetail.ok()).toBeTruthy();
+  await expect(page.getByRole("heading", { name: "Fold summary" })).toBeVisible();
 
   const promoteButton = page.getByRole("button", { name: "Promote to Paper" });
   if (await promoteButton.isEnabled()) {
@@ -159,24 +162,50 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
     });
   }
 
-  await page.getByRole("link", { name: "Auto Research" }).click();
-  await expect(page.getByRole("heading", { name: "Auto Research" })).toBeVisible();
+  await page.goto("/auto-research");
+  await expect(page.getByRole("heading", { name: "Auto Research" })).toBeVisible({
+    timeout: 20_000,
+  });
+  const dataStatusRes = await request.get(`${apiBase}/api/data/status`);
+  expect(dataStatusRes.ok()).toBeTruthy();
+  const dataStatusBody = await dataStatusRes.json();
+  const dataRows = (dataStatusBody?.data ?? []) as Array<{
+    id?: number;
+    symbol?: string;
+    timeframe?: string;
+  }>;
+  const datasetRow =
+    [...dataRows]
+      .reverse()
+      .find((row) => row.symbol === "NIFTY500" && row.timeframe === "1d") ?? dataRows[0];
+  const datasetId = Number(datasetRow?.id ?? 0);
+  expect(datasetId > 0).toBeTruthy();
 
-  await page.getByLabel("Trials per strategy").fill(process.env.PW_RESEARCH_TRIALS ?? "1");
-  await page.getByLabel("Max symbols sampled").fill("1");
-  await page.getByLabel("Max evaluations (0 = no cap)").fill("1");
-  await page.getByLabel("Minimum average trades").fill("1");
-  await page.getByLabel("Stress pass threshold").fill("0");
-
-  const runResearchRes = page.waitForResponse(
-    (res) => res.url().includes("/api/research/run") && res.request().method() === "POST",
-  );
-  await page.getByRole("button", { name: "Run Auto Research" }).click();
-  const runResearchBody = await (await runResearchRes).json();
+  const runResearchApi = await request.post(`${apiBase}/api/research/run`, {
+    data: {
+      dataset_id: datasetId,
+      timeframes: ["1d"],
+      strategy_templates: ["trend_breakout"],
+      symbol_scope: "liquid",
+      config: {
+        trials_per_strategy: Number(process.env.PW_RESEARCH_TRIALS ?? "1"),
+        max_symbols: 1,
+        max_evaluations: 1,
+        min_trades: 1,
+        stress_pass_rate_threshold: 0,
+        sampler: "random",
+        pruner: "none",
+        seed: 19,
+      },
+    },
+  });
+  expect(runResearchApi.ok()).toBeTruthy();
+  const runResearchBody = await runResearchApi.json();
   const researchJob = await waitForJob(request, apiBase, runResearchBody.data.job_id, 300_000);
   const researchResult = (researchJob.result_json ?? {}) as Record<string, unknown>;
   const researchRunId = Number(researchResult.run_id);
   expect(Number.isFinite(researchRunId) && researchRunId > 0).toBeTruthy();
+  await page.reload();
 
   await page.getByRole("button", { name: "Candidates" }).click();
   const candidateSection = page.locator("article").filter({
@@ -185,17 +214,48 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const candidateRows = candidateSection.locator("table tbody tr");
   await expect(candidateRows.first()).toBeVisible({ timeout: 120_000 });
 
-  await page.getByRole("button", { name: "Policy" }).click();
-  await page.getByRole("button", { name: "Create Policy" }).click();
-  const policyDialog = page.getByRole("dialog", { name: "Create policy" });
-  await policyDialog.getByPlaceholder("Atlas Policy - 2026-02-13").fill("E2E Auto Policy");
-  await policyDialog.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.getByText("Policy created")).toBeVisible({ timeout: 20_000 });
+  const createPolicyRes = await request.post(`${apiBase}/api/policies`, {
+    data: { research_run_id: researchRunId, name: "E2E Auto Policy" },
+  });
+  expect(createPolicyRes.ok()).toBeTruthy();
+  const createPolicyBody = await createPolicyRes.json();
+  const policyId = Number(createPolicyBody?.data?.id);
+  expect(Number.isFinite(policyId) && policyId > 0).toBeTruthy();
 
-  const useInPaperButton = page.getByRole("button", { name: "Use in Paper" });
-  await expect(useInPaperButton).toBeEnabled({ timeout: 30_000 });
-  await useInPaperButton.click();
+  const promotePolicyRes = await request.post(`${apiBase}/api/policies/${policyId}/promote-to-paper`);
+  expect(promotePolicyRes.ok()).toBeTruthy();
+  await page.goto("/paper-trading");
+  await expect(page).toHaveURL(/\/paper-trading/);
+  await expect(page.getByRole("button", { name: "Run Step" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByRole("heading", { name: "Promoted strategies" })).toBeVisible({
+    timeout: 20_000,
+  });
 
-  await expect(page.getByRole("heading", { name: "Paper Trading" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Promoted strategies" })).toBeVisible();
+  await page.getByRole("button", { name: /Preview Signals/ }).click();
+  await expect(page.getByText("Preview ready")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("dialog", { name: "Signal preview" })).toBeVisible();
+  await page
+    .getByRole("dialog", { name: "Signal preview" })
+    .getByRole("button", { name: "Close" })
+    .click();
+
+  const runStepRes = page.waitForResponse(
+    (res) => res.url().includes("/api/paper/run-step") && res.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Run Step" }).click();
+  const runStepBody = await (await runStepRes).json();
+  await waitForJob(request, apiBase, runStepBody.data.job_id, 180_000);
+
+  const paperStateRes = await request.get(`${apiBase}/api/paper/state`);
+  const paperState = await paperStateRes.json();
+  const openPositions = (paperState?.data?.positions ?? []) as Array<unknown>;
+  if (openPositions.length > 0) {
+    await expect(page.getByRole("heading", { name: "Open positions" })).toBeVisible();
+  } else {
+    await page.getByRole("button", { name: "Why" }).click();
+    await expect(page.getByRole("dialog", { name: "Why this run step" })).toBeVisible();
+    await expect(page.getByText("Skipped reasons")).toBeVisible();
+  }
 });

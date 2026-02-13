@@ -285,9 +285,13 @@ def _policy_from_candidates(run_id: int, candidates: list[ResearchCandidate]) ->
         )
 
     return {
-        "version": "v1.2",
+        "version": "v1.3",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_research_run_id": run_id,
+        "universe": {"dataset_id": None, "symbol_scope": "liquid", "max_symbols_scan": 50},
+        "timeframes": ["1d"],
+        "ranking": {"method": "robust_score", "seed": 7, "weights": {"signal": 1.0}},
+        "cost_model": {"enabled": False, "mode": "delivery"},
         "regime_map": regime_map,
         "notes": notes,
     }
@@ -305,6 +309,7 @@ def execute_research_run(
     templates = _resolve_templates(payload.get("strategy_templates"))
     cfg = dict(payload.get("config", {}))
     primary_timeframe = timeframes[0]
+    symbol_scope = str(payload.get("symbol_scope", "liquid")).strip().lower() or "liquid"
 
     trials_per_strategy = int(
         cfg.get("trials_per_strategy", max(20, settings.optuna_default_trials // 3))
@@ -329,7 +334,7 @@ def execute_research_run(
         dataset_id=payload.get("dataset_id"),
         timeframes_json=timeframes,
         config_json={
-            "symbol_scope": str(payload.get("symbol_scope", "liquid")),
+            "symbol_scope": symbol_scope,
             "trials_per_strategy": trials_per_strategy,
             "max_symbols": max_symbols,
             "max_evaluations": max_evaluations,
@@ -363,12 +368,19 @@ def execute_research_run(
             raise APIError(
                 code="dataset_not_found", message=f"Dataset {run.dataset_id} was not found."
             )
-        symbols = [dataset.symbol]
         if dataset.timeframe not in timeframes:
             timeframes = [dataset.timeframe, *timeframes]
             run.timeframes_json = timeframes
             session.add(run)
             session.commit()
+        symbols = store.sample_dataset_symbols(
+            session=session,
+            dataset_id=run.dataset_id,
+            timeframe=timeframes[0],
+            symbol_scope=symbol_scope,
+            max_symbols_scan=max_symbols,
+            seed=seed or 7,
+        )
     else:
         symbols = _sample_symbols_by_adv(
             session=session,
@@ -493,6 +505,21 @@ def execute_research_run(
         session.add(row)
 
     policy_preview = _policy_from_candidates(run.id, candidates)
+    policy_preview["universe"] = {
+        "dataset_id": run.dataset_id,
+        "symbol_scope": symbol_scope,
+        "max_symbols_scan": max_symbols,
+    }
+    policy_preview["timeframes"] = timeframes
+    policy_preview["ranking"] = {
+        "method": "robust_score",
+        "seed": seed if seed is not None else 7,
+        "weights": {"signal": 1.0},
+    }
+    policy_preview["cost_model"] = {
+        "enabled": bool(settings.cost_model_enabled),
+        "mode": settings.cost_mode,
+    }
     accepted = [row for row in candidates if row.accepted]
     top = candidates[0]
     summary = {
@@ -571,7 +598,12 @@ def create_policy_from_research_run(session: Session, *, run_id: int, name: str)
             code="invalid_state", message="Research run has no candidates to build a policy."
         )
 
-    definition = _policy_from_candidates(run_id, candidates)
+    summary = run.summary_json if isinstance(run.summary_json, dict) else {}
+    preview = summary.get("policy_preview")
+    if isinstance(preview, dict) and preview.get("regime_map"):
+        definition = dict(preview)
+    else:
+        definition = _policy_from_candidates(run_id, candidates)
     policy = Policy(
         name=name,
         definition_json=definition,

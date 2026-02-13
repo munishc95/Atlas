@@ -24,5 +24,7 @@ export const qk = {
   paperState: ["paperState"] as const,
   paperPositions: ["paperPositions"] as const,
   paperOrders: ["paperOrders"] as const,
+  paperSignalsPreview: (datasetId: number | null, regime: string) =>
+    ["paperSignalsPreview", datasetId, regime] as const,
   settings: ["settings"] as const,
 };

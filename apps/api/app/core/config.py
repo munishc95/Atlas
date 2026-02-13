@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     commission_bps: float = 5.0
     slippage_base_bps: float = 2.0
     slippage_vol_factor: float = 15.0
+    cost_model_enabled: bool = False
+    cost_mode: str = "delivery"
+    brokerage_bps: float = 0.0
+    stt_delivery_buy_bps: float = 0.0
+    stt_delivery_sell_bps: float = 10.0
+    stt_intraday_buy_bps: float = 0.0
+    stt_intraday_sell_bps: float = 2.5
+    exchange_txn_bps: float = 0.297
+    sebi_bps: float = 0.001
+    stamp_delivery_buy_bps: float = 1.5
+    stamp_intraday_buy_bps: float = 0.3
+    gst_rate: float = 0.18
     max_position_value_pct_adv: float = 0.01
     diversification_corr_threshold: float = 0.75
 

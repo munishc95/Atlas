@@ -16,6 +16,32 @@ from app.strategies.templates import generate_signals
 
 
 def _build_config(settings: Settings, payload_config: dict[str, Any]) -> BacktestConfig:
+    cost_params = {
+        "brokerage_bps": float(payload_config.get("brokerage_bps", settings.brokerage_bps)),
+        "stt_delivery_buy_bps": float(
+            payload_config.get("stt_delivery_buy_bps", settings.stt_delivery_buy_bps)
+        ),
+        "stt_delivery_sell_bps": float(
+            payload_config.get("stt_delivery_sell_bps", settings.stt_delivery_sell_bps)
+        ),
+        "stt_intraday_buy_bps": float(
+            payload_config.get("stt_intraday_buy_bps", settings.stt_intraday_buy_bps)
+        ),
+        "stt_intraday_sell_bps": float(
+            payload_config.get("stt_intraday_sell_bps", settings.stt_intraday_sell_bps)
+        ),
+        "exchange_txn_bps": float(
+            payload_config.get("exchange_txn_bps", settings.exchange_txn_bps)
+        ),
+        "sebi_bps": float(payload_config.get("sebi_bps", settings.sebi_bps)),
+        "stamp_delivery_buy_bps": float(
+            payload_config.get("stamp_delivery_buy_bps", settings.stamp_delivery_buy_bps)
+        ),
+        "stamp_intraday_buy_bps": float(
+            payload_config.get("stamp_intraday_buy_bps", settings.stamp_intraday_buy_bps)
+        ),
+        "gst_rate": float(payload_config.get("gst_rate", settings.gst_rate)),
+    }
     return BacktestConfig(
         risk_per_trade=float(payload_config.get("risk_per_trade", settings.risk_per_trade)),
         max_positions=int(payload_config.get("max_positions", settings.max_positions)),
@@ -50,6 +76,11 @@ def _build_config(settings: Settings, payload_config: dict[str, Any]) -> Backtes
         ),
         adv_lookback=int(payload_config.get("adv_lookback", 20)),
         allow_long=bool(payload_config.get("allow_long", True)),
+        cost_model_enabled=bool(
+            payload_config.get("cost_model_enabled", settings.cost_model_enabled)
+        ),
+        cost_mode=str(payload_config.get("cost_mode", settings.cost_mode)),
+        cost_params=cost_params,
     )
 
 

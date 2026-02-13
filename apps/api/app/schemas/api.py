@@ -61,6 +61,24 @@ class PaperRunStepRequest(BaseModel):
     regime: str = "TREND_UP"
     signals: list[dict[str, Any]] = Field(default_factory=list)
     mark_prices: dict[str, float] = Field(default_factory=dict)
+    auto_generate_signals: bool = False
+    dataset_id: int | None = None
+    timeframes: list[str] = Field(default_factory=list)
+    symbol_scope: str | None = None
+    max_symbols_scan: int | None = None
+    seed: int | None = None
+    asof: str | None = None
+
+
+class PaperSignalsPreviewRequest(BaseModel):
+    regime: str = "TREND_UP"
+    dataset_id: int | None = None
+    policy_id: int | None = None
+    timeframes: list[str] = Field(default_factory=list)
+    symbol_scope: str | None = None
+    max_symbols_scan: int | None = None
+    seed: int | None = None
+    asof: str | None = None
 
 
 class RuntimeSettingsRequest(BaseModel):
@@ -76,3 +94,15 @@ class RuntimeSettingsRequest(BaseModel):
     four_hour_bars: str | None = None
     paper_mode: str | None = None
     active_policy_id: int | None = None
+    cost_model_enabled: bool | None = None
+    cost_mode: str | None = None
+    brokerage_bps: float | None = None
+    stt_delivery_buy_bps: float | None = None
+    stt_delivery_sell_bps: float | None = None
+    stt_intraday_buy_bps: float | None = None
+    stt_intraday_sell_bps: float | None = None
+    exchange_txn_bps: float | None = None
+    sebi_bps: float | None = None
+    stamp_delivery_buy_bps: float | None = None
+    stamp_intraday_buy_bps: float | None = None
+    gst_rate: float | None = None

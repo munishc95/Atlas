@@ -102,6 +102,35 @@ export type ApiPaperOrder = {
   created_at: string;
 };
 
+export type ApiPaperSignal = {
+  symbol: string;
+  side: "BUY" | "SELL";
+  template: string;
+  timeframe?: string;
+  price: number;
+  stop_distance: number;
+  target_price?: number | null;
+  signal_strength: number;
+  adv: number;
+  vol_scale: number;
+  explanation?: string;
+  correlations?: Record<string, number>;
+};
+
+export type ApiPaperSignalPreview = {
+  regime: string;
+  policy_mode: string;
+  policy_selection_reason: string;
+  signals_source: string;
+  generated_signals_count: number;
+  selected_signals_count: number;
+  dataset_id?: number;
+  timeframes?: string[];
+  symbol_scope?: string;
+  signals: ApiPaperSignal[];
+  skipped_signals?: Array<Record<string, unknown>>;
+};
+
 export type ApiPaperState = {
   id: number;
   equity: number;

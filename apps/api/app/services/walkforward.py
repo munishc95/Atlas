@@ -118,6 +118,18 @@ def execute_walkforward(
     pruner = str(cfg.get("pruner", "median"))
     seed = cfg.get("seed")
     seed = int(seed) if seed is not None else None
+    cost_params = {
+        "brokerage_bps": settings.brokerage_bps,
+        "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,
+        "stt_delivery_sell_bps": settings.stt_delivery_sell_bps,
+        "stt_intraday_buy_bps": settings.stt_intraday_buy_bps,
+        "stt_intraday_sell_bps": settings.stt_intraday_sell_bps,
+        "exchange_txn_bps": settings.exchange_txn_bps,
+        "sebi_bps": settings.sebi_bps,
+        "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
+        "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
+        "gst_rate": settings.gst_rate,
+    }
 
     fold_rows: list[dict[str, Any]] = []
     oos_scores: list[float] = []
@@ -163,6 +175,9 @@ def execute_walkforward(
                 commission_bps=settings.commission_bps,
                 slippage_base_bps=settings.slippage_base_bps,
                 slippage_vol_factor=settings.slippage_vol_factor,
+                cost_model_enabled=settings.cost_model_enabled,
+                cost_mode=settings.cost_mode,
+                cost_params=cost_params,
             ),
         )
 
@@ -179,6 +194,9 @@ def execute_walkforward(
                 commission_bps=settings.commission_bps,
                 slippage_base_bps=settings.slippage_base_bps,
                 slippage_vol_factor=settings.slippage_vol_factor,
+                cost_model_enabled=settings.cost_model_enabled,
+                cost_mode=settings.cost_mode,
+                cost_params=cost_params,
             ),
         )
 
@@ -190,6 +208,9 @@ def execute_walkforward(
             commission_bps=settings.commission_bps * 2,
             slippage_base_bps=settings.slippage_base_bps * 2,
             slippage_vol_factor=settings.slippage_vol_factor,
+            cost_model_enabled=settings.cost_model_enabled,
+            cost_mode=settings.cost_mode,
+            cost_params=cost_params,
         )
         delayed_entries = pd.Series(
             signals_test.shift(1), index=test_frame.index, dtype="boolean"

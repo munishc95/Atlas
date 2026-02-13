@@ -10,6 +10,7 @@ Follow these rules **strictly**. If something is unclear, make a sensible defaul
 Build **Atlas**: a local-first, production-quality **research + walk-forward + paper-trading** platform for **NIFTY 500** that feels **Apple-like**: smooth, minimal, fast, intuitive.
 
 **Non-goals for MVP**
+
 - No real-money trading.
 - No "price prediction" claims.
 - No Streamlit.
@@ -19,15 +20,18 @@ Build **Atlas**: a local-first, production-quality **research + walk-forward + p
 ## 1) Golden Product Principles
 
 ### 1.1 Capital Protection First
+
 - Backtest realism > pretty curves.
 - Always include: next-bar fills, costs, slippage, max positions, ATR risk sizing, kill-switch.
 - Prefer simple strategies + strong validation over complexity.
 
 ### 1.2 No Overfitting Theater
+
 - Optimization must be validated via walk-forward.
 - Never show in-sample metrics as "final performance" without OOS clearly labeled.
 
 ### 1.3 UI: Apple-like, Minimal
+
 - Whitespace, typography hierarchy, subtle motion.
 - Everything should feel **calm and premium**.
 - Avoid clutter: progressive disclosure (details in drawers/modals).
@@ -37,29 +41,100 @@ Build **Atlas**: a local-first, production-quality **research + walk-forward + p
 ## 2) Repo Structure Expectations
 
 Monorepo:
+
 - `apps/web` = Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Framer Motion
 - `apps/api` = FastAPI + Pydantic + SQLModel/SQLAlchemy + Alembic
 - `infra/` = docker-compose (postgres, redis)
 - `src/` or `packages/` shared libs only if needed (avoid premature abstraction)
 
 Data:
+
 - OHLCV in **Parquet** and query via **DuckDB**
 - Metadata/results in **Postgres**
+
+---
+
+## 2.1 Agent Roles and Responsibilities
+
+Use these roles to divide work. If one person/agent is doing everything, still follow the intent of the separation.
+
+### Product Architect
+
+**Owns:** scope, UX coherence, acceptance criteria, API contracts.
+
+- Keeps UI Apple-like (minimal, calm, no clutter).
+- Ensures workflows are end-to-end and discoverable.
+- Prevents scope creep; ships incrementally.
+
+### Backend Engineer (API + Jobs)
+
+**Owns:** FastAPI routes, RQ jobs/worker, DB models/migrations, SSE streams.
+
+- Long-running work must be async (RQ) unless explicitly justified.
+- Preserves response contract: `{ data: ... }` / `{ error: { code, message, details? } }`.
+- Adds indexes/pagination for any query-heavy endpoints.
+
+### Quant/Research Engineer
+
+**Owns:** backtester realism, metrics, walk-forward, optimizer, robustness/stress tests, regime logic.
+
+- Prevents leakage/look-ahead bias.
+- OOS results are the “truth”; in-sample is never marketed as performance.
+- Every new edge must have stress testing and stability checks.
+
+### Paper Trading / Execution Engineer
+
+**Owns:** order lifecycle, fill rules, stops, risk sizing, constraints (max positions, ADV cap, correlation/sector caps), kill-switch, audit logs.
+
+- Every skipped trade must have an explicit reason.
+- No hidden behavior: selection and gating must be explainable.
+
+### Frontend Engineer (UX)
+
+**Owns:** Next.js UI, typed API client, TanStack Query, drawers/modals, charts, loading/empty/error states.
+
+- Never ship a screen without skeleton + empty + error + retry.
+- Avoid huge payloads; paginate and request downsampled series for charts.
+- Keep interactions fast and keyboard-friendly.
+
+### Data Engineer
+
+**Owns:** import pipeline, dataset semantics (symbol membership), resampling (4H-ish), data validation, reproducibility.
+
+- Dataset-scoped universe must be enforceable (no accidental cross-universe scans).
+- Always be explicit about as-of dates and adjustments.
+
+### QA / Test Engineer
+
+**Owns:** pytest coverage for engine + services, Playwright E2E stability, CI failure clarity.
+
+- New features require unit tests + at least one integration path.
+- E2E should be stable and API-driven where possible.
+
+### DevOps / CI Engineer
+
+**Owns:** GitHub Actions, caching, artifacts, dev scripts, one-command startup.
+
+- CI must be deterministic and fast.
+- Upload logs/reports on failure (Playwright report, backend logs).
 
 ---
 
 ## 3) Development Workflow (Always Do)
 
 ### 3.1 Small, Safe Steps
+
 - Make incremental changes with frequent local checks.
 - Prefer simple implementations that meet requirements.
 
 ### 3.2 Before You Commit a Step
+
 - Backend: run tests and type checks
 - Frontend: run lint and type checks
 - Ensure app still starts cleanly
 
 ### 3.3 Never Break the Build
+
 - Keep `main` runnable locally at all times.
 - If you must do a large refactor, do it in multiple commits/steps.
 
@@ -68,6 +143,7 @@ Data:
 ## 4) Coding Standards
 
 ### 4.1 Python (apps/api)
+
 - Use type hints everywhere (mypy-friendly).
 - Use Pydantic models for API schemas.
 - Keep functions small (= ~40 lines) unless necessary.
@@ -75,12 +151,14 @@ Data:
 - Add docstrings for core quant logic (backtester, sizing, metrics, regimes).
 
 ### 4.2 TypeScript (apps/web)
+
 - Strict TypeScript.
 - Prefer server components for data fetching where appropriate.
 - Components should be reusable and styled consistently.
 - Use `zod` for client-side validation when needed.
 
 ### 4.3 Error Handling
+
 - Never swallow errors silently.
 - API must return structured errors with `code`, `message`, and optional `details`.
 - Frontend must show friendly error states and recovery actions.
@@ -90,6 +168,7 @@ Data:
 ## 5) Quant Engine Rules (Non-Negotiable)
 
 ### 5.1 Backtest Realism
+
 - **Next-bar fills**: signals at bar close, fills at next bar open (or configured).
 - **Slippage + commission** always applied.
 - **Max concurrent positions** = 3 (configurable).
@@ -99,6 +178,7 @@ Data:
 - Support: stop loss, trailing stop, time stop, optional take-profit.
 
 ### 5.2 Validation Rules
+
 - Must support **walk-forward** with configurable train/test/step windows.
 - Must separate IS vs OOS results and label clearly in UI.
 - Must run stress tests:
@@ -107,20 +187,23 @@ Data:
   - delayed fills (simple simulation)
 
 ### 5.3 Strategy Templates (MVP must include)
-1) Trend Breakout (Daily filter + 4H-ish breakout + ATR stop/trail)
-2) Pullback-in-Trend (Daily trend + 4H-ish RSI oversold pullback)
-3) Volatility Squeeze Breakout (BB/KC squeeze + breakout + ATR stop)
+
+1. Trend Breakout (Daily filter + 4H-ish breakout + ATR stop/trail)
+2. Pullback-in-Trend (Daily trend + 4H-ish RSI oversold pullback)
+3. Volatility Squeeze Breakout (BB/KC squeeze + breakout + ATR stop)
 
 ---
 
 ## 6) UI/UX Design System Rules (Apple-like)
 
 ### 6.1 Layout
+
 - Sidebar navigation + top bar.
 - Pages use a consistent max width and spacing scale.
 - Prefer cards with subtle borders/shadows.
 
 ### 6.2 Typography
+
 - Use system font stack.
 - Clear hierarchy:
   - Page title: large, bold
@@ -129,18 +212,21 @@ Data:
 - Avoid dense text blocks; use bullets and small captions.
 
 ### 6.3 Motion
+
 - Use Framer Motion sparingly:
   - fade/slide for page transitions
   - subtle hover and expand animations
 - No bouncy/cartoon animations.
 
 ### 6.4 States
+
 - Every screen must have:
   - loading state (skeleton)
   - empty state (helpful CTA)
   - error state (actionable)
 
 ### 6.5 Dark Mode
+
 - Must look excellent in dark and light themes.
 - Avoid low-contrast text.
 
@@ -149,14 +235,17 @@ Data:
 ## 7) API Design Rules
 
 ### 7.1 Endpoints must be stable and predictable
+
 - Use REST for resource reads/writes.
 - Use SSE/WebSocket for job progress streaming.
 
 ### 7.2 Response shapes
+
 - Success: `{ data: ..., meta?: ... }`
 - Error: `{ error: { code, message, details? } }`
 
 ### 7.3 Jobs
+
 - Long-running work must be async (queue worker).
 - Job model includes:
   - `id`, `type`, `status`, `progress` (0-100), `started_at`, `ended_at`
@@ -168,7 +257,9 @@ Data:
 ## 8) Testing Requirements (Minimum)
 
 ### 8.1 Backend (pytest)
+
 Must include tests for:
+
 - next-bar fill timing
 - slippage/commission application
 - ATR sizing calculation
@@ -177,6 +268,7 @@ Must include tests for:
 - metrics sanity check
 
 ### 8.2 Frontend
+
 - ESLint + TypeScript checks must pass.
 - Add at least one Playwright smoke test:
   - open app
@@ -231,6 +323,7 @@ Must include tests for:
 ## 13) Done Criteria (Per Step)
 
 A step is "done" only if:
+
 - Code compiles, runs, and passes tests/lint.
 - UI has loading/empty/error states.
 - Core logic is documented and covered by tests where required.
@@ -241,10 +334,10 @@ A step is "done" only if:
 ## 14) Communication Style (In PR/Step Summaries)
 
 When you finish a step, provide:
-1) What changed (1-5 bullets)
-2) How to run locally (commands)
-3) Key files added/modified
-4) Any known limitations and next steps
+
+1. What changed (1-5 bullets)
+2. How to run locally (commands)
+3. Key files added/modified
+4. Any known limitations and next steps
 
 ---
-

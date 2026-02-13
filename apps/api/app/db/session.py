@@ -33,6 +33,7 @@ def _has_column(table: str, column: str) -> bool:
 
 
 def _ensure_indexes_and_columns() -> None:
+    is_sqlite = engine.url.get_backend_name().startswith("sqlite")
     if not _has_column("job", "created_at"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE job ADD COLUMN created_at TIMESTAMP"))
@@ -45,6 +46,10 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("job", "request_hash"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE job ADD COLUMN request_hash VARCHAR(128)"))
+    if not _has_column("dataset", "symbols_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE dataset ADD COLUMN symbols_json {column_type}"))
 
     with engine.begin() as conn:
         conn.execute(

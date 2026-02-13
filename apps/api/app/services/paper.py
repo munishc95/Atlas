@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -8,7 +8,18 @@ import numpy as np
 from sqlmodel import Session, select
 
 from app.core.config import Settings
-from app.db.models import AuditLog, PaperOrder, PaperPosition, PaperState, Policy, Symbol
+from app.db.models import (
+    AuditLog,
+    Dataset,
+    PaperOrder,
+    PaperPosition,
+    PaperState,
+    Policy,
+    Symbol,
+)
+from app.engine.costs import estimate_equity_delivery_cost, estimate_intraday_cost
+from app.engine.signal_engine import generate_signals_for_policy
+from app.services.data_store import DataStore
 from app.services.regime import regime_policy
 
 
@@ -35,6 +46,18 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "kill_switch_dd": settings.kill_switch_drawdown,
             "max_position_value_pct_adv": settings.max_position_value_pct_adv,
             "diversification_corr_threshold": settings.diversification_corr_threshold,
+            "cost_model_enabled": settings.cost_model_enabled,
+            "cost_mode": settings.cost_mode,
+            "brokerage_bps": settings.brokerage_bps,
+            "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,
+            "stt_delivery_sell_bps": settings.stt_delivery_sell_bps,
+            "stt_intraday_buy_bps": settings.stt_intraday_buy_bps,
+            "stt_intraday_sell_bps": settings.stt_intraday_sell_bps,
+            "exchange_txn_bps": settings.exchange_txn_bps,
+            "sebi_bps": settings.sebi_bps,
+            "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
+            "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
+            "gst_rate": settings.gst_rate,
             "paper_mode": "strategy",
             "active_policy_id": None,
         },
@@ -55,6 +78,13 @@ def get_orders(session: Session) -> list[PaperOrder]:
 
 def _log(session: Session, event_type: str, payload: dict[str, Any]) -> None:
     session.add(AuditLog(type=event_type, payload_json=payload))
+
+
+def _dump_model(value: Any) -> Any:
+    fields = getattr(type(value), "model_fields", None)
+    if isinstance(fields, dict):
+        return jsonable_encoder({key: getattr(value, key, None) for key in fields})
+    return jsonable_encoder(value)
 
 
 def _position_size(equity: float, risk_per_trade: float, stop_distance: float) -> int:
@@ -84,11 +114,85 @@ def _correlation_reject(
     return False
 
 
+def _cost_settings(state_settings: dict[str, Any], settings: Settings) -> dict[str, float]:
+    return {
+        "brokerage_bps": float(state_settings.get("brokerage_bps", settings.brokerage_bps)),
+        "stt_delivery_buy_bps": float(
+            state_settings.get("stt_delivery_buy_bps", settings.stt_delivery_buy_bps)
+        ),
+        "stt_delivery_sell_bps": float(
+            state_settings.get("stt_delivery_sell_bps", settings.stt_delivery_sell_bps)
+        ),
+        "stt_intraday_buy_bps": float(
+            state_settings.get("stt_intraday_buy_bps", settings.stt_intraday_buy_bps)
+        ),
+        "stt_intraday_sell_bps": float(
+            state_settings.get("stt_intraday_sell_bps", settings.stt_intraday_sell_bps)
+        ),
+        "exchange_txn_bps": float(
+            state_settings.get("exchange_txn_bps", settings.exchange_txn_bps)
+        ),
+        "sebi_bps": float(state_settings.get("sebi_bps", settings.sebi_bps)),
+        "stamp_delivery_buy_bps": float(
+            state_settings.get("stamp_delivery_buy_bps", settings.stamp_delivery_buy_bps)
+        ),
+        "stamp_intraday_buy_bps": float(
+            state_settings.get("stamp_intraday_buy_bps", settings.stamp_intraday_buy_bps)
+        ),
+        "gst_rate": float(state_settings.get("gst_rate", settings.gst_rate)),
+    }
+
+
+def _transaction_cost(
+    *,
+    notional: float,
+    side: str,
+    settings: Settings,
+    state_settings: dict[str, Any],
+    override_cost_model: dict[str, Any] | None,
+) -> float:
+    if notional <= 0:
+        return 0.0
+
+    cost_model = dict(override_cost_model or {})
+    enabled = bool(cost_model.get("enabled", state_settings.get("cost_model_enabled", False)))
+    mode = str(cost_model.get("mode", state_settings.get("cost_mode", settings.cost_mode))).lower()
+    if enabled:
+        cfg = _cost_settings(state_settings, settings)
+        cfg.update(
+            {
+                key: float(value)
+                for key, value in cost_model.items()
+                if key in cfg and isinstance(value, (int, float))
+            }
+        )
+        if mode == "intraday":
+            return estimate_intraday_cost(notional=notional, side=side, config=cfg)
+        return estimate_equity_delivery_cost(notional=notional, side=side, config=cfg)
+
+    commission_bps = float(state_settings.get("commission_bps", settings.commission_bps))
+    return max(0.0, notional * commission_bps / 10_000)
+
+
+def _parse_asof(value: Any) -> datetime | date | None:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 def _resolve_execution_policy(
     session: Session,
     state: PaperState,
     settings: Settings,
     regime: str,
+    policy_override_id: int | None = None,
 ) -> dict[str, Any]:
     base = regime_policy(regime, settings.risk_per_trade, settings.max_positions)
     resolved: dict[str, Any] = {
@@ -96,26 +200,33 @@ def _resolve_execution_policy(
         "mode": "strategy",
         "policy_id": None,
         "policy_name": None,
+        "policy_definition": {},
         "selection_reason": f"Default regime policy for {regime}.",
+        "params": {},
+        "cost_model": {},
     }
 
     state_settings = state.settings_json or {}
-    if str(state_settings.get("paper_mode", "strategy")) != "policy":
+    if policy_override_id is None and str(state_settings.get("paper_mode", "strategy")) != "policy":
         return resolved
 
-    policy_id = state_settings.get("active_policy_id")
-    try:
-        policy_int = int(policy_id)
-    except (TypeError, ValueError):
-        resolved["selection_reason"] = "Policy mode requested but active policy id is invalid."
-        return resolved
+    if policy_override_id is not None:
+        policy_int = int(policy_override_id)
+    else:
+        policy_id = state_settings.get("active_policy_id")
+        try:
+            policy_int = int(policy_id)
+        except (TypeError, ValueError):
+            resolved["selection_reason"] = "Policy mode requested but active policy id is invalid."
+            return resolved
 
     policy = session.get(Policy, policy_int)
     if policy is None:
         resolved["selection_reason"] = "Policy mode requested but policy record was not found."
         return resolved
 
-    regime_map = policy.definition_json.get("regime_map", {})
+    policy_definition = policy.definition_json if isinstance(policy.definition_json, dict) else {}
+    regime_map = policy_definition.get("regime_map", {})
     if not isinstance(regime_map, dict):
         resolved["selection_reason"] = (
             "Policy has no valid regime map; using default regime policy."
@@ -131,8 +242,10 @@ def _resolve_execution_policy(
             "mode": "policy",
             "policy_id": policy.id,
             "policy_name": policy.name,
+            "policy_definition": policy_definition,
             "selection_reason": f"Policy {policy.name} blocks new entries in {regime}.",
             "params": {},
+            "cost_model": dict(policy_definition.get("cost_model", {})),
         }
 
     strategy_key = regime_config.get("strategy_key")
@@ -150,17 +263,136 @@ def _resolve_execution_policy(
         "mode": "policy",
         "policy_id": policy.id,
         "policy_name": policy.name,
+        "policy_definition": policy_definition,
         "selection_reason": str(
             regime_config.get("reason", f"Policy {policy.name} selected for regime {regime}.")
         ),
         "params": dict(regime_config.get("params", {})),
+        "cost_model": dict(policy_definition.get("cost_model", {})),
     }
 
 
-def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]) -> dict[str, Any]:
+def _resolve_dataset_id(
+    session: Session,
+    payload: dict[str, Any],
+    policy: dict[str, Any],
+    timeframes: list[str],
+) -> int | None:
+    explicit_id = payload.get("dataset_id")
+    if isinstance(explicit_id, int):
+        return explicit_id if session.get(Dataset, explicit_id) is not None else None
+    try:
+        explicit_id_int = int(explicit_id)
+        if session.get(Dataset, explicit_id_int) is not None:
+            return explicit_id_int
+    except (TypeError, ValueError):
+        pass
+
+    definition = policy.get("policy_definition", {})
+    if isinstance(definition, dict):
+        universe = definition.get("universe", {})
+        if isinstance(universe, dict):
+            dataset_id = universe.get("dataset_id")
+            try:
+                dataset_id_int = int(dataset_id)
+                if session.get(Dataset, dataset_id_int) is not None:
+                    return dataset_id_int
+            except (TypeError, ValueError):
+                pass
+
+    preferred_timeframe = timeframes[0] if timeframes else "1d"
+    candidate = session.exec(
+        select(Dataset)
+        .where(Dataset.timeframe == preferred_timeframe)
+        .order_by(Dataset.created_at.desc())
+    ).first()
+    return candidate.id if candidate is not None else None
+
+
+def _resolve_timeframes(payload: dict[str, Any], policy: dict[str, Any]) -> list[str]:
+    payload_timeframes = payload.get("timeframes")
+    if isinstance(payload_timeframes, list):
+        values = [str(value).strip() for value in payload_timeframes if str(value).strip()]
+        if values:
+            return values
+
+    definition = policy.get("policy_definition", {})
+    if isinstance(definition, dict):
+        value = definition.get("timeframes", [])
+        if isinstance(value, list):
+            values = [str(item).strip() for item in value if str(item).strip()]
+            if values:
+                return values
+    return ["1d"]
+
+
+def _resolve_symbol_scope(payload: dict[str, Any], policy: dict[str, Any]) -> str:
+    explicit = payload.get("symbol_scope")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+
+    definition = policy.get("policy_definition", {})
+    if isinstance(definition, dict):
+        universe = definition.get("universe", {})
+        if isinstance(universe, dict):
+            scope = universe.get("symbol_scope")
+            if isinstance(scope, str) and scope.strip():
+                return scope.strip()
+    return "liquid"
+
+
+def _resolve_max_symbols_scan(payload: dict[str, Any], policy: dict[str, Any]) -> int:
+    explicit = payload.get("max_symbols_scan")
+    if isinstance(explicit, int):
+        return max(1, explicit)
+    try:
+        return max(1, int(explicit))
+    except (TypeError, ValueError):
+        pass
+
+    definition = policy.get("policy_definition", {})
+    if isinstance(definition, dict):
+        universe = definition.get("universe", {})
+        if isinstance(universe, dict):
+            value = universe.get("max_symbols_scan")
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                pass
+    return 50
+
+
+def _resolve_seed(payload: dict[str, Any], policy: dict[str, Any]) -> int:
+    explicit = payload.get("seed")
+    if isinstance(explicit, int):
+        return explicit
+    try:
+        return int(explicit)
+    except (TypeError, ValueError):
+        pass
+
+    definition = policy.get("policy_definition", {})
+    if isinstance(definition, dict):
+        ranking = definition.get("ranking", {})
+        if isinstance(ranking, dict):
+            value = ranking.get("seed")
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+    return 7
+
+
+def run_paper_step(
+    session: Session,
+    settings: Settings,
+    payload: dict[str, Any],
+    store: DataStore | None = None,
+) -> dict[str, Any]:
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
     policy = _resolve_execution_policy(session, state, settings, regime)
+    state_settings = state.settings_json or {}
 
     if state.kill_switch_active:
         _log(session, "kill_switch", {"active": True})
@@ -172,25 +404,91 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
                 "policy": policy,
                 "policy_mode": policy.get("mode"),
                 "policy_selection_reason": policy.get("selection_reason"),
-                "positions": [p.model_dump() for p in get_positions(session)],
-                "orders": [o.model_dump() for o in get_orders(session)],
+                "signals_source": "provided",
+                "generated_signals_count": 0,
+                "selected_signals_count": 0,
+                "positions": [_dump_model(p) for p in get_positions(session)],
+                "orders": [_dump_model(o) for o in get_orders(session)],
             }
         )
+
+    provided_signals = [dict(item) for item in payload.get("signals", []) if isinstance(item, dict)]
+    auto_generate = bool(payload.get("auto_generate_signals", False))
+    should_generate = auto_generate or (
+        policy.get("mode") == "policy" and len(provided_signals) == 0
+    )
+    signals_source = "provided"
+    generated_signals_count = 0
+
+    if should_generate:
+        store = store or DataStore(
+            parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path
+        )
+        timeframes = _resolve_timeframes(payload, policy)
+        dataset_id = _resolve_dataset_id(session, payload, policy, timeframes)
+        symbol_scope = _resolve_symbol_scope(payload, policy)
+        max_symbols_scan = _resolve_max_symbols_scan(payload, policy)
+        seed = _resolve_seed(payload, policy)
+
+        if dataset_id is None:
+            provided_signals = []
+            _log(
+                session,
+                "signals_generated",
+                {
+                    "mode": "policy_autopilot",
+                    "generated_count": 0,
+                    "dataset_id": None,
+                    "reason": "dataset_not_found",
+                },
+            )
+        else:
+            provided_signals = generate_signals_for_policy(
+                session=session,
+                store=store,
+                dataset_id=dataset_id,
+                asof=_parse_asof(payload.get("asof")),
+                timeframes=timeframes,
+                allowed_templates=policy.get("allowed_templates", []),
+                params_overrides=policy.get("params", {}),
+                max_symbols_scan=max_symbols_scan,
+                seed=seed,
+                mode="paper",
+                symbol_scope=symbol_scope,
+            )
+            generated_signals_count = len(provided_signals)
+            _log(
+                session,
+                "signals_generated",
+                {
+                    "mode": "policy_autopilot",
+                    "dataset_id": dataset_id,
+                    "timeframes": timeframes,
+                    "symbol_scope": symbol_scope,
+                    "generated_count": generated_signals_count,
+                    "allowed_templates": policy.get("allowed_templates", []),
+                    "policy_id": policy.get("policy_id"),
+                    "policy_name": policy.get("policy_name"),
+                },
+            )
+        signals_source = "generated"
 
     current_positions = get_positions(session)
     open_symbols = {p.symbol for p in current_positions}
     max_positions = int(policy["max_positions"])
-    settings_json = state.settings_json or {}
     correlation_threshold = float(
-        settings_json.get("diversification_corr_threshold", settings.diversification_corr_threshold)
+        state_settings.get(
+            "diversification_corr_threshold", settings.diversification_corr_threshold
+        )
     )
     max_position_value_pct_adv = float(
-        settings_json.get("max_position_value_pct_adv", settings.max_position_value_pct_adv)
+        state_settings.get("max_position_value_pct_adv", settings.max_position_value_pct_adv)
     )
     skipped_signals: list[dict[str, Any]] = []
+    selected_signals: list[dict[str, Any]] = []
 
     candidates = sorted(
-        [dict(item) for item in payload.get("signals", [])],
+        [dict(item) for item in provided_signals],
         key=lambda item: float(item.get("signal_strength", 0.0)),
         reverse=True,
     )
@@ -207,24 +505,33 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
         sector = sectors.get(pos.symbol, "UNKNOWN")
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
-    selected: list[dict[str, Any]] = []
     selected_symbols = set(open_symbols)
 
     for signal in candidates:
-        if len(current_positions) + len(selected) >= max_positions:
-            break
-
-        symbol = str(signal["symbol"]).upper()
+        symbol = str(signal.get("symbol", "")).upper()
         side = str(signal.get("side", "BUY")).upper()
-        if side != "BUY" or symbol in open_symbols:
-            skipped_signals.append({"symbol": symbol, "reason": "duplicate_or_non_buy"})
-            continue
-
         template = str(signal.get("template", "trend_breakout"))
+        base_meta = {
+            "symbol": symbol,
+            "template": template,
+            "policy_mode": policy.get("mode"),
+            "policy_id": policy.get("policy_id"),
+            "policy_name": policy.get("policy_name"),
+        }
+
+        if len(current_positions) + len(selected_signals) >= max_positions:
+            skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
+            continue
+        if side != "BUY":
+            skipped_signals.append({**base_meta, "reason": "non_buy_not_supported_yet"})
+            continue
+        if symbol in open_symbols:
+            skipped_signals.append({**base_meta, "reason": "already_open"})
+            continue
         if template not in policy["allowed_templates"]:
             skipped_signals.append(
                 {
-                    "symbol": symbol,
+                    **base_meta,
                     "reason": "template_blocked_by_policy"
                     if policy.get("mode") == "policy"
                     else "template_blocked_by_regime",
@@ -234,25 +541,38 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
 
         sector = sectors.get(symbol, "UNKNOWN")
         if sector_counts.get(sector, 0) >= 2:
-            skipped_signals.append({"symbol": symbol, "reason": "sector_concentration"})
+            skipped_signals.append({**base_meta, "reason": "sector_concentration"})
             continue
         if _correlation_reject(
             signal, selected_symbols=selected_symbols, threshold=correlation_threshold
         ):
-            skipped_signals.append({"symbol": symbol, "reason": "correlation_threshold"})
+            skipped_signals.append({**base_meta, "reason": "correlation_threshold"})
             continue
 
-        selected.append(signal)
+        selected_signals.append(signal)
         selected_symbols.add(symbol)
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
-    for signal in selected:
-        symbol = str(signal["symbol"]).upper()
+    entry_cost_total = 0.0
+    exit_cost_total = 0.0
+    executed_count = 0
+
+    for signal in selected_signals:
+        symbol = str(signal.get("symbol", "")).upper()
+        template = str(signal.get("template", "trend_breakout"))
         price = float(signal.get("price", 0.0))
         stop_distance = float(signal.get("stop_distance", 0.0))
         qty = _position_size(state.equity, float(policy["risk_per_trade"]), stop_distance)
         if price <= 0 or qty <= 0:
-            skipped_signals.append({"symbol": symbol, "reason": "invalid_price_or_size"})
+            skipped_signals.append(
+                {
+                    "symbol": symbol,
+                    "template": template,
+                    "reason": "invalid_price_or_size",
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                }
+            )
             continue
 
         slippage = (settings.slippage_base_bps / 10_000) * (1 + float(signal.get("vol_scale", 0.0)))
@@ -262,13 +582,36 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
             max_notional = adv_notional * max_position_value_pct_adv
             qty_adv = int(np.floor(max_notional / max(fill_price, 1e-9)))
             if qty_adv <= 0:
-                skipped_signals.append({"symbol": symbol, "reason": "adv_cap_zero_qty"})
+                skipped_signals.append(
+                    {
+                        "symbol": symbol,
+                        "template": template,
+                        "reason": "adv_cap_zero_qty",
+                        "policy_mode": policy.get("mode"),
+                        "policy_id": policy.get("policy_id"),
+                    }
+                )
                 continue
             qty = min(qty, qty_adv)
 
         notional = qty * fill_price
-        if notional > state.cash:
-            skipped_signals.append({"symbol": symbol, "reason": "insufficient_cash"})
+        entry_cost = _transaction_cost(
+            notional=notional,
+            side="BUY",
+            settings=settings,
+            state_settings=state_settings,
+            override_cost_model=policy.get("cost_model"),
+        )
+        if notional + entry_cost > state.cash:
+            skipped_signals.append(
+                {
+                    "symbol": symbol,
+                    "template": template,
+                    "reason": "insufficient_cash",
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                }
+            )
             continue
 
         order = PaperOrder(
@@ -286,13 +629,35 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
             qty=qty,
             avg_price=fill_price,
             stop_price=max(0.0, fill_price - stop_distance),
-            target_price=float(signal.get("target_price", 0.0)) or None,
+            target_price=(
+                float(signal.get("target_price"))
+                if isinstance(signal.get("target_price"), (int, float))
+                and float(signal.get("target_price")) > 0
+                else None
+            ),
             opened_at=_utc_now(),
         )
-        state.cash -= notional
+        state.cash -= notional + entry_cost
+        entry_cost_total += entry_cost
+        executed_count += 1
 
         session.add(order)
         session.add(position)
+        _log(
+            session,
+            "signal_selected",
+            {
+                "symbol": symbol,
+                "template": template,
+                "side": "BUY",
+                "qty": qty,
+                "fill_price": fill_price,
+                "signal_strength": float(signal.get("signal_strength", 0.0)),
+                "selection_reason": policy.get("selection_reason"),
+                "policy_mode": policy.get("mode"),
+                "policy_id": policy.get("policy_id"),
+            },
+        )
         _log(
             session,
             "paper_buy",
@@ -300,6 +665,7 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
                 "symbol": symbol,
                 "qty": qty,
                 "fill_price": fill_price,
+                "entry_cost": entry_cost,
                 "selection_reason": policy.get("selection_reason"),
                 "policy_mode": policy.get("mode"),
             },
@@ -328,13 +694,28 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
             created_at=_utc_now(),
             updated_at=_utc_now(),
         )
-        state.cash += position.qty * mark
+        exit_notional = position.qty * mark
+        exit_cost = _transaction_cost(
+            notional=exit_notional,
+            side="SELL",
+            settings=settings,
+            state_settings=state_settings,
+            override_cost_model=policy.get("cost_model"),
+        )
+        state.cash += exit_notional - exit_cost
+        exit_cost_total += exit_cost
         session.add(order)
         session.delete(position)
         _log(
             session,
             "paper_sell",
-            {"symbol": position.symbol, "qty": position.qty, "fill_price": mark},
+            {
+                "symbol": position.symbol,
+                "qty": position.qty,
+                "fill_price": mark,
+                "exit_cost": exit_cost,
+                "reason": reason,
+            },
         )
 
     live_positions = get_positions(session)
@@ -358,6 +739,7 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
     session.refresh(state)
 
     for skip in skipped_signals:
+        _log(session, "signal_skipped", skip)
         _log(session, "paper_skip", skip)
     session.commit()
 
@@ -372,20 +754,111 @@ def run_paper_step(session: Session, settings: Settings, payload: dict[str, Any]
                 float(policy["risk_per_trade"]) < settings.risk_per_trade
                 or int(policy["max_positions"]) < settings.max_positions
             ),
+            "signals_source": signals_source,
+            "generated_signals_count": generated_signals_count,
+            "selected_signals_count": executed_count,
+            "selected_signals": selected_signals,
             "skipped_signals": skipped_signals,
-            "state": state.model_dump(),
-            "positions": [p.model_dump() for p in get_positions(session)],
-            "orders": [o.model_dump() for o in get_orders(session)],
+            "cost_summary": {
+                "entry_cost_total": entry_cost_total,
+                "exit_cost_total": exit_cost_total,
+                "total_cost": entry_cost_total + exit_cost_total,
+                "cost_model_enabled": bool(
+                    policy.get("cost_model", {}).get(
+                        "enabled",
+                        state_settings.get("cost_model_enabled", settings.cost_model_enabled),
+                    )
+                ),
+                "cost_mode": str(
+                    policy.get("cost_model", {}).get(
+                        "mode",
+                        state_settings.get("cost_mode", settings.cost_mode),
+                    )
+                ),
+            },
+            "state": _dump_model(state),
+            "positions": [_dump_model(p) for p in get_positions(session)],
+            "orders": [_dump_model(o) for o in get_orders(session)],
         }
     )
+
+
+def preview_policy_signals(
+    session: Session,
+    settings: Settings,
+    payload: dict[str, Any],
+    store: DataStore | None = None,
+) -> dict[str, Any]:
+    state = get_or_create_paper_state(session, settings)
+    regime = str(payload.get("regime", "TREND_UP"))
+    policy_override: int | None = None
+    try:
+        if payload.get("policy_id") is not None:
+            policy_override = int(payload.get("policy_id"))
+    except (TypeError, ValueError):
+        policy_override = None
+    policy = _resolve_execution_policy(
+        session,
+        state,
+        settings,
+        regime,
+        policy_override_id=policy_override,
+    )
+    store = store or DataStore(parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path)
+
+    timeframes = _resolve_timeframes(payload, policy)
+    dataset_id = _resolve_dataset_id(session, payload, policy, timeframes)
+    if dataset_id is None:
+        return {
+            "regime": regime,
+            "policy_mode": policy.get("mode"),
+            "policy_selection_reason": policy.get("selection_reason"),
+            "signals_source": "generated",
+            "signals": [],
+            "generated_signals_count": 0,
+            "selected_signals_count": 0,
+            "skipped_signals": [
+                {"reason": "dataset_not_found", "message": "No dataset available for preview."}
+            ],
+        }
+
+    symbol_scope = _resolve_symbol_scope(payload, policy)
+    max_symbols_scan = _resolve_max_symbols_scan(payload, policy)
+    seed = _resolve_seed(payload, policy)
+    signals = generate_signals_for_policy(
+        session=session,
+        store=store,
+        dataset_id=dataset_id,
+        asof=_parse_asof(payload.get("asof")),
+        timeframes=timeframes,
+        allowed_templates=policy.get("allowed_templates", []),
+        params_overrides=policy.get("params", {}),
+        max_symbols_scan=max_symbols_scan,
+        seed=seed,
+        mode="preview",
+        symbol_scope=symbol_scope,
+    )
+
+    return {
+        "regime": regime,
+        "policy_mode": policy.get("mode"),
+        "policy_selection_reason": policy.get("selection_reason"),
+        "signals_source": "generated",
+        "generated_signals_count": len(signals),
+        "selected_signals_count": 0,
+        "signals": signals,
+        "dataset_id": dataset_id,
+        "timeframes": timeframes,
+        "symbol_scope": symbol_scope,
+    }
 
 
 def get_paper_state_payload(session: Session, settings: Settings) -> dict[str, Any]:
     state = get_or_create_paper_state(session, settings)
     return {
-        "state": state.model_dump(),
-        "positions": [p.model_dump() for p in get_positions(session)],
-        "orders": [o.model_dump() for o in get_orders(session)],
+        "state": _dump_model(state),
+        "positions": [_dump_model(p) for p in get_positions(session)],
+        "orders": [_dump_model(o) for o in get_orders(session)],
     }
 
 

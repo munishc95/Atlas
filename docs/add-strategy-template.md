@@ -14,5 +14,6 @@
 6. Expose strategy in UI template cards (`apps/web/app/strategy-lab/page.tsx`) if needed.
 
 Notes:
+
 - Keep strategy logic pure and deterministic.
 - Do not add future-leaking features (signals must use current/past bars only).

@@ -74,6 +74,18 @@ def _backtest_for_params(
     params: dict[str, float | int],
 ) -> BacktestResult:
     signals = template.signal_fn(frame, params)
+    cost_params = {
+        "brokerage_bps": settings.brokerage_bps,
+        "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,
+        "stt_delivery_sell_bps": settings.stt_delivery_sell_bps,
+        "stt_intraday_buy_bps": settings.stt_intraday_buy_bps,
+        "stt_intraday_sell_bps": settings.stt_intraday_sell_bps,
+        "exchange_txn_bps": settings.exchange_txn_bps,
+        "sebi_bps": settings.sebi_bps,
+        "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
+        "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
+        "gst_rate": settings.gst_rate,
+    }
     config = BacktestConfig(
         risk_per_trade=settings.risk_per_trade,
         max_positions=settings.max_positions,
@@ -82,6 +94,9 @@ def _backtest_for_params(
         commission_bps=settings.commission_bps,
         slippage_base_bps=settings.slippage_base_bps,
         slippage_vol_factor=settings.slippage_vol_factor,
+        cost_model_enabled=settings.cost_model_enabled,
+        cost_mode=settings.cost_mode,
+        cost_params=cost_params,
     )
     return run_backtest(price_df=frame, entries=signals, symbol=symbol, config=config)
 

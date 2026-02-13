@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
+from app.engine.costs import estimate_equity_delivery_cost, estimate_intraday_cost
 from app.engine.indicators import atr
 from app.engine.metrics import calculate_metrics
 
@@ -26,6 +27,9 @@ class BacktestConfig:
     max_position_value_pct_adv: float = 0.01
     adv_lookback: int = 20
     allow_long: bool = True
+    cost_model_enabled: bool = False
+    cost_mode: str = "delivery"
+    cost_params: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -56,6 +60,18 @@ def _slippage_bps(atr_value: float, close: float, config: BacktestConfig) -> flo
     return config.slippage_base_bps + config.slippage_vol_factor * (atr_value / close)
 
 
+def _transaction_cost(notional: float, side: str, config: BacktestConfig) -> float:
+    if notional <= 0:
+        return 0.0
+    if config.cost_model_enabled:
+        if str(config.cost_mode).lower() == "intraday":
+            return estimate_intraday_cost(notional=notional, side=side, config=config.cost_params)
+        return estimate_equity_delivery_cost(
+            notional=notional, side=side, config=config.cost_params
+        )
+    return notional * config.commission_bps / 10_000
+
+
 def _exit_position(
     bar: pd.Series,
     pos: Position,
@@ -76,9 +92,10 @@ def _exit_position(
     else:
         exit_px = float(bar["close"]) * (1 - slippage)
 
-    exit_commission = pos.qty * exit_px * config.commission_bps / 10_000
-    pnl = (exit_px - pos.entry_price) * pos.qty - (pos.entry_commission + exit_commission)
-    cash_delta = pos.qty * exit_px - exit_commission
+    exit_notional = pos.qty * exit_px
+    exit_cost = _transaction_cost(exit_notional, "SELL", config)
+    pnl = (exit_px - pos.entry_price) * pos.qty - (pos.entry_commission + exit_cost)
+    cash_delta = exit_notional - exit_cost
 
     trade = {
         "symbol": pos.symbol,
@@ -205,7 +222,7 @@ def run_backtest(
                     )
                     entry_px = float(bar["open"]) * (1 + slip)
                     entry_value = qty * entry_px
-                    entry_commission = entry_value * config.commission_bps / 10_000
+                    entry_commission = _transaction_cost(entry_value, "BUY", config)
                     if cash >= (entry_value + entry_commission):
                         cash -= entry_value + entry_commission
                         target = None

@@ -37,6 +37,7 @@ from app.jobs.tasks import (
 from app.schemas.api import (
     BacktestRunRequest,
     CreatePolicyRequest,
+    PaperSignalsPreviewRequest,
     PaperRunStepRequest,
     PromoteStrategyRequest,
     ResearchRunRequest,
@@ -52,6 +53,7 @@ from app.services.paper import (
     get_paper_state_payload,
     get_positions,
     get_or_create_paper_state,
+    preview_policy_signals,
     update_runtime_settings,
 )
 from app.services.research import (
@@ -742,6 +744,23 @@ def paper_run_step(
     )
 
 
+@router.post("/paper/signals/preview")
+def paper_signals_preview(
+    payload: PaperSignalsPreviewRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    return _data(
+        preview_policy_signals(
+            session=session,
+            settings=settings,
+            payload=payload.model_dump(),
+            store=store,
+        )
+    )
+
+
 @router.get("/settings")
 def get_settings_payload(
     session: Session = Depends(get_session),
@@ -756,6 +775,18 @@ def get_settings_payload(
         "commission_bps": settings.commission_bps,
         "slippage_base_bps": settings.slippage_base_bps,
         "slippage_vol_factor": settings.slippage_vol_factor,
+        "cost_model_enabled": settings.cost_model_enabled,
+        "cost_mode": settings.cost_mode,
+        "brokerage_bps": settings.brokerage_bps,
+        "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,
+        "stt_delivery_sell_bps": settings.stt_delivery_sell_bps,
+        "stt_intraday_buy_bps": settings.stt_intraday_buy_bps,
+        "stt_intraday_sell_bps": settings.stt_intraday_sell_bps,
+        "exchange_txn_bps": settings.exchange_txn_bps,
+        "sebi_bps": settings.sebi_bps,
+        "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
+        "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
+        "gst_rate": settings.gst_rate,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "four_hour_bars": settings.four_hour_bars,

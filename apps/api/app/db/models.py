@@ -22,6 +22,7 @@ class Dataset(SQLModel, table=True):
     provider: str = Field(max_length=64)
     symbol: str = Field(index=True, max_length=32)
     timeframe: str = Field(index=True, max_length=16)
+    symbols_json: list[str] | None = Field(default=None, sa_column=Column(JSON))
     start_date: date
     end_date: date
     checksum: str | None = Field(default=None, max_length=128)

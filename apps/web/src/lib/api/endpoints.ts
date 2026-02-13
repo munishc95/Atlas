@@ -5,6 +5,7 @@ import type {
   ApiBacktestRunRow,
   ApiPaperOrder,
   ApiPaperPosition,
+  ApiPaperSignalPreview,
   ApiPaperState,
   ApiPolicy,
   ApiResearchCandidate,
@@ -128,6 +129,11 @@ export const atlasApi = {
   paperOrders: () => apiFetch<ApiPaperOrder[]>("/api/paper/orders"),
   paperRunStep: (payload: Record<string, unknown>) =>
     apiFetch<JobStart>("/api/paper/run-step", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  paperSignalsPreview: (payload: Record<string, unknown>) =>
+    apiFetch<ApiPaperSignalPreview>("/api/paper/signals/preview", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

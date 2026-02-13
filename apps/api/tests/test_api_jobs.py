@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import Symbol
+from app.db.models import PaperOrder, PaperPosition, Symbol
 from app.db.session import engine
 from app.main import app
 
@@ -154,10 +154,16 @@ def test_idempotency_key_returns_same_job_id() -> None:
 
 def test_paper_diversification_limits_sector_concentration() -> None:
     with _client_inline_jobs() as client:
-        reset = client.put("/api/settings", json={"paper_mode": "strategy", "active_policy_id": None})
+        reset = client.put(
+            "/api/settings", json={"paper_mode": "strategy", "active_policy_id": None}
+        )
         assert reset.status_code == 200
 
         with Session(engine) as session:
+            for row in session.exec(select(PaperPosition)).all():
+                session.delete(row)
+            for row in session.exec(select(PaperOrder)).all():
+                session.delete(row)
             for symbol in ("BANKA", "BANKB", "BANKC"):
                 if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:
                     session.add(Symbol(symbol=symbol, name=symbol, sector="FINANCIALS"))

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 from sqlmodel import Session, select
 
@@ -17,6 +19,7 @@ class DataStore:
         self.parquet_root = Path(parquet_root)
         self.parquet_root.mkdir(parents=True, exist_ok=True)
         self.duckdb_path = duckdb_path
+        self._adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
 
     def _parquet_path(self, symbol: str, timeframe: str) -> Path:
         return self.parquet_root / f"symbol={symbol}" / f"timeframe={timeframe}" / "ohlcv.parquet"
@@ -30,6 +33,7 @@ class DataStore:
         provider: str,
         checksum: str | None = None,
     ) -> Dataset:
+        symbol = symbol.upper()
         clean = frame.copy()
         clean["datetime"] = pd.to_datetime(clean["datetime"], utc=True)
         clean = clean.sort_values("datetime")
@@ -45,6 +49,7 @@ class DataStore:
             provider=provider,
             symbol=symbol,
             timeframe=timeframe,
+            symbols_json=[symbol],
             start_date=clean["datetime"].dt.date.min(),
             end_date=clean["datetime"].dt.date.max(),
             checksum=checksum,
@@ -52,6 +57,7 @@ class DataStore:
         session.add(dataset)
         session.commit()
         session.refresh(dataset)
+        self._adv_cache.clear()
         return dataset
 
     def list_symbols(self, session: Session) -> list[str]:
@@ -73,6 +79,82 @@ class DataStore:
             }
             for row in rows
         ]
+
+    def get_dataset(self, session: Session, dataset_id: int) -> Dataset | None:
+        return session.get(Dataset, dataset_id)
+
+    def get_dataset_symbols(
+        self,
+        session: Session,
+        dataset_id: int,
+        *,
+        timeframe: str | None = None,
+    ) -> list[str]:
+        dataset = self.get_dataset(session, dataset_id)
+        if dataset is None:
+            return []
+
+        target_timeframe = timeframe or dataset.timeframe
+        rows = session.exec(
+            select(Dataset.symbol)
+            .where(Dataset.provider == dataset.provider)
+            .where(Dataset.timeframe == target_timeframe)
+            .order_by(Dataset.symbol.asc())
+        ).all()
+        symbols = [str(row).upper() for row in rows if str(row).strip()]
+
+        source_symbols = dataset.symbols_json if isinstance(dataset.symbols_json, list) else None
+        if source_symbols:
+            symbols.extend([str(item).upper() for item in source_symbols if str(item).strip()])
+        if symbols:
+            return list(dict.fromkeys(sorted(symbols)))
+        return [dataset.symbol.upper()]
+
+    def _symbol_adv(self, frame: pd.DataFrame, lookback: int) -> float:
+        if frame.empty:
+            return 0.0
+        adv = (frame["close"] * frame["volume"]).tail(lookback).mean()
+        return float(np.nan_to_num(float(adv), nan=0.0))
+
+    def sample_dataset_symbols(
+        self,
+        session: Session,
+        *,
+        dataset_id: int,
+        timeframe: str,
+        symbol_scope: str,
+        max_symbols_scan: int,
+        adv_lookback: int = 20,
+        seed: int = 7,
+    ) -> list[str]:
+        symbols = self.get_dataset_symbols(session, dataset_id, timeframe=timeframe)
+        if not symbols:
+            return []
+
+        scope = str(symbol_scope or "liquid").lower()
+        limit = len(symbols) if max_symbols_scan <= 0 else min(len(symbols), max_symbols_scan)
+        if scope == "all":
+            ordered = sorted(symbols)
+            if seed is not None:
+                # Deterministic pseudo-shuffle to avoid always taking the same alphabetical prefix.
+                ordered = sorted(
+                    ordered,
+                    key=lambda value: hashlib.sha1(
+                        f"{int(seed)}::{value}".encode("utf-8")
+                    ).hexdigest(),
+                )
+            return ordered[:limit]
+
+        cache_key = (dataset_id, timeframe, adv_lookback)
+        scored = self._adv_cache.get(cache_key)
+        if scored is None:
+            rows: list[tuple[str, float]] = []
+            for symbol in symbols:
+                frame = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
+                rows.append((symbol, self._symbol_adv(frame, adv_lookback)))
+            scored = sorted(rows, key=lambda item: (-item[1], item[0]))
+            self._adv_cache[cache_key] = scored
+        return [symbol for symbol, _ in scored[:limit]]
 
     def load_ohlcv(
         self,
