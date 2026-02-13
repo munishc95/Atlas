@@ -7,7 +7,10 @@ import type {
   ApiPaperPosition,
   ApiPaperSignalPreview,
   ApiPaperState,
+  ApiPolicyHealthSnapshot,
   ApiPolicy,
+  ApiDailyReport,
+  ApiOperateStatus,
   ApiResearchCandidate,
   ApiResearchRun,
   ApiTrade,
@@ -115,6 +118,11 @@ export const atlasApi = {
   policies: (page = 1, pageSize = 50) =>
     apiFetch<ApiPolicy[]>(`/api/policies?page=${page}&page_size=${pageSize}`),
   policyById: (id: number) => apiFetch<ApiPolicy>(`/api/policies/${id}`),
+  policyHealth: (id: number, windowDays: 20 | 60, refresh = true) =>
+    apiFetch<ApiPolicyHealthSnapshot>(
+      `/api/policies/${id}/health?window_days=${windowDays}&refresh=${String(refresh)}`,
+    ),
+  policiesHealth: () => apiFetch<ApiPolicyHealthSnapshot[]>("/api/policies/health"),
   promotePolicyToPaper: (id: number) =>
     apiFetch<{ policy_id: number; status: string; paper_mode: string; active_policy_id: number }>(
       `/api/policies/${id}/promote-to-paper`,
@@ -139,6 +147,26 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  operateStatus: () => apiFetch<ApiOperateStatus>("/api/operate/status"),
+  generateDailyReport: (payload: { date?: string; bundle_id?: number; policy_id?: number }) =>
+    apiFetch<JobStart>("/api/reports/daily/generate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  dailyReports: (params?: { date?: string; bundle_id?: number; policy_id?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.date) search.set("date", params.date);
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (typeof params?.policy_id === "number") search.set("policy_id", String(params.policy_id));
+    return apiFetch<ApiDailyReport[]>(
+      `/api/reports/daily${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  dailyReportById: (id: number) => apiFetch<ApiDailyReport>(`/api/reports/daily/${id}`),
+  dailyReportExportJson: (id: number) =>
+    apiFetch<Record<string, unknown>>(`/api/reports/daily/${id}/export.json`),
+  dailyReportExportJsonUrl: (id: number) => buildApiUrl(`/api/reports/daily/${id}/export.json`),
+  dailyReportExportCsvUrl: (id: number) => buildApiUrl(`/api/reports/daily/${id}/export.csv`),
 
   settings: () => apiFetch<Record<string, unknown>>("/api/settings"),
   updateSettings: (payload: Record<string, unknown>) =>

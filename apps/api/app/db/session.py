@@ -130,6 +130,30 @@ def _ensure_indexes_and_columns() -> None:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_researchrun_bundle_id ON researchrun (bundle_id)")
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_paperrun_policy_asof "
+                "ON paperrun (policy_id, asof_ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_paperrun_bundle_asof "
+                "ON paperrun (bundle_id, asof_ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dailyreport_date_bundle_policy "
+                "ON dailyreport (date, bundle_id, policy_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyhealthsnapshot_policy_window_date "
+                "ON policyhealthsnapshot (policy_id, window_days, asof_date)"
+            )
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

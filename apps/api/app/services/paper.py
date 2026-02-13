@@ -14,6 +14,8 @@ from app.db.models import (
     Dataset,
     DatasetBundle,
     Instrument,
+    PolicyHealthSnapshot,
+    PaperRun,
     PaperOrder,
     PaperPosition,
     PaperState,
@@ -27,6 +29,19 @@ from app.engine.costs import (
 )
 from app.engine.signal_engine import SignalGenerationResult, generate_signals_for_policy
 from app.services.data_store import DataStore
+from app.services.policy_health import (
+    DEGRADED,
+    HEALTHY,
+    PAUSED,
+    RETIRED,
+    WARNING,
+    apply_policy_health_actions,
+    get_policy_health_snapshot,
+    latest_policy_health_snapshot_for_policy,
+    policy_status,
+    select_fallback_policy,
+)
+from app.services.reports import generate_daily_report
 from app.services.regime import regime_policy
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
@@ -60,6 +75,16 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "paper_short_squareoff_time": settings.paper_short_squareoff_time,
             "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,
             "autopilot_max_runtime_seconds": settings.autopilot_max_runtime_seconds,
+            "reports_auto_generate_daily": settings.reports_auto_generate_daily,
+            "health_window_days_short": settings.health_window_days_short,
+            "health_window_days_long": settings.health_window_days_long,
+            "drift_maxdd_multiplier": settings.drift_maxdd_multiplier,
+            "drift_negative_return_cost_ratio_threshold": settings.drift_negative_return_cost_ratio_threshold,
+            "drift_win_rate_drop_pct": settings.drift_win_rate_drop_pct,
+            "drift_return_delta_threshold": settings.drift_return_delta_threshold,
+            "drift_warning_risk_scale": settings.drift_warning_risk_scale,
+            "drift_degraded_risk_scale": settings.drift_degraded_risk_scale,
+            "drift_degraded_action": settings.drift_degraded_action,
             "cost_model_enabled": settings.cost_model_enabled,
             "cost_mode": settings.cost_mode,
             "brokerage_bps": settings.brokerage_bps,
@@ -252,8 +277,12 @@ def _resolve_execution_policy(
     settings: Settings,
     regime: str,
     policy_override_id: int | None = None,
+    asof_date: date | None = None,
 ) -> dict[str, Any]:
-    base = regime_policy(regime, settings.risk_per_trade, settings.max_positions)
+    state_settings = state.settings_json or {}
+    base_risk = float(state_settings.get("risk_per_trade", settings.risk_per_trade))
+    base_max_positions = int(state_settings.get("max_positions", settings.max_positions))
+    base = regime_policy(regime, base_risk, base_max_positions)
     resolved: dict[str, Any] = {
         **base,
         "mode": "strategy",
@@ -261,6 +290,10 @@ def _resolve_execution_policy(
         "policy_name": None,
         "policy_definition": {},
         "selection_reason": f"Default regime policy for {regime}.",
+        "policy_status": "ACTIVE",
+        "health_status": HEALTHY,
+        "health_reasons": [],
+        "risk_scale_override": 1.0,
         "params": {},
         "cost_model": {},
         "allowed_instruments": {
@@ -270,7 +303,6 @@ def _resolve_execution_policy(
         "ranking_weights": {"signal": 1.0},
     }
 
-    state_settings = state.settings_json or {}
     if policy_override_id is None and str(state_settings.get("paper_mode", "strategy")) != "policy":
         return resolved
 
@@ -289,6 +321,126 @@ def _resolve_execution_policy(
         resolved["selection_reason"] = "Policy mode requested but policy record was not found."
         return resolved
 
+    selected_policy = policy
+    health_status = HEALTHY
+    health_reasons: list[str] = []
+    risk_scale_override = 1.0
+    selection_reasons: list[str] = []
+    short_window = max(
+        5,
+        int(
+            state_settings.get(
+                "health_window_days_short",
+                settings.health_window_days_short,
+            )
+        ),
+    )
+    for _ in range(3):
+        current_status = policy_status(selected_policy)
+        if current_status in {PAUSED, RETIRED}:
+            fallback = select_fallback_policy(
+                session,
+                current_policy_id=int(selected_policy.id),
+                regime=regime,
+            )
+            if fallback is None:
+                policy_definition = (
+                    selected_policy.definition_json
+                    if isinstance(selected_policy.definition_json, dict)
+                    else {}
+                )
+                return {
+                    "allowed_templates": [],
+                    "risk_per_trade": 0.0,
+                    "max_positions": 0,
+                    "mode": "policy",
+                    "policy_id": selected_policy.id,
+                    "policy_name": selected_policy.name,
+                    "policy_definition": policy_definition,
+                    "selection_reason": (
+                        f"Policy {selected_policy.name} is {current_status}; "
+                        "no fallback policy available. Running shadow-only mode."
+                    ),
+                    "policy_status": current_status,
+                    "health_status": current_status,
+                    "health_reasons": [f"Policy status is {current_status}."],
+                    "risk_scale_override": 0.0,
+                    "params": {},
+                    "cost_model": dict(policy_definition.get("cost_model", {})),
+                    "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
+                    "ranking_weights": dict(policy_definition.get("ranking", {}).get("weights", {})),
+                }
+            selection_reasons.append(
+                f"Policy {selected_policy.name} is {current_status}; fallback selected {fallback.name}."
+            )
+            selected_policy = fallback
+            continue
+
+        latest_snapshot = latest_policy_health_snapshot_for_policy(
+            session,
+            policy_id=int(selected_policy.id),
+            window_days=short_window,
+            asof_date=asof_date,
+        )
+        if latest_snapshot is not None:
+            health_status = latest_snapshot.status
+            health_reasons = list(latest_snapshot.reasons_json or [])
+        else:
+            health_status = HEALTHY
+            health_reasons = []
+
+        if health_status == DEGRADED:
+            fallback = select_fallback_policy(
+                session,
+                current_policy_id=int(selected_policy.id),
+                regime=regime,
+            )
+            if fallback is None:
+                policy_definition = (
+                    selected_policy.definition_json
+                    if isinstance(selected_policy.definition_json, dict)
+                    else {}
+                )
+                return {
+                    "allowed_templates": [],
+                    "risk_per_trade": 0.0,
+                    "max_positions": 0,
+                    "mode": "policy",
+                    "policy_id": selected_policy.id,
+                    "policy_name": selected_policy.name,
+                    "policy_definition": policy_definition,
+                    "selection_reason": (
+                        f"Policy {selected_policy.name} health is DEGRADED and no fallback exists. "
+                        "Running shadow-only mode."
+                    ),
+                    "policy_status": policy_status(selected_policy),
+                    "health_status": health_status,
+                    "health_reasons": health_reasons,
+                    "risk_scale_override": 0.0,
+                    "params": {},
+                    "cost_model": dict(policy_definition.get("cost_model", {})),
+                    "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
+                    "ranking_weights": dict(policy_definition.get("ranking", {}).get("weights", {})),
+                }
+            selection_reasons.append(
+                f"Policy {selected_policy.name} health is DEGRADED; fallback selected {fallback.name}."
+            )
+            selected_policy = fallback
+            continue
+
+        if health_status == WARNING:
+            risk_scale_override = max(
+                0.0,
+                float(
+                    state_settings.get(
+                        "drift_warning_risk_scale",
+                        settings.drift_warning_risk_scale,
+                    )
+                ),
+            )
+        break
+
+    policy = selected_policy
     policy_definition = policy.definition_json if isinstance(policy.definition_json, dict) else {}
     regime_map = policy_definition.get("regime_map", {})
     if not isinstance(regime_map, dict):
@@ -307,7 +459,13 @@ def _resolve_execution_policy(
             "policy_id": policy.id,
             "policy_name": policy.name,
             "policy_definition": policy_definition,
-            "selection_reason": f"Policy {policy.name} blocks new entries in {regime}.",
+            "selection_reason": " ".join(
+                selection_reasons + [f"Policy {policy.name} blocks new entries in {regime}."]
+            ),
+            "policy_status": policy_status(policy),
+            "health_status": health_status,
+            "health_reasons": health_reasons,
+            "risk_scale_override": risk_scale_override,
             "params": {},
             "cost_model": dict(policy_definition.get("cost_model", {})),
             "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
@@ -322,17 +480,24 @@ def _resolve_execution_policy(
         if isinstance(strategy_key, str) and strategy_key
         else [str(item) for item in regime_config.get("allowed_templates", []) if str(item)]
     )
+    selection_reason = str(
+        regime_config.get("reason", f"Policy {policy.name} selected for regime {regime}.")
+    )
+    if selection_reasons:
+        selection_reason = " ".join(selection_reasons + [selection_reason])
     return {
         "allowed_templates": allowed_templates,
-        "risk_per_trade": max(0.0, settings.risk_per_trade * risk_scale),
-        "max_positions": max(0, int(round(settings.max_positions * max_positions_scale))),
+        "risk_per_trade": max(0.0, base_risk * risk_scale * risk_scale_override),
+        "max_positions": max(0, int(round(base_max_positions * max_positions_scale))),
         "mode": "policy",
         "policy_id": policy.id,
         "policy_name": policy.name,
         "policy_definition": policy_definition,
-        "selection_reason": str(
-            regime_config.get("reason", f"Policy {policy.name} selected for regime {regime}.")
-        ),
+        "selection_reason": selection_reason,
+        "policy_status": policy_status(policy),
+        "health_status": health_status,
+        "health_reasons": health_reasons,
+        "risk_scale_override": risk_scale_override,
         "params": dict(regime_config.get("params", {})),
         "cost_model": dict(policy_definition.get("cost_model", {})),
         "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
@@ -558,6 +723,46 @@ def _adjust_qty_for_lot(qty: int, lot_size: int) -> int:
     return (qty // lot_size) * lot_size
 
 
+def _reason_histogram(rows: list[dict[str, Any]], key: str = "reason") -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        reason = str(row.get(key, "")).strip()
+        if not reason:
+            continue
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _selection_reason_histogram(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        reason = str(row.get("instrument_choice_reason", row.get("selection_reason", ""))).strip()
+        if not reason:
+            continue
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _positions_notional(positions: list[PaperPosition]) -> float:
+    total = 0.0
+    for position in positions:
+        total += float(position.qty) * float(position.avg_price)
+    return total
+
+
+def _average_holding_days(positions: list[PaperPosition], asof: datetime) -> float:
+    if not positions:
+        return 0.0
+    days: list[float] = []
+    for position in positions:
+        opened = position.opened_at
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        delta = asof - opened
+        days.append(max(0.0, delta.total_seconds() / 86_400))
+    return float(np.mean(days)) if days else 0.0
+
+
 def _mark_to_market_component(position: PaperPosition, mark: float) -> float:
     if _is_futures_kind(position.instrument_kind):
         margin_reserved = float(getattr(position, "margin_reserved", 0.0) or 0.0)
@@ -671,13 +876,83 @@ def run_paper_step(
     )
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
-    policy = _resolve_execution_policy(session, state, settings, regime)
     state_settings = state.settings_json or {}
+    base_risk_per_trade = float(state_settings.get("risk_per_trade", settings.risk_per_trade))
+    base_max_positions = int(state_settings.get("max_positions", settings.max_positions))
     asof_dt = _asof_datetime(payload)
+    policy = _resolve_execution_policy(
+        session,
+        state,
+        settings,
+        regime,
+        asof_date=asof_dt.date(),
+    )
+    mark_prices = payload.get("mark_prices", {})
+
+    positions_before = get_positions(session)
+    orders_before = get_orders(session)
+    positions_before_by_id = {
+        int(row.id): row for row in positions_before if row.id is not None
+    }
+    position_ids_before = {int(row.id) for row in positions_before if row.id is not None}
+    order_ids_before = {int(row.id) for row in orders_before if row.id is not None}
+    equity_before = float(state.equity)
+    cash_before = float(state.cash)
+    drawdown_before = float(state.drawdown)
+    mtm_before = 0.0
+    for position in positions_before:
+        mark = float(mark_prices.get(position.symbol, position.avg_price))
+        mtm_before += _mark_to_market_component(position, mark)
 
     if state.kill_switch_active:
         _log(session, "kill_switch", {"active": True})
+        run_row = PaperRun(
+            bundle_id=None,
+            policy_id=policy.get("policy_id"),
+            asof_ts=asof_dt,
+            regime=regime,
+            signals_source="provided",
+            generated_signals_count=0,
+            selected_signals_count=0,
+            skipped_signals_count=0,
+            scanned_symbols=0,
+            evaluated_candidates=0,
+            scan_truncated=False,
+            summary_json={
+                "status": "kill_switch_active",
+                "equity_before": equity_before,
+                "equity_after": float(state.equity),
+                "cash_before": cash_before,
+                "cash_after": float(state.cash),
+                "drawdown_before": drawdown_before,
+                "drawdown": float(state.drawdown),
+                "selected_reason_histogram": {},
+                "skipped_reason_histogram": {},
+                "positions_before": len(positions_before),
+                "positions_after": len(positions_before),
+                "positions_opened": 0,
+                "positions_closed": 0,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "net_pnl": 0.0,
+                "gross_pnl": 0.0,
+                "trade_count": 0,
+                "turnover": 0.0,
+                "exposure": float(_positions_notional(positions_before) / max(1e-9, state.equity)),
+                "avg_holding_days": _average_holding_days(positions_before, asof_dt),
+                "kill_switch_active": True,
+            },
+            cost_summary_json={
+                "entry_cost_total": 0.0,
+                "exit_cost_total": 0.0,
+                "total_cost": 0.0,
+                "entry_slippage_cost": 0.0,
+                "exit_slippage_cost": 0.0,
+            },
+        )
+        session.add(run_row)
         session.commit()
+        session.refresh(run_row)
         return jsonable_encoder(
             {
                 "status": "kill_switch_active",
@@ -688,6 +963,7 @@ def run_paper_step(
                 "signals_source": "provided",
                 "generated_signals_count": 0,
                 "selected_signals_count": 0,
+                "paper_run_id": run_row.id,
                 "positions": [_dump_model(p) for p in get_positions(session)],
                 "orders": [_dump_model(o) for o in get_orders(session)],
             }
@@ -782,7 +1058,7 @@ def run_paper_step(
         resolved_dataset_id = _resolve_dataset_id(session, payload, policy, resolved_timeframes)
     primary_timeframe = resolved_timeframes[0] if resolved_timeframes else "1d"
 
-    current_positions = get_positions(session)
+    current_positions = list(positions_before)
     open_symbols = {p.symbol for p in current_positions}
     open_underlyings = {
         str((p.metadata_json or {}).get("underlying_symbol", p.symbol)).upper()
@@ -801,6 +1077,7 @@ def run_paper_step(
     policy_allowed_instruments = policy.get("allowed_instruments", {})
     skipped_signals: list[dict[str, Any]] = []
     selected_signals: list[dict[str, Any]] = []
+    executed_signals: list[dict[str, Any]] = []
 
     candidates = sorted(
         [dict(item) for item in provided_signals],
@@ -1011,6 +1288,9 @@ def run_paper_step(
 
     entry_cost_total = 0.0
     exit_cost_total = 0.0
+    entry_slippage_cost_total = 0.0
+    exit_slippage_cost_total = 0.0
+    traded_notional_total = 0.0
     executed_count = 0
 
     for signal in selected_signals:
@@ -1106,6 +1386,11 @@ def run_paper_step(
 
         must_exit_by_eod = side == "SELL" and instrument_kind == "EQUITY_CASH"
         notional = qty * fill_price
+        traded_notional_total += float(notional)
+        entry_slippage_cost = (
+            (fill_price - price) * qty if side == "BUY" else (price - fill_price) * qty
+        )
+        entry_slippage_cost_total += max(0.0, float(entry_slippage_cost))
         margin_required = (
             notional * _futures_margin_pct(state_settings, settings) if is_futures else 0.0
         )
@@ -1233,6 +1518,18 @@ def run_paper_step(
                 "must_exit_by_eod": must_exit_by_eod,
             },
         )
+        executed_signals.append(
+            {
+                **dict(signal),
+                "symbol": symbol,
+                "underlying_symbol": underlying_symbol,
+                "instrument_kind": instrument_kind,
+                "qty": qty,
+                "qty_lots": qty_lots,
+                "fill_price": fill_price,
+                "entry_cost": entry_cost,
+            }
+        )
         if must_exit_by_eod:
             _log(
                 session,
@@ -1250,7 +1547,6 @@ def run_paper_step(
         open_symbols.add(symbol)
         open_underlyings.add(underlying_symbol)
 
-    mark_prices = payload.get("mark_prices", {})
     for position in list(current_positions):
         if position.symbol not in mark_prices:
             continue
@@ -1320,13 +1616,275 @@ def run_paper_step(
         _log(session, "kill_switch_activated", {"drawdown": state.drawdown, "limit": dd_limit})
 
     session.add(state)
-    session.commit()
-    session.refresh(state)
-
     for skip in skipped_signals:
         _log(session, "signal_skipped", skip)
         _log(session, "paper_skip", skip)
     session.commit()
+    session.refresh(state)
+
+    live_positions = get_positions(session)
+    orders_after = get_orders(session)
+    position_ids_after = {int(row.id) for row in live_positions if row.id is not None}
+    order_ids_after = {int(row.id) for row in orders_after if row.id is not None}
+    new_position_ids = sorted(position_ids_after - position_ids_before)
+    closed_position_ids = sorted(position_ids_before - position_ids_after)
+    new_order_ids = sorted(order_ids_after - order_ids_before)
+    closed_position_symbols = [
+        positions_before_by_id[item].symbol
+        for item in closed_position_ids
+        if item in positions_before_by_id
+    ]
+
+    selected_reason_histogram = _selection_reason_histogram(executed_signals)
+    skipped_reason_histogram = _reason_histogram(skipped_signals)
+    total_cost = float(entry_cost_total + exit_cost_total)
+    realized_pnl = float(state.cash - cash_before)
+    unrealized_pnl = float(mtm - mtm_before)
+    net_pnl = float(state.equity - equity_before)
+    gross_pnl = float(net_pnl + total_cost)
+    turnover = float(traded_notional_total / max(1e-9, equity_before))
+    exposure = float(_positions_notional(live_positions) / max(1e-9, state.equity))
+    avg_holding_days = _average_holding_days(live_positions, asof_dt)
+
+    cost_summary = {
+        "entry_cost_total": float(entry_cost_total),
+        "exit_cost_total": float(exit_cost_total),
+        "total_cost": total_cost,
+        "entry_slippage_cost": float(entry_slippage_cost_total),
+        "exit_slippage_cost": float(exit_slippage_cost_total),
+        "cost_model_enabled": bool(
+            policy.get("cost_model", {}).get(
+                "enabled",
+                state_settings.get("cost_model_enabled", settings.cost_model_enabled),
+            )
+        ),
+        "cost_mode": str(
+            policy.get("cost_model", {}).get(
+                "mode",
+                state_settings.get("cost_mode", settings.cost_mode),
+            )
+        ),
+    }
+
+    run_summary = {
+        "policy_mode": policy.get("mode"),
+        "policy_selection_reason": policy.get("selection_reason"),
+        "policy_status": policy.get("policy_status"),
+        "health_status": policy.get("health_status"),
+        "signals_source": signals_source,
+        "bundle_id": resolved_bundle_id,
+        "dataset_id": resolved_dataset_id,
+        "timeframes": resolved_timeframes,
+        "scan_truncated": bool(generated_meta.scan_truncated),
+        "scanned_symbols": int(generated_meta.scanned_symbols),
+        "evaluated_candidates": int(generated_meta.evaluated_candidates),
+        "total_symbols": int(generated_meta.total_symbols),
+        "generated_signals_count": int(generated_signals_count),
+        "selected_signals_count": int(executed_count),
+        "skipped_signals_count": int(len(skipped_signals)),
+        "positions_before": len(positions_before),
+        "positions_after": len(live_positions),
+        "positions_opened": len(new_position_ids),
+        "positions_closed": len(closed_position_ids),
+        "new_position_ids": new_position_ids,
+        "closed_position_ids": closed_position_ids,
+        "closed_position_symbols": closed_position_symbols,
+        "new_order_ids": new_order_ids,
+        "selected_signals": [
+            {
+                "symbol": str(item.get("symbol", "")),
+                "side": str(item.get("side", "")),
+                "instrument_kind": str(item.get("instrument_kind", "")),
+                "selection_reason": str(item.get("instrument_choice_reason", "provided")),
+            }
+            for item in executed_signals
+        ],
+        "selected_reason_histogram": selected_reason_histogram,
+        "skipped_reason_histogram": skipped_reason_histogram,
+        "equity_before": equity_before,
+        "equity_after": float(state.equity),
+        "cash_before": cash_before,
+        "cash_after": float(state.cash),
+        "drawdown_before": drawdown_before,
+        "drawdown": float(state.drawdown),
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "net_pnl": net_pnl,
+        "gross_pnl": gross_pnl,
+        "trade_count": int(len(new_position_ids) + len(closed_position_ids)),
+        "turnover": turnover,
+        "exposure": exposure,
+        "avg_holding_days": avg_holding_days,
+        "kill_switch_active": bool(state.kill_switch_active),
+    }
+    policy_id_value: int | None = None
+    try:
+        if policy.get("policy_id") is not None:
+            policy_id_value = int(policy["policy_id"])
+    except (TypeError, ValueError):
+        policy_id_value = None
+    run_row = PaperRun(
+        bundle_id=resolved_bundle_id,
+        policy_id=policy_id_value,
+        asof_ts=asof_dt,
+        regime=regime,
+        signals_source=signals_source,
+        generated_signals_count=generated_signals_count,
+        selected_signals_count=executed_count,
+        skipped_signals_count=len(skipped_signals),
+        scanned_symbols=int(generated_meta.scanned_symbols),
+        evaluated_candidates=int(generated_meta.evaluated_candidates),
+        scan_truncated=bool(generated_meta.scan_truncated),
+        summary_json=run_summary,
+        cost_summary_json=cost_summary,
+    )
+    session.add(run_row)
+    session.commit()
+    session.refresh(run_row)
+
+    health_short_payload: dict[str, Any] | None = None
+    health_long_payload: dict[str, Any] | None = None
+    health_action_payload: dict[str, Any] | None = None
+
+    active_policy: Policy | None = None
+    if policy_id_value is not None:
+        active_policy = session.get(Policy, policy_id_value)
+
+    if active_policy is not None and policy.get("mode") == "policy":
+        short_window = max(
+            5,
+            int(
+                state_settings.get(
+                    "health_window_days_short",
+                    settings.health_window_days_short,
+                )
+            ),
+        )
+        long_window = max(
+            short_window,
+            int(
+                state_settings.get(
+                    "health_window_days_long",
+                    settings.health_window_days_long,
+                )
+            ),
+        )
+        health_short = get_policy_health_snapshot(
+            session,
+            settings=settings,
+            policy=active_policy,
+            window_days=short_window,
+            asof_date=asof_dt.date(),
+            refresh=True,
+            overrides=state_settings,
+        )
+        health_long = get_policy_health_snapshot(
+            session,
+            settings=settings,
+            policy=active_policy,
+            window_days=long_window,
+            asof_date=asof_dt.date(),
+            refresh=True,
+            overrides=state_settings,
+        )
+        action_source: PolicyHealthSnapshot = (
+            health_long if health_long.status == DEGRADED else health_short
+        )
+        health_action_payload = apply_policy_health_actions(
+            session,
+            settings=settings,
+            policy=active_policy,
+            snapshot=action_source,
+            overrides=state_settings,
+        )
+        _log(
+            session,
+            "policy_health_snapshot",
+            {
+                "policy_id": active_policy.id,
+                "short_window_days": short_window,
+                "short_status": health_short.status,
+                "short_reasons": health_short.reasons_json,
+                "long_window_days": long_window,
+                "long_status": health_long.status,
+                "long_reasons": health_long.reasons_json,
+            },
+        )
+        _log(
+            session,
+            "policy_health_action",
+            {
+                "policy_id": active_policy.id,
+                "status": action_source.status,
+                "action": health_action_payload.get("action"),
+                "risk_scale_override": health_action_payload.get("risk_scale_override"),
+                "policy_status": health_action_payload.get("policy_status"),
+                "reasons": action_source.reasons_json,
+            },
+        )
+
+        action_name = str(health_action_payload.get("action", "NONE")).upper()
+        action_policy_status = str(
+            health_action_payload.get("policy_status", policy_status(active_policy))
+        ).upper()
+        if action_policy_status in {PAUSED, RETIRED}:
+            fallback = select_fallback_policy(
+                session,
+                current_policy_id=int(active_policy.id),
+                regime=regime,
+            )
+            if fallback is not None:
+                merged_state = dict(state.settings_json or {})
+                if (
+                    str(merged_state.get("paper_mode", "strategy")) == "policy"
+                    and int(merged_state.get("active_policy_id") or 0) == int(active_policy.id)
+                ):
+                    merged_state["active_policy_id"] = int(fallback.id)
+                    merged_state["active_policy_name"] = fallback.name
+                    state.settings_json = merged_state
+                    session.add(state)
+                    _log(
+                        session,
+                        "policy_fallback_selected",
+                        {
+                            "from_policy_id": active_policy.id,
+                            "to_policy_id": fallback.id,
+                            "from_status": action_policy_status,
+                            "reason": "policy_degraded_or_paused",
+                            "regime": regime,
+                        },
+                    )
+                    session.commit()
+                    session.refresh(state)
+            elif action_name != "NONE":
+                _log(
+                    session,
+                    "policy_fallback_unavailable",
+                    {
+                        "policy_id": active_policy.id,
+                        "status": action_policy_status,
+                        "regime": regime,
+                        "reason": "no_fallback_policy",
+                    },
+                )
+        session.commit()
+        health_short_payload = health_short.model_dump()
+        health_long_payload = health_long.model_dump()
+
+    generated_report_id: int | None = None
+    auto_report_enabled = bool(
+        state_settings.get("reports_auto_generate_daily", settings.reports_auto_generate_daily)
+    )
+    if auto_report_enabled:
+        report_row = generate_daily_report(
+            session=session,
+            settings=settings,
+            report_date=asof_dt.date(),
+            bundle_id=resolved_bundle_id,
+            policy_id=run_row.policy_id,
+            overwrite=True,
+        )
+        generated_report_id = int(report_row.id) if report_row.id is not None else None
 
     return jsonable_encoder(
         {
@@ -1335,14 +1893,18 @@ def run_paper_step(
             "policy": policy,
             "policy_mode": policy.get("mode"),
             "policy_selection_reason": policy.get("selection_reason"),
+            "policy_status": policy.get("policy_status"),
+            "policy_health_status": policy.get("health_status"),
+            "policy_health_reasons": policy.get("health_reasons", []),
             "risk_scaled": bool(
-                float(policy["risk_per_trade"]) < settings.risk_per_trade
-                or int(policy["max_positions"]) < settings.max_positions
+                float(policy["risk_per_trade"]) < base_risk_per_trade
+                or int(policy["max_positions"]) < base_max_positions
             ),
+            "paper_run_id": run_row.id,
             "signals_source": signals_source,
             "generated_signals_count": generated_signals_count,
             "selected_signals_count": executed_count,
-            "selected_signals": selected_signals,
+            "selected_signals": executed_signals,
             "skipped_signals": skipped_signals,
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
@@ -1351,26 +1913,14 @@ def run_paper_step(
             "bundle_id": resolved_bundle_id,
             "dataset_id": resolved_dataset_id,
             "timeframes": resolved_timeframes,
-            "cost_summary": {
-                "entry_cost_total": entry_cost_total,
-                "exit_cost_total": exit_cost_total,
-                "total_cost": entry_cost_total + exit_cost_total,
-                "cost_model_enabled": bool(
-                    policy.get("cost_model", {}).get(
-                        "enabled",
-                        state_settings.get("cost_model_enabled", settings.cost_model_enabled),
-                    )
-                ),
-                "cost_mode": str(
-                    policy.get("cost_model", {}).get(
-                        "mode",
-                        state_settings.get("cost_mode", settings.cost_mode),
-                    )
-                ),
-            },
+            "cost_summary": cost_summary,
+            "report_id": generated_report_id,
+            "health_short": health_short_payload,
+            "health_long": health_long_payload,
+            "health_action": health_action_payload,
             "state": _dump_model(state),
-            "positions": [_dump_model(p) for p in get_positions(session)],
-            "orders": [_dump_model(o) for o in get_orders(session)],
+            "positions": [_dump_model(p) for p in live_positions],
+            "orders": [_dump_model(o) for o in orders_after],
         }
     )
 
@@ -1383,6 +1933,7 @@ def preview_policy_signals(
 ) -> dict[str, Any]:
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
+    preview_asof = _asof_datetime(payload)
     policy_override: int | None = None
     try:
         if payload.get("policy_id") is not None:
@@ -1395,6 +1946,7 @@ def preview_policy_signals(
         settings,
         regime,
         policy_override_id=policy_override,
+        asof_date=preview_asof.date(),
     )
     store = store or DataStore(
         parquet_root=settings.parquet_root,
@@ -1411,6 +1963,9 @@ def preview_policy_signals(
             "regime": regime,
             "policy_mode": policy.get("mode"),
             "policy_selection_reason": policy.get("selection_reason"),
+            "policy_status": policy.get("policy_status"),
+            "health_status": policy.get("health_status"),
+            "health_reasons": policy.get("health_reasons", []),
             "signals_source": "generated",
             "signals": [],
             "generated_signals_count": 0,
@@ -1436,7 +1991,7 @@ def preview_policy_signals(
         store=store,
         dataset_id=dataset_id,
         bundle_id=bundle_id,
-        asof=_asof_datetime(payload),
+        asof=preview_asof,
         timeframes=timeframes,
         allowed_templates=policy.get("allowed_templates", []),
         params_overrides=policy.get("params", {}),
@@ -1452,6 +2007,9 @@ def preview_policy_signals(
         "regime": regime,
         "policy_mode": policy.get("mode"),
         "policy_selection_reason": policy.get("selection_reason"),
+        "policy_status": policy.get("policy_status"),
+        "health_status": policy.get("health_status"),
+        "health_reasons": policy.get("health_reasons", []),
         "signals_source": "generated",
         "generated_signals_count": len(generated.signals),
         "selected_signals_count": 0,

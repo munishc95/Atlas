@@ -24,6 +24,7 @@ function isTypingElement(target: EventTarget | null): boolean {
 export default function PaperTradingPage() {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [reportJobId, setReportJobId] = useState<string | null>(null);
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [autopilotEnabled, setAutopilotEnabled] = useState(true);
@@ -57,6 +58,11 @@ export default function PaperTradingPage() {
   const bundlesQuery = useQuery({
     queryKey: qk.universes,
     queryFn: async () => (await atlasApi.universes()).data,
+  });
+  const operateQuery = useQuery({
+    queryKey: qk.operateStatus,
+    queryFn: async () => (await atlasApi.operateStatus()).data,
+    refetchInterval: 10_000,
   });
 
   const state = paperStateQuery.data?.state;
@@ -95,6 +101,7 @@ export default function PaperTradingPage() {
   });
 
   const stream = useJobStream(activeJobId);
+  const reportStream = useJobStream(reportJobId);
 
   useEffect(() => {
     if (!stream.isTerminal) {
@@ -105,6 +112,7 @@ export default function PaperTradingPage() {
       queryClient.invalidateQueries({ queryKey: qk.paperPositions });
       queryClient.invalidateQueries({ queryKey: qk.paperOrders });
       queryClient.invalidateQueries({ queryKey: qk.jobs(20) });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       setLatestDecision((stream.result as Record<string, unknown> | null) ?? null);
       toast.success("Paper step complete");
     }
@@ -112,6 +120,19 @@ export default function PaperTradingPage() {
       toast.error("Paper step failed");
     }
   }, [queryClient, stream.isTerminal, stream.result, stream.status]);
+
+  useEffect(() => {
+    if (!reportStream.isTerminal) {
+      return;
+    }
+    if (reportStream.status === "SUCCEEDED" || reportStream.status === "DONE") {
+      queryClient.invalidateQueries({ queryKey: qk.dailyReports(undefined, null, null) });
+      toast.success("Daily report generated");
+    }
+    if (reportStream.status === "FAILED") {
+      toast.error("Daily report generation failed");
+    }
+  }, [queryClient, reportStream.isTerminal, reportStream.status]);
 
   const positions = paperStateQuery.data?.positions ?? [];
   const orders = paperStateQuery.data?.orders ?? [];
@@ -130,6 +151,8 @@ export default function PaperTradingPage() {
     activePolicyId === null
       ? null
       : ((policiesQuery.data ?? []).find((policy) => policy.id === activePolicyId) ?? null);
+  const healthStatus = operateQuery.data?.health_short?.status ?? "HEALTHY";
+  const healthReasons = operateQuery.data?.health_short?.reasons_json ?? [];
 
   useEffect(() => {
     if (bundleId !== null) {
@@ -210,10 +233,34 @@ export default function PaperTradingPage() {
   const selectedSignals = (latestDecision?.selected_signals as Array<Record<string, unknown>> | undefined) ?? [];
   const costSummary = (latestDecision?.cost_summary as Record<string, unknown> | undefined) ?? {};
   const riskScaled = Boolean(latestDecision?.risk_scaled);
+  const reportId = Number(latestDecision?.report_id ?? 0);
+
+  const generateReportMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.generateDailyReport({
+          date: new Date().toISOString().slice(0, 10),
+          bundle_id: bundleId ?? undefined,
+          policy_id: activePolicyId ?? undefined,
+        })
+      ).data,
+    onSuccess: (payload) => {
+      setReportJobId(payload.job_id);
+      toast.success("Daily report job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue daily report");
+    },
+  });
 
   return (
     <div className="space-y-5">
       <JobDrawer jobId={activeJobId} onClose={() => setActiveJobId(null)} title="Paper Step Job" />
+      <JobDrawer
+        jobId={reportJobId}
+        onClose={() => setReportJobId(null)}
+        title="Daily Report Job"
+      />
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Paper Trading</h2>
@@ -238,6 +285,18 @@ export default function PaperTradingPage() {
         <p className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off {squareoffCutoff}) +
           Futures swing (if available).
+        </p>
+        <p
+          className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
+            healthStatus === "DEGRADED"
+              ? "border-danger/30 bg-danger/10 text-danger"
+              : healthStatus === "WARNING"
+                ? "border-warning/30 bg-warning/10 text-warning"
+                : "border-success/30 bg-success/10 text-success"
+          }`}
+        >
+          Policy health: {healthStatus}
+          {healthReasons.length > 0 ? ` - ${healthReasons[0]}` : ""}
         </p>
         <div className="mt-3">
           <label className="text-xs text-muted">
@@ -299,7 +358,26 @@ export default function PaperTradingPage() {
           >
             Why
           </button>
+          <button
+            type="button"
+            onClick={() => generateReportMutation.mutate()}
+            className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+            disabled={generateReportMutation.isPending}
+          >
+            {generateReportMutation.isPending ? "Queuing report..." : "Generate Daily Report"}
+          </button>
         </div>
+        {reportId > 0 ? (
+          <p className="mt-2 text-xs text-muted">
+            Latest run report:{" "}
+            <a
+              href="/reports"
+              className="text-accent underline-offset-2 hover:underline"
+            >
+              Report #{reportId}
+            </a>
+          </p>
+        ) : null}
         <p className="mt-2 text-xs text-muted">Shortcuts: Ctrl/Cmd+Enter run step, P preview signals.</p>
       </section>
 
@@ -414,7 +492,8 @@ export default function PaperTradingPage() {
       {(paperStateQuery.isError ||
         strategiesQuery.isError ||
         regimeQuery.isError ||
-        policiesQuery.isError) && (
+        policiesQuery.isError ||
+        operateQuery.isError) && (
         <ErrorState
           title="Could not load paper trading state"
           action="Check API status and retry."
@@ -423,6 +502,7 @@ export default function PaperTradingPage() {
             void strategiesQuery.refetch();
             void regimeQuery.refetch();
             void policiesQuery.refetch();
+            void operateQuery.refetch();
           }}
         />
       )}
@@ -516,6 +596,10 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Generated:</span> {preview.generated_signals_count}
+            </p>
+            <p>
+              <span className="text-muted">Policy status:</span> {preview.policy_status ?? "-"} /{" "}
+              {preview.health_status ?? "-"}
             </p>
             <p>
               <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}

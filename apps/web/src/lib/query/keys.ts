@@ -22,10 +22,17 @@ export const qk = {
     ["researchCandidates", id, page, pageSize] as const,
   policies: (page: number, pageSize: number) => ["policies", page, pageSize] as const,
   policy: (id: number | null) => ["policy", id] as const,
+  policyHealth: (id: number | null, windowDays: number) =>
+    ["policyHealth", id, windowDays] as const,
+  policiesHealth: ["policiesHealth"] as const,
   paperState: ["paperState"] as const,
   paperPositions: ["paperPositions"] as const,
   paperOrders: ["paperOrders"] as const,
   paperSignalsPreview: (datasetId: number | null, regime: string) =>
     ["paperSignalsPreview", datasetId, regime] as const,
+  operateStatus: ["operateStatus"] as const,
+  dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
+    ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
+  dailyReport: (id: number | null) => ["dailyReport", id] as const,
   settings: ["settings"] as const,
 };

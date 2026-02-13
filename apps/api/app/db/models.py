@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date as dt_date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import JSON, Column, Index
@@ -44,8 +44,8 @@ class Dataset(SQLModel, table=True):
     symbol: str = Field(index=True, max_length=32)
     timeframe: str = Field(index=True, max_length=16)
     symbols_json: list[str] | None = Field(default=None, sa_column=Column(JSON))
-    start_date: date
-    end_date: date
+    start_date: dt_date
+    end_date: dt_date
     checksum: str | None = Field(default=None, max_length=128)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -65,8 +65,8 @@ class Backtest(SQLModel, table=True):
     strategy_id: int | None = Field(default=None, foreign_key="strategy.id")
     symbol: str = Field(index=True, max_length=32)
     timeframe: str = Field(index=True, max_length=16)
-    start_date: date
-    end_date: date
+    start_date: dt_date
+    end_date: dt_date
     config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
@@ -98,8 +98,8 @@ class WalkForwardRun(SQLModel, table=True):
 class WalkForwardFold(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     run_id: int = Field(foreign_key="walkforwardrun.id", index=True)
-    fold_start: date
-    fold_end: date
+    fold_start: dt_date
+    fold_end: dt_date
     params_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
@@ -144,6 +144,57 @@ class Policy(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     definition_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     promoted_from_research_run_id: int | None = Field(default=None, foreign_key="researchrun.id")
+
+
+class PolicyHealthSnapshot(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_policyhealthsnapshot_policy_window_date", "policy_id", "window_days", "asof_date"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    policy_id: int = Field(foreign_key="policy.id", index=True)
+    asof_date: dt_date = Field(index=True)
+    window_days: int = Field(index=True)
+    metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    status: str = Field(default="HEALTHY", index=True, max_length=16)
+    reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PaperRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_paperrun_policy_asof", "policy_id", "asof_ts"),
+        Index("ix_paperrun_bundle_asof", "bundle_id", "asof_ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    asof_ts: datetime = Field(index=True)
+    regime: str = Field(default="TREND_UP", max_length=24)
+    signals_source: str = Field(default="provided", max_length=24)
+    generated_signals_count: int = 0
+    selected_signals_count: int = 0
+    skipped_signals_count: int = 0
+    scanned_symbols: int = 0
+    evaluated_candidates: int = 0
+    scan_truncated: bool = False
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    cost_summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class DailyReport(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_dailyreport_date_bundle_policy", "date", "bundle_id", "policy_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    date: dt_date = Field(index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    content_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class PaperState(SQLModel, table=True):

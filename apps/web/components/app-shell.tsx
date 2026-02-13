@@ -130,6 +130,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       { id: "nav:lab", label: "Go to Strategy Lab", keywords: ["backtest"] },
       { id: "nav:walkforward", label: "Go to Walk-Forward", keywords: ["oos", "optuna"] },
       { id: "nav:research", label: "Go to Auto Research", keywords: ["policy", "candidates"] },
+      { id: "nav:reports", label: "Go to Reports", keywords: ["daily", "operate", "health"] },
       { id: "nav:paper", label: "Go to Paper Trading", keywords: ["orders", "positions"] },
       { id: "nav:settings", label: "Go to Settings", keywords: ["risk", "costs"] },
       { id: "run:demo-backtest", label: "Run demo backtest", subtitle: "NIFTY500 Trend Breakout" },
@@ -151,6 +152,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (id === "nav:lab") return router.push("/strategy-lab");
     if (id === "nav:walkforward") return router.push("/walk-forward");
     if (id === "nav:research") return router.push("/auto-research");
+    if (id === "nav:reports") return router.push("/reports");
     if (id === "nav:paper") return router.push("/paper-trading");
     if (id === "nav:settings") return router.push("/settings");
     if (id === "run:demo-backtest") return demoBacktestMutation.mutate();

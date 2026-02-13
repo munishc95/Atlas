@@ -132,6 +132,9 @@ export type ApiPaperSignalPreview = {
   regime: string;
   policy_mode: string;
   policy_selection_reason: string;
+  policy_status?: string;
+  health_status?: string;
+  health_reasons?: string[];
   signals_source: string;
   generated_signals_count: number;
   selected_signals_count: number;
@@ -193,6 +196,38 @@ export type ApiPolicy = {
   created_at: string;
   definition_json: Record<string, unknown>;
   promoted_from_research_run_id?: number | null;
+};
+
+export type ApiPolicyHealthSnapshot = {
+  id: number;
+  policy_id: number;
+  asof_date: string;
+  window_days: number;
+  metrics_json: Record<string, number>;
+  status: string;
+  reasons_json: string[];
+  created_at: string;
+};
+
+export type ApiDailyReport = {
+  id: number;
+  date: string;
+  bundle_id?: number | null;
+  policy_id?: number | null;
+  content_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ApiOperateStatus = {
+  active_policy_id?: number | null;
+  active_policy_name?: string | null;
+  active_bundle_id?: number | null;
+  current_regime?: string | null;
+  last_run_step_at?: string | null;
+  latest_run?: Record<string, unknown> | null;
+  health_short?: ApiPolicyHealthSnapshot | null;
+  health_long?: ApiPolicyHealthSnapshot | null;
+  paper_state: Record<string, unknown>;
 };
 
 export type ApiUniverseBundle = {

@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
@@ -17,7 +17,10 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import APIError
 from app.db.models import (
     Backtest,
+    DailyReport,
     Policy,
+    PolicyHealthSnapshot,
+    PaperRun,
     ResearchRun,
     Strategy,
     Symbol,
@@ -31,12 +34,14 @@ from app.jobs.tasks import (
     run_backtest_job,
     run_import_job,
     run_paper_step_job,
+    run_daily_report_job,
     run_research_job,
     run_walkforward_job,
 )
 from app.schemas.api import (
     BacktestRunRequest,
     CreatePolicyRequest,
+    DailyReportGenerateRequest,
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
     PromoteStrategyRequest,
@@ -56,6 +61,11 @@ from app.services.paper import (
     preview_policy_signals,
     update_runtime_settings,
 )
+from app.services.policy_health import (
+    get_policy_health_snapshot,
+    latest_policy_health_snapshots,
+)
+from app.services.reports import generate_daily_report, get_daily_report, list_daily_reports
 from app.services.research import (
     create_policy_from_research_run,
     list_research_candidates,
@@ -156,6 +166,18 @@ def _enqueue_or_inline(
     current = get_job(session, job.id)
     status = current.status if current is not None else job.status
     return _data({"job_id": job.id, "status": status})
+
+
+def _parse_report_date(value: str | None) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise APIError(
+            code="invalid_date",
+            message="Date must be in YYYY-MM-DD format.",
+        ) from exc
 
 
 @router.get("/health")
@@ -675,6 +697,36 @@ def list_policies(
     )
 
 
+@router.get("/policies/health")
+def list_policy_health(session: Session = Depends(get_session)) -> dict[str, Any]:
+    rows = latest_policy_health_snapshots(session)
+    return _data([row.model_dump() for row in rows])
+
+
+@router.get("/policies/{policy_id}/health")
+def policy_health(
+    policy_id: int,
+    window_days: int = Query(default=20, ge=5, le=365),
+    refresh: bool = Query(default=True),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    policy = session.get(Policy, policy_id)
+    if policy is None:
+        raise APIError(code="not_found", message="Policy not found", status_code=404)
+    paper_state = get_or_create_paper_state(session, settings)
+    state_settings = paper_state.settings_json or {}
+    snapshot = get_policy_health_snapshot(
+        session,
+        settings=settings,
+        policy=policy,
+        window_days=window_days,
+        refresh=refresh,
+        overrides=state_settings,
+    )
+    return _data(snapshot.model_dump())
+
+
 @router.get("/policies/{policy_id}")
 def get_policy(policy_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
     policy = session.get(Policy, policy_id)
@@ -750,6 +802,63 @@ def paper_orders(
     return _data([row.model_dump() for row in get_orders(session)])
 
 
+@router.get("/operate/status")
+def operate_status(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    state_payload = get_paper_state_payload(session, settings)
+    state = state_payload["state"]
+    active_policy_id = state.get("settings_json", {}).get("active_policy_id")
+    policy: Policy | None = None
+    if isinstance(active_policy_id, int):
+        policy = session.get(Policy, active_policy_id)
+    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    health_short = None
+    health_long = None
+    if policy is not None:
+        state_settings = state.get("settings_json", {})
+        short_window = int(
+            state_settings.get(
+                "health_window_days_short", settings.health_window_days_short
+            )
+        )
+        long_window = int(
+            state_settings.get(
+                "health_window_days_long", settings.health_window_days_long
+            )
+        )
+        health_short = get_policy_health_snapshot(
+            session,
+            settings=settings,
+            policy=policy,
+            window_days=short_window,
+            refresh=False,
+            overrides=state_settings,
+        ).model_dump()
+        health_long = get_policy_health_snapshot(
+            session,
+            settings=settings,
+            policy=policy,
+            window_days=long_window,
+            refresh=False,
+            overrides=state_settings,
+        ).model_dump()
+    return _data(
+        {
+            "active_policy_id": policy.id if policy is not None else None,
+            "active_policy_name": policy.name if policy is not None else None,
+            "active_bundle_id": latest_run.bundle_id if latest_run is not None else None,
+            "current_regime": latest_run.regime if latest_run is not None else None,
+            "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
+            "latest_run": latest_run.model_dump() if latest_run is not None else None,
+            "health_short": health_short,
+            "health_long": health_long,
+            "paper_state": state,
+        }
+    )
+
+
 @router.post("/paper/run-step")
 def paper_run_step(
     payload: PaperRunStepRequest,
@@ -784,6 +893,82 @@ def paper_signals_preview(
             payload=payload.model_dump(),
             store=store,
         )
+    )
+
+
+@router.post("/reports/daily/generate")
+def generate_daily_report_job(
+    payload: DailyReportGenerateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="daily_report",
+        task_path="app.jobs.tasks.run_daily_report_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_daily_report_job,
+    )
+
+
+@router.get("/reports/daily")
+def get_daily_reports(
+    date_value: str | None = Query(default=None, alias="date"),
+    bundle_id: int | None = Query(default=None),
+    policy_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    report_date = _parse_report_date(date_value)
+    rows = list_daily_reports(
+        session,
+        report_date=report_date,
+        bundle_id=bundle_id,
+        policy_id=policy_id,
+    )
+    return _data([row.model_dump() for row in rows])
+
+
+@router.get("/reports/daily/{report_id}")
+def get_daily_report_by_id(report_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    row = get_daily_report(session, report_id)
+    return _data(row.model_dump())
+
+
+@router.get("/reports/daily/{report_id}/export.json")
+def export_daily_report_json(report_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    row = get_daily_report(session, report_id)
+    return _data(row.content_json)
+
+
+@router.get("/reports/daily/{report_id}/export.csv")
+def export_daily_report_csv(report_id: int, session: Session = Depends(get_session)):
+    row = get_daily_report(session, report_id)
+    content = row.content_json if isinstance(row.content_json, dict) else {}
+    summary = content.get("summary", {})
+    explainability = content.get("explainability", {})
+    risk = content.get("risk", {})
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["section", "key", "value"])
+    for key, value in summary.items():
+        writer.writerow(["summary", key, value])
+    for key, value in risk.items():
+        writer.writerow(["risk", key, value])
+    for key, value in (explainability.get("selected_reason_histogram", {}) or {}).items():
+        writer.writerow(["selected_reasons", key, value])
+    for key, value in (explainability.get("skipped_reason_histogram", {}) or {}).items():
+        writer.writerow(["skipped_reasons", key, value])
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="daily_report_{report_id}.csv"'},
     )
 
 
@@ -825,6 +1010,16 @@ def get_settings_payload(
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,
         "autopilot_max_runtime_seconds": settings.autopilot_max_runtime_seconds,
+        "reports_auto_generate_daily": settings.reports_auto_generate_daily,
+        "health_window_days_short": settings.health_window_days_short,
+        "health_window_days_long": settings.health_window_days_long,
+        "drift_maxdd_multiplier": settings.drift_maxdd_multiplier,
+        "drift_negative_return_cost_ratio_threshold": settings.drift_negative_return_cost_ratio_threshold,
+        "drift_win_rate_drop_pct": settings.drift_win_rate_drop_pct,
+        "drift_return_delta_threshold": settings.drift_return_delta_threshold,
+        "drift_warning_risk_scale": settings.drift_warning_risk_scale,
+        "drift_degraded_risk_scale": settings.drift_degraded_risk_scale,
+        "drift_degraded_action": settings.drift_degraded_action,
         "four_hour_bars": settings.four_hour_bars,
         "paper_mode": "strategy",
         "active_policy_id": None,

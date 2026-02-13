@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import { EquityChart } from "@/components/equity-chart";
@@ -17,6 +18,12 @@ export default function DashboardPage() {
   const regimeQuery = useQuery({
     queryKey: qk.regimeCurrent(),
     queryFn: async () => (await atlasApi.regimeCurrent()).data,
+  });
+
+  const operateQuery = useQuery({
+    queryKey: qk.operateStatus,
+    queryFn: async () => (await atlasApi.operateStatus()).data,
+    refetchInterval: 8_000,
   });
 
   const paperStateQuery = useQuery({
@@ -67,6 +74,14 @@ export default function DashboardPage() {
 
   const positions = paperStateQuery.data?.positions ?? [];
   const state = paperStateQuery.data?.state;
+  const todayStatus = operateQuery.data;
+  const healthStatus = todayStatus?.health_short?.status ?? "HEALTHY";
+  const healthTone =
+    healthStatus === "DEGRADED" || healthStatus === "RETIRED"
+      ? "bg-danger/15 text-danger"
+      : healthStatus === "WARNING"
+        ? "bg-warning/15 text-warning"
+        : "bg-success/15 text-success";
 
   return (
     <div className="space-y-5">
@@ -87,10 +102,52 @@ export default function DashboardPage() {
         <MetricTile label="Open positions" value={`${positions.length}`} hint="Max 3 positions" />
         <MetricTile
           label="Current regime"
-          value={regimeQuery.data?.regime ?? "-"}
+          value={todayStatus?.current_regime ?? regimeQuery.data?.regime ?? "-"}
           hint="Allocator active"
           tone="success"
         />
+      </section>
+
+      <section className="card p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Today status</h2>
+          <span className={`badge ${healthTone}`}>{healthStatus}</span>
+        </div>
+        {operateQuery.isLoading ? (
+          <LoadingState label="Loading operate status" />
+        ) : operateQuery.isError ? (
+          <ErrorState
+            title="Could not load operate status"
+            action="Retry to fetch policy health and latest run."
+            onRetry={() => void operateQuery.refetch()}
+          />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <p className="rounded-xl border border-border px-3 py-2 text-sm">
+              Active policy: {todayStatus?.active_policy_name ?? "-"}
+              {todayStatus?.active_policy_id ? (
+                <>
+                  {" "}
+                  <Link
+                    href={`/policies/${todayStatus.active_policy_id}`}
+                    className="text-xs text-accent underline-offset-2 hover:underline"
+                  >
+                    view
+                  </Link>
+                </>
+              ) : null}
+            </p>
+            <p className="rounded-xl border border-border px-3 py-2 text-sm">
+              Active bundle: {todayStatus?.active_bundle_id ?? "-"}
+            </p>
+            <p className="rounded-xl border border-border px-3 py-2 text-sm">
+              Regime: {todayStatus?.current_regime ?? "-"}
+            </p>
+            <p className="rounded-xl border border-border px-3 py-2 text-sm">
+              Last run-step: {todayStatus?.last_run_step_at ?? "-"}
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="card p-4">
@@ -189,6 +246,7 @@ export default function DashboardPage() {
           onRetry={() => {
             void regimeQuery.refetch();
             void paperStateQuery.refetch();
+            void operateQuery.refetch();
           }}
         />
       )}

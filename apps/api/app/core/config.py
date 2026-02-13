@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     paper_short_squareoff_time: str = "15:20"
     autopilot_max_symbols_scan: int = 200
     autopilot_max_runtime_seconds: int = 20
+    reports_auto_generate_daily: bool = False
+    health_window_days_short: int = 20
+    health_window_days_long: int = 60
+    drift_maxdd_multiplier: float = 1.25
+    drift_negative_return_cost_ratio_threshold: float = 0.35
+    drift_win_rate_drop_pct: float = 0.15
+    drift_return_delta_threshold: float = 0.15
+    drift_warning_risk_scale: float = 0.75
+    drift_degraded_risk_scale: float = 0.25
+    drift_degraded_action: str = "PAUSE"
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     optuna_storage_url: str | None = None

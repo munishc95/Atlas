@@ -145,6 +145,37 @@ Paper Trading UI includes:
 - Why drawer with selected/skipped reasons and cost summary
 - Shortcuts: `Ctrl/Cmd+Enter` (Run Step), `P` (Preview)
 
+## Operate Mode (v1.6)
+
+Atlas now includes an operational monitoring layer focused on trust and explainability:
+
+- Every paper run-step persists a `PaperRun` record with:
+  - signal source, scan/evaluation counts, truncation flags
+  - selected/skipped reason histograms
+  - cost/slippage summary
+  - position/order deltas (opened/closed, new order ids)
+- Policy health snapshots are computed on rolling windows (default 20d/60d):
+  - return, drawdown, Calmar, Sharpe/Sortino, win rate, profit factor, turnover, exposure
+  - cost ratio and tail proxy where available
+- Deterministic drift rules trigger safe actions:
+  - `WARNING`: risk scaling override (default `0.75x`)
+  - `DEGRADED`: configurable action (`PAUSE`/`RETIRED`) and degraded risk override (default `0.25x`)
+- Fallback behavior:
+  - if active policy is paused/retired/degraded for the regime, Atlas selects the next best eligible policy
+  - if none for the same regime, Atlas falls back to a `RISK_OFF` policy when available
+  - otherwise it runs shadow-only (no new entries)
+- Optional daily report generation captures:
+  - summary PnL/cost/drawdown
+  - explainability (selected/skipped reasons)
+  - risk stats and run links for drill-down
+
+Frontend additions:
+
+- Dashboard `Today status` panel with active bundle/policy, latest run-step, and health badge
+- New `Reports` page with daily report list, detail drawer, and CSV/JSON export links
+- New policy health view at `/policies/{id}` (20d/60d snapshots + baseline deltas)
+- Paper Trading shows inline health status and has a `Generate Daily Report` action
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:
@@ -210,7 +241,15 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/policies`
 - `GET /api/policies/{id}`
 - `POST /api/policies/{id}/promote-to-paper`
+- `GET /api/policies/health`
+- `GET /api/policies/{id}/health?window_days=20|60`
 - `POST /api/paper/signals/preview`
+- `GET /api/operate/status`
+- `POST /api/reports/daily/generate`
+- `GET /api/reports/daily?date=&bundle_id=&policy_id=`
+- `GET /api/reports/daily/{id}`
+- `GET /api/reports/daily/{id}/export.json`
+- `GET /api/reports/daily/{id}/export.csv`
 
 ## Testing
 

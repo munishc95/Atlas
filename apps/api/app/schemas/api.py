@@ -86,6 +86,12 @@ class PaperSignalsPreviewRequest(BaseModel):
     asof: str | None = None
 
 
+class DailyReportGenerateRequest(BaseModel):
+    date: str | None = None
+    bundle_id: int | None = None
+    policy_id: int | None = None
+
+
 class RuntimeSettingsRequest(BaseModel):
     risk_per_trade: float | None = None
     max_positions: int | None = None
@@ -100,6 +106,16 @@ class RuntimeSettingsRequest(BaseModel):
     paper_short_squareoff_time: str | None = None
     autopilot_max_symbols_scan: int | None = None
     autopilot_max_runtime_seconds: int | None = None
+    reports_auto_generate_daily: bool | None = None
+    health_window_days_short: int | None = None
+    health_window_days_long: int | None = None
+    drift_maxdd_multiplier: float | None = None
+    drift_negative_return_cost_ratio_threshold: float | None = None
+    drift_win_rate_drop_pct: float | None = None
+    drift_return_delta_threshold: float | None = None
+    drift_warning_risk_scale: float | None = None
+    drift_degraded_risk_scale: float | None = None
+    drift_degraded_action: str | None = None
     four_hour_bars: str | None = None
     paper_mode: str | None = None
     active_policy_id: int | None = None

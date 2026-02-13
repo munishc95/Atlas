@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from datetime import datetime
 from typing import Any
 
 from redis.exceptions import RedisError
@@ -15,6 +16,7 @@ from app.services.data_store import DataStore
 from app.services.importer import import_ohlcv_bytes
 from app.services.jobs import append_job_log, update_job
 from app.services.paper import run_paper_step
+from app.services.reports import generate_daily_report
 from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
 
@@ -286,4 +288,47 @@ def run_research_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "research_failed", "message": str(exc)}},
+            )
+
+
+def run_daily_report_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Daily report generation started")
+            result = _execute_with_retry(
+                fn=lambda: generate_daily_report(
+                    session=session,
+                    settings=settings,
+                    report_date=(
+                        datetime.fromisoformat(str(payload["date"])).date()
+                        if payload.get("date")
+                        else None
+                    ),
+                    bundle_id=payload.get("bundle_id"),
+                    policy_id=payload.get("policy_id"),
+                    overwrite=True,
+                ).model_dump(mode="json"),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="daily_report",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Daily report generation finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Daily report failed: {exc}")
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "daily_report_failed", "message": str(exc)}},
             )

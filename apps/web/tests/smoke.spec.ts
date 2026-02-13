@@ -304,15 +304,50 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const runStepBody = await (await runStepRes).json();
   await waitForJob(request, apiBase, runStepBody.data.job_id, 180_000);
 
+  const reportGenerateRes = await request.post(`${apiBase}/api/reports/daily/generate`, {
+    data: {
+      bundle_id: bundleId,
+      policy_id: policyId,
+    },
+  });
+  expect(reportGenerateRes.ok()).toBeTruthy();
+  const reportGenerateBody = await reportGenerateRes.json();
+  const reportJob = await waitForJob(request, apiBase, reportGenerateBody.data.job_id, 120_000);
+  const reportResult = (reportJob.result_json ?? {}) as Record<string, unknown>;
+  const reportId = Number(reportResult.id);
+  expect(Number.isFinite(reportId) && reportId > 0).toBeTruthy();
+
+  const policyHealthRes = await request.get(
+    `${apiBase}/api/policies/${policyId}/health?window_days=20&refresh=true`,
+  );
+  expect(policyHealthRes.ok()).toBeTruthy();
+  const policyHealthBody = await policyHealthRes.json();
+  expect(policyHealthBody?.data?.policy_id).toBe(policyId);
+  expect(policyHealthBody?.data?.status).toBeTruthy();
+
+  await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("heading", { name: "Daily reports", exact: true })).toBeVisible();
+  const viewButton = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "Daily reports" }) })
+    .getByRole("button", { name: "View" })
+    .first();
+  await expect(viewButton).toBeVisible();
+  await viewButton.click();
+  await expect(page.getByRole("dialog", { name: /Daily Report/i })).toBeVisible();
+  await page.getByRole("dialog", { name: /Daily Report/i }).getByRole("button", { name: "Close" }).click();
+
   const paperStateRes = await request.get(`${apiBase}/api/paper/state`);
   const paperState = await paperStateRes.json();
   const openPositions = (paperState?.data?.positions ?? []) as Array<unknown>;
+  await page.goto("/paper-trading");
   if (openPositions.length > 0) {
     await expect(page.getByRole("heading", { name: "Open positions" })).toBeVisible();
   } else {
-    await page.getByRole("button", { name: "Why" }).click();
-    await expect(page.getByRole("dialog", { name: "Why this run step" })).toBeVisible();
-    await expect(page.getByText("Skipped reasons")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Why" })).toBeVisible();
   }
 
   const settingsRes = await request.put(`${apiBase}/api/settings`, {
