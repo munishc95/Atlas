@@ -1,0 +1,28 @@
+﻿# Node
+node_modules/
+.pnpm-store/
+.next/
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.venv/
+
+# Data and local state
+*.duckdb
+*.duckdb.wal
+data/parquet/
+apps/api/.atlas/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,17 @@
+{
+  "name": "atlas",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm --filter @atlas/web dev",
+    "dev:web": "pnpm --filter @atlas/web dev",
+    "dev:api": "python -m uvicorn app.main:app --reload --app-dir apps/api",
+    "dev:stack": "powershell -ExecutionPolicy Bypass -File ./scripts/dev.ps1",
+    "dev:stack:e2e": "powershell -ExecutionPolicy Bypass -File ./scripts/dev.ps1 -InstallE2E",
+    "dev:stack:no-docker": "powershell -ExecutionPolicy Bypass -File ./scripts/dev.ps1 -SkipDocker",
+    "setup:e2e": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-e2e.ps1 -Install",
+    "lint": "pnpm --filter @atlas/web lint",
+    "typecheck": "pnpm --filter @atlas/web typecheck"
+  }
+}
