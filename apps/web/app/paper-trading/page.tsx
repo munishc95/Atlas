@@ -661,6 +661,16 @@ export default function PaperTradingPage() {
             <p>
               <span className="text-muted">Cost total:</span> {String(costSummary.total_cost ?? 0)}
             </p>
+            <p>
+              <span className="text-muted">Engine:</span> {String(latestDecision.paper_engine ?? "legacy")}
+            </p>
+            <p>
+              <span className="text-muted">Repro:</span>{" "}
+              {String(latestDecision.engine_version ?? "-")} / {String(latestDecision.seed ?? "-")}
+            </p>
+            <p className="truncate">
+              <span className="text-muted">Digest:</span> {String(latestDecision.data_digest ?? "-")}
+            </p>
             <div className="rounded-xl border border-border p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Skipped reasons</p>
               {skippedSignals.length === 0 ? (

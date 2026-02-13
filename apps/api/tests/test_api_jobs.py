@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import PaperOrder, PaperPosition, Symbol
+from app.db.models import PaperOrder, PaperPosition, PaperState, Symbol
 from app.db.session import engine
 from app.main import app
 
@@ -164,6 +164,15 @@ def test_paper_diversification_limits_sector_concentration() -> None:
                 session.delete(row)
             for row in session.exec(select(PaperOrder)).all():
                 session.delete(row)
+            state = session.get(PaperState, 1)
+            if state is not None:
+                state.equity = 1_000_000.0
+                state.cash = 1_000_000.0
+                state.peak_equity = 1_000_000.0
+                state.drawdown = 0.0
+                state.kill_switch_active = False
+                state.cooldown_days_left = 0
+                session.add(state)
             for symbol in ("BANKA", "BANKB", "BANKC"):
                 if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:
                     session.add(Symbol(symbol=symbol, name=symbol, sector="FINANCIALS"))

@@ -1234,6 +1234,7 @@ def get_settings_payload(
         "futures_stamp_buy_bps": settings.futures_stamp_buy_bps,
         "futures_initial_margin_pct": settings.futures_initial_margin_pct,
         "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
+        "paper_use_simulator_engine": settings.paper_use_simulator_engine,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

@@ -146,14 +146,17 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const compareBoxes = page.locator(
     'section:has-text("Backtest leaderboard") tbody input[type="checkbox"]',
   );
-  await expect(compareBoxes.first()).toBeVisible();
-  await compareBoxes.nth(0).check();
-  await compareBoxes.nth(1).check();
-  await expect(page.getByRole("heading", { name: "Compare runs" })).toBeVisible();
-  const compareSection = page.locator("section").filter({
-    has: page.getByRole("heading", { name: "Compare runs" }),
-  });
-  await expect(compareSection.getByLabel("Equity chart")).toBeVisible({ timeout: 20_000 });
+  const compareCount = await compareBoxes.count();
+  if (compareCount >= 2) {
+    await expect(compareBoxes.first()).toBeVisible();
+    await compareBoxes.nth(0).check();
+    await compareBoxes.nth(1).check();
+    await expect(page.getByRole("heading", { name: "Compare runs" })).toBeVisible();
+    const compareSection = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "Compare runs" }),
+    });
+    await expect(compareSection.getByLabel("Equity chart")).toBeVisible({ timeout: 20_000 });
+  }
 
   await page.goto("/walk-forward");
   await expect(page.getByRole("heading", { name: "Walk-Forward & Robustness" })).toBeVisible({

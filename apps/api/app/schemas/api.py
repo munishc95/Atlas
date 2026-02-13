@@ -168,3 +168,4 @@ class RuntimeSettingsRequest(BaseModel):
     futures_stamp_buy_bps: float | None = None
     futures_initial_margin_pct: float | None = None
     futures_symbol_mapping_strategy: str | None = None
+    paper_use_simulator_engine: bool | None = None

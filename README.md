@@ -215,6 +215,23 @@ Research, walk-forward, replay, and champion-challenger shadow evaluation now ru
 
 This removes execution-assumption drift between research recommendations and paper shadow results.
 
+## Paper-Simulator Parity (v1.9)
+
+Paper execution now supports a simulator adapter path that uses the same deterministic execution core as research, walk-forward, replay, and shadow evaluations.
+
+- Paper run-step can execute through the unified simulator adapter:
+  - same next-bar fill, slippage, gap-stop, and cost logic
+  - same side/instrument rules for `LONG`/`SHORT` and cash/futures behavior
+- Reproducibility metadata now flows into paper outputs:
+  - `paper_engine`
+  - `engine_version`
+  - `data_digest`
+  - `seed`
+- Runtime toggle (with fallback path still available for migration):
+  - setting: `paper_use_simulator_engine`
+  - default: `true`
+  - set to `false` to temporarily use the legacy paper execution path.
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:

@@ -78,6 +78,7 @@ export default function SettingsPage() {
         futures_stamp_buy_bps: Number(form.futures_stamp_buy_bps),
         futures_initial_margin_pct: Number(form.futures_initial_margin_pct),
         futures_symbol_mapping_strategy: form.futures_symbol_mapping_strategy,
+        paper_use_simulator_engine: form.paper_use_simulator_engine === "true",
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -138,6 +139,10 @@ export default function SettingsPage() {
       { key: "futures_stamp_buy_bps", label: "Futures stamp duty buy (bps)" },
       { key: "futures_initial_margin_pct", label: "Futures initial margin %" },
       { key: "futures_symbol_mapping_strategy", label: "Futures symbol mapping strategy" },
+      {
+        key: "paper_use_simulator_engine",
+        label: "Use unified simulator engine for paper execution (true/false)",
+      },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],
@@ -192,6 +197,9 @@ export default function SettingsPage() {
             >
               {saveMutation.isPending ? "Saving..." : "Save settings"}
             </button>
+            <p className="mt-2 text-xs text-muted">
+              Unified simulator is default for paper execution; disable this only as a temporary legacy fallback.
+            </p>
           </>
         )}
       </section>
