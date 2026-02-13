@@ -14,7 +14,7 @@ from app.db.models import DatasetBundle, PaperOrder, PaperPosition, PaperState, 
 from app.db.session import engine
 from app.main import app
 from app.services.data_store import DataStore
-from app.engine.costs import estimate_equity_delivery_cost
+from app.engine.costs import estimate_equity_delivery_cost, estimate_futures_cost
 
 
 def _client_inline_jobs() -> TestClient:
@@ -49,6 +49,26 @@ def _frame(rows: int = 260, start: float = 100.0) -> pd.DataFrame:
     return frame
 
 
+def _down_frame(rows: int = 260, start: float = 320.0) -> pd.DataFrame:
+    idx = pd.date_range("2022-01-01", periods=rows, freq="D", tz="UTC")
+    close = np.linspace(start, start - rows + 1, rows)
+    # Force a deterministic downside breakout on the decision bar (len-2),
+    # while keeping the last bar available as next-bar fill.
+    close[-2] = close[-3] - 4.0
+    close[-1] = close[-2] - 1.5
+    frame = pd.DataFrame(
+        {
+            "datetime": idx,
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.full(rows, 3_200_000),
+        }
+    )
+    return frame
+
+
 def _seed_dataset_symbols(
     *,
     provider: str,
@@ -75,6 +95,45 @@ def _seed_dataset_symbols(
     return dataset_id, store
 
 
+def _seed_equity_and_future_bundle(
+    *,
+    provider: str,
+    underlying_symbol: str,
+    lot_size: int = 25,
+    downtrend: bool = False,
+) -> tuple[int, int]:
+    settings = get_settings()
+    store = DataStore(parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path)
+    bundle_name = f"bundle-{provider}"
+    frame_builder = _down_frame if downtrend else _frame
+    equity_start = 620.0 if downtrend else 200.0
+    futures_start = 625.0 if downtrend else 205.0
+    with Session(engine) as session:
+        equity_ds = store.save_ohlcv(
+            session=session,
+            symbol=underlying_symbol,
+            timeframe="1d",
+            frame=frame_builder(start=equity_start),
+            provider=provider,
+            bundle_name=bundle_name,
+            instrument_kind="EQUITY_CASH",
+        )
+        store.save_ohlcv(
+            session=session,
+            symbol=f"{underlying_symbol}_FUT",
+            timeframe="1d",
+            frame=frame_builder(start=futures_start),
+            provider=provider,
+            bundle_name=bundle_name,
+            instrument_kind="STOCK_FUT",
+            underlying=underlying_symbol,
+            lot_size=lot_size,
+        )
+        assert equity_ds.bundle_id is not None
+        assert equity_ds.id is not None
+        return int(equity_ds.bundle_id), int(equity_ds.id)
+
+
 def _reset_paper_state() -> None:
     with Session(engine) as session:
         for row in session.exec(select(PaperPosition)).all():
@@ -93,6 +152,7 @@ def _reset_paper_state() -> None:
                 **(state.settings_json or {}),
                 "paper_mode": "strategy",
                 "active_policy_id": None,
+                "allowed_sides": ["BUY"],
             }
             session.add(state)
         session.commit()
@@ -380,6 +440,7 @@ def test_allowed_sides_blocks_sell_signal_when_disabled() -> None:
 
 
 def test_intraday_short_forced_squareoff_at_eod() -> None:
+    symbol = "INTRADAY_SHORT_ONLY"
     with _client_inline_jobs() as client:
         _reset_paper_state()
         update = client.put(
@@ -395,7 +456,7 @@ def test_intraday_short_forced_squareoff_at_eod() -> None:
                 "asof": "2026-01-05T10:00:00+05:30",
                 "signals": [
                     {
-                        "symbol": "NIFTY500",
+                        "symbol": symbol,
                         "side": "SELL",
                         "template": "trend_breakout",
                         "instrument_kind": "EQUITY_CASH",
@@ -425,7 +486,7 @@ def test_intraday_short_forced_squareoff_at_eod() -> None:
                 "regime": "TREND_UP",
                 "asof": "2026-01-05T15:25:00+05:30",
                 "signals": [],
-                "mark_prices": {"NIFTY500": 97.0},
+                "mark_prices": {symbol: 97.0},
             },
         )
         assert close_step.status_code == 200
@@ -452,3 +513,349 @@ def test_feature_cache_matches_computed_indicators() -> None:
         left = np.nan_to_num(cached[column].to_numpy(), nan=0.0)
         right = np.nan_to_num(expected[column].to_numpy(), nan=0.0)
         assert np.allclose(left, right, atol=1e-8)
+
+
+def test_sell_prefers_stock_fut_when_available() -> None:
+    provider = f"futpref-{uuid4().hex[:8]}"
+    bundle_id, _ = _seed_equity_and_future_bundle(
+        provider=provider,
+        underlying_symbol="FUTSEL_A",
+        lot_size=25,
+    )
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        update = client.put(
+            "/api/settings",
+            json={
+                "allowed_sides": ["BUY", "SELL"],
+                "slippage_base_bps": 0.0,
+                "slippage_vol_factor": 0.0,
+                "commission_bps": 0.0,
+            },
+        )
+        assert update.status_code == 200
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle_id,
+                "signals": [
+                    {
+                        "symbol": "FUTSEL_A",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 210.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.95,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 1
+
+        positions = result.get("positions") or []
+        assert len(positions) == 1
+        assert positions[0].get("instrument_kind") == "STOCK_FUT"
+        assert positions[0].get("symbol") == "FUTSEL_A_FUT"
+        assert positions[0].get("must_exit_by_eod") is False
+
+        selected = result.get("selected_signals") or []
+        assert selected
+        assert selected[0].get("instrument_choice_reason") in {
+            "swing_short_requires_futures",
+            "provided_futures_signal",
+        }
+
+
+def test_sell_without_allowed_short_instrument_returns_explicit_reason() -> None:
+    provider = f"futskip-{uuid4().hex[:8]}"
+    dataset_id, _ = _seed_dataset_symbols(provider=provider, symbols=["NOSHORT_A"])
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        policy_name = f"ShortPolicy-{uuid4().hex[:6]}"
+        with Session(engine) as session:
+            policy = Policy(
+                name=policy_name,
+                definition_json={
+                    "universe": {"dataset_id": dataset_id, "symbol_scope": "all"},
+                    "timeframes": ["1d"],
+                    "allowed_instruments": {"BUY": ["EQUITY_CASH"], "SELL": ["STOCK_FUT"]},
+                    "regime_map": {
+                        "TREND_UP": {
+                            "strategy_key": "trend_breakout",
+                            "params": {},
+                            "risk_scale": 1.0,
+                            "max_positions_scale": 1.0,
+                        }
+                    },
+                },
+            )
+            session.add(policy)
+            session.commit()
+            session.refresh(policy)
+
+            state = session.get(PaperState, 1)
+            assert state is not None
+            state.settings_json = {
+                **(state.settings_json or {}),
+                "paper_mode": "policy",
+                "active_policy_id": policy.id,
+                "allowed_sides": ["BUY", "SELL"],
+            }
+            session.add(state)
+            session.commit()
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "dataset_id": dataset_id,
+                "signals": [
+                    {
+                        "symbol": "NOSHORT_A",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 150.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.8,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 0
+        skipped = result.get("skipped_signals", [])
+        assert any(item.get("reason") == "no_short_instrument_available" for item in skipped)
+
+
+def test_futures_sizing_respects_lot_size_and_margin_reserve() -> None:
+    provider = f"futsize-{uuid4().hex[:8]}"
+    bundle_id, _ = _seed_equity_and_future_bundle(
+        provider=provider,
+        underlying_symbol="FUTLOT_A",
+        lot_size=25,
+    )
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        update = client.put(
+            "/api/settings",
+            json={
+                "allowed_sides": ["BUY", "SELL"],
+                "slippage_base_bps": 0.0,
+                "slippage_vol_factor": 0.0,
+                "commission_bps": 0.0,
+                "futures_initial_margin_pct": 0.2,
+                "cost_model_enabled": False,
+            },
+        )
+        assert update.status_code == 200
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle_id,
+                "signals": [
+                    {
+                        "symbol": "FUTLOT_A",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 200.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.9,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 1
+        position = (result.get("positions") or [])[0]
+        assert position.get("instrument_kind") == "STOCK_FUT"
+        assert int(position.get("qty_lots", 0)) == 40
+        assert int(position.get("qty", 0)) == 1000
+        fill_price = float(position.get("avg_price", 0.0))
+        expected_margin = 1000 * fill_price * 0.2
+        assert abs(float(position.get("margin_reserved", 0.0)) - expected_margin) < 1e-6
+        state = result.get("state") or {}
+        expected_cash = 1_000_000.0 - expected_margin
+        assert abs(float(state.get("cash", 0.0)) - expected_cash) < 1e-4
+
+
+def test_futures_cost_model_changes_cash_consistently() -> None:
+    provider = f"futcost-{uuid4().hex[:8]}"
+    bundle_id, _ = _seed_equity_and_future_bundle(
+        provider=provider,
+        underlying_symbol="FUTCOST_A",
+        lot_size=50,
+    )
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        update = client.put(
+            "/api/settings",
+            json={
+                "allowed_sides": ["BUY", "SELL"],
+                "slippage_base_bps": 0.0,
+                "slippage_vol_factor": 0.0,
+                "commission_bps": 0.0,
+                "cost_model_enabled": True,
+                "cost_mode": "delivery",
+                "futures_initial_margin_pct": 0.18,
+            },
+        )
+        assert update.status_code == 200
+        settings_payload = client.get("/api/settings").json()["data"]
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle_id,
+                "signals": [
+                    {
+                        "symbol": "FUTCOST_A",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 220.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.95,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        position = (result.get("positions") or [])[0]
+        qty = int(position.get("qty", 0))
+        fill_price = float(position.get("avg_price", 0.0))
+        notional = qty * fill_price
+        margin_required = notional * 0.18
+
+        expected_cost = estimate_futures_cost(
+            notional=notional,
+            side="SELL",
+            config={
+                "brokerage_bps": settings_payload.get("brokerage_bps"),
+                "stt_delivery_buy_bps": settings_payload.get("stt_delivery_buy_bps"),
+                "stt_delivery_sell_bps": settings_payload.get("stt_delivery_sell_bps"),
+                "stt_intraday_buy_bps": settings_payload.get("stt_intraday_buy_bps"),
+                "stt_intraday_sell_bps": settings_payload.get("stt_intraday_sell_bps"),
+                "exchange_txn_bps": settings_payload.get("exchange_txn_bps"),
+                "sebi_bps": settings_payload.get("sebi_bps"),
+                "stamp_delivery_buy_bps": settings_payload.get("stamp_delivery_buy_bps"),
+                "stamp_intraday_buy_bps": settings_payload.get("stamp_intraday_buy_bps"),
+                "gst_rate": settings_payload.get("gst_rate"),
+                "futures_brokerage_bps": settings_payload.get("futures_brokerage_bps"),
+                "futures_stt_sell_bps": settings_payload.get("futures_stt_sell_bps"),
+                "futures_exchange_txn_bps": settings_payload.get("futures_exchange_txn_bps"),
+                "futures_stamp_buy_bps": settings_payload.get("futures_stamp_buy_bps"),
+            },
+        )
+        state = result.get("state") or {}
+        expected_cash = 1_000_000.0 - margin_required - expected_cost
+        assert abs(float(state.get("cash", 0.0)) - expected_cash) < 1e-4
+
+
+def test_policy_autopilot_generated_sell_prefers_futures() -> None:
+    provider = f"auto-fut-{uuid4().hex[:8]}"
+    bundle_id, _ = _seed_equity_and_future_bundle(
+        provider=provider,
+        underlying_symbol="AUTOFUT_A",
+        lot_size=25,
+        downtrend=True,
+    )
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        with Session(engine) as session:
+            policy = Policy(
+                name=f"AutoFut-{uuid4().hex[:6]}",
+                definition_json={
+                    "universe": {"bundle_id": bundle_id, "symbol_scope": "all", "max_symbols_scan": 10},
+                    "timeframes": ["1d"],
+                    "regime_map": {
+                        "TREND_UP": {
+                            "strategy_key": "trend_breakout",
+                            "params": {
+                                "trend_breakout": {
+                                    "direction": "both",
+                                    "trend_period": 50,
+                                    "breakout_lookback": 10,
+                                    "atr_stop_mult": 2.0,
+                                }
+                            },
+                            "risk_scale": 1.0,
+                            "max_positions_scale": 1.0,
+                        }
+                    },
+                },
+            )
+            session.add(policy)
+            session.commit()
+            session.refresh(policy)
+
+            state = session.get(PaperState, 1)
+            assert state is not None
+            state.settings_json = {
+                **(state.settings_json or {}),
+                "paper_mode": "policy",
+                "active_policy_id": policy.id,
+                "allowed_sides": ["BUY", "SELL"],
+            }
+            session.add(state)
+            session.commit()
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle_id,
+                "auto_generate_signals": True,
+                "signals": [],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("signals_source") == "generated"
+        assert int(result.get("generated_signals_count", 0)) >= 1
+        selected = result.get("selected_signals") or []
+        assert selected
+        assert any(
+            row.get("side") == "SELL" and row.get("instrument_kind") == "STOCK_FUT"
+            for row in selected
+        )

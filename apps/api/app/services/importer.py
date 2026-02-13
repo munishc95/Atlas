@@ -53,6 +53,10 @@ def import_ohlcv_upload(
     mapping: dict[str, str] | None,
     provider: str,
     bar_windows: str,
+    instrument_kind: str = "EQUITY_CASH",
+    underlying: str | None = None,
+    lot_size: int | None = None,
+    tick_size: float = 0.05,
     bundle_id: int | None = None,
     bundle_name: str | None = None,
     bundle_description: str | None = None,
@@ -68,6 +72,10 @@ def import_ohlcv_upload(
         mapping=mapping,
         provider=provider,
         bar_windows=bar_windows,
+        instrument_kind=instrument_kind,
+        underlying=underlying,
+        lot_size=lot_size,
+        tick_size=tick_size,
         bundle_id=bundle_id,
         bundle_name=bundle_name,
         bundle_description=bundle_description,
@@ -84,6 +92,10 @@ def import_ohlcv_bytes(
     mapping: dict[str, str] | None,
     provider: str,
     bar_windows: str,
+    instrument_kind: str = "EQUITY_CASH",
+    underlying: str | None = None,
+    lot_size: int | None = None,
+    tick_size: float = 0.05,
     bundle_id: int | None = None,
     bundle_name: str | None = None,
     bundle_description: str | None = None,
@@ -103,6 +115,12 @@ def import_ohlcv_bytes(
         windows = parse_bar_windows(bar_windows)
         frame = resample_intraday_to_session_bars(frame, windows)
         timeframe = "4h_ish"
+    instrument_kind = str(instrument_kind or "EQUITY_CASH").upper()
+    if instrument_kind in {"STOCK_FUT", "INDEX_FUT"} and (lot_size is None or int(lot_size) <= 0):
+        raise APIError(
+            code="invalid_instrument_metadata",
+            message="Futures import requires a positive lot_size.",
+        )
 
     dataset = store.save_ohlcv(
         session=session,
@@ -111,6 +129,10 @@ def import_ohlcv_bytes(
         frame=frame,
         provider=provider,
         checksum=_checksum(raw),
+        instrument_kind=instrument_kind,
+        underlying=underlying,
+        lot_size=lot_size,
+        tick_size=tick_size,
         bundle_id=bundle_id,
         bundle_name=bundle_name,
         bundle_description=bundle_description,

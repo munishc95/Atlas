@@ -41,6 +41,18 @@ def _build_config(settings: Settings, payload_config: dict[str, Any]) -> Backtes
             payload_config.get("stamp_intraday_buy_bps", settings.stamp_intraday_buy_bps)
         ),
         "gst_rate": float(payload_config.get("gst_rate", settings.gst_rate)),
+        "futures_brokerage_bps": float(
+            payload_config.get("futures_brokerage_bps", settings.futures_brokerage_bps)
+        ),
+        "futures_stt_sell_bps": float(
+            payload_config.get("futures_stt_sell_bps", settings.futures_stt_sell_bps)
+        ),
+        "futures_exchange_txn_bps": float(
+            payload_config.get("futures_exchange_txn_bps", settings.futures_exchange_txn_bps)
+        ),
+        "futures_stamp_buy_bps": float(
+            payload_config.get("futures_stamp_buy_bps", settings.futures_stamp_buy_bps)
+        ),
     }
     return BacktestConfig(
         risk_per_trade=float(payload_config.get("risk_per_trade", settings.risk_per_trade)),

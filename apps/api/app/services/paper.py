@@ -13,6 +13,7 @@ from app.db.models import (
     AuditLog,
     Dataset,
     DatasetBundle,
+    Instrument,
     PaperOrder,
     PaperPosition,
     PaperState,
@@ -29,6 +30,7 @@ from app.services.data_store import DataStore
 from app.services.regime import regime_policy
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
+FUTURE_KINDS = {"STOCK_FUT", "INDEX_FUT"}
 
 
 def _utc_now() -> datetime:
@@ -74,6 +76,8 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "futures_stt_sell_bps": settings.futures_stt_sell_bps,
             "futures_exchange_txn_bps": settings.futures_exchange_txn_bps,
             "futures_stamp_buy_bps": settings.futures_stamp_buy_bps,
+            "futures_initial_margin_pct": settings.futures_initial_margin_pct,
+            "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
             "paper_mode": "strategy",
             "active_policy_id": None,
         },
@@ -108,6 +112,29 @@ def _position_size(equity: float, risk_per_trade: float, stop_distance: float) -
         return 0
     risk_amount = equity * risk_per_trade
     return int(np.floor(risk_amount / stop_distance))
+
+
+def _position_size_lots(
+    equity: float,
+    risk_per_trade: float,
+    stop_distance: float,
+    lot_size: int,
+) -> int:
+    if stop_distance <= 0 or lot_size <= 0:
+        return 0
+    risk_amount = equity * risk_per_trade
+    return int(np.floor(risk_amount / (stop_distance * lot_size)))
+
+
+def _is_futures_kind(instrument_kind: str) -> bool:
+    return str(instrument_kind).upper() in FUTURE_KINDS
+
+
+def _futures_margin_pct(state_settings: dict[str, Any], settings: Settings) -> float:
+    return max(
+        0.0,
+        float(state_settings.get("futures_initial_margin_pct", settings.futures_initial_margin_pct)),
+    )
 
 
 def _correlation_reject(
@@ -236,7 +263,10 @@ def _resolve_execution_policy(
         "selection_reason": f"Default regime policy for {regime}.",
         "params": {},
         "cost_model": {},
-        "allowed_instruments": {"BUY": ["EQUITY_CASH"], "SELL": ["EQUITY_CASH"]},
+        "allowed_instruments": {
+            "BUY": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
+            "SELL": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
+        },
         "ranking_weights": {"signal": 1.0},
     }
 
@@ -529,6 +559,13 @@ def _adjust_qty_for_lot(qty: int, lot_size: int) -> int:
 
 
 def _mark_to_market_component(position: PaperPosition, mark: float) -> float:
+    if _is_futures_kind(position.instrument_kind):
+        margin_reserved = float(getattr(position, "margin_reserved", 0.0) or 0.0)
+        if position.side.upper() == "SELL":
+            pnl = (position.avg_price - mark) * position.qty
+        else:
+            pnl = (mark - position.avg_price) * position.qty
+        return margin_reserved + pnl
     if position.side.upper() == "SELL":
         return -position.qty * mark
     return position.qty * mark
@@ -562,6 +599,8 @@ def _close_position(
     side = position.side.upper()
     exit_side = "BUY" if side == "SELL" else "SELL"
     notional = position.qty * price
+    qty_lots = max(1, int(getattr(position, "qty_lots", max(1, position.qty // max(1, position.lot_size)))))
+    is_futures = _is_futures_kind(position.instrument_kind)
     cost_override = dict(policy.get("cost_model", {}))
     if side == "SELL" and position.instrument_kind == "EQUITY_CASH":
         cost_override["mode"] = "intraday"
@@ -574,7 +613,12 @@ def _close_position(
         override_cost_model=cost_override,
     )
 
-    if side == "SELL":
+    if is_futures:
+        entry_notional = position.qty * position.avg_price
+        margin_reserved = float(getattr(position, "margin_reserved", 0.0) or 0.0)
+        pnl = (entry_notional - notional) if side == "SELL" else (notional - entry_notional)
+        state.cash += margin_reserved + pnl - exit_cost
+    elif side == "SELL":
         state.cash -= notional + exit_cost
     else:
         state.cash += notional - exit_cost
@@ -585,6 +629,7 @@ def _close_position(
             side=exit_side,
             instrument_kind=position.instrument_kind,
             lot_size=position.lot_size,
+            qty_lots=qty_lots,
             qty=position.qty,
             fill_price=price,
             status=reason,
@@ -606,6 +651,8 @@ def _close_position(
             "exit_cost": exit_cost,
             "reason": reason,
             "instrument_kind": position.instrument_kind,
+            "qty_lots": qty_lots,
+            "margin_released": float(getattr(position, "margin_reserved", 0.0) or 0.0),
         },
     )
     return exit_cost
@@ -617,6 +664,11 @@ def run_paper_step(
     payload: dict[str, Any],
     store: DataStore | None = None,
 ) -> dict[str, Any]:
+    store = store or DataStore(
+        parquet_root=settings.parquet_root,
+        duckdb_path=settings.duckdb_path,
+        feature_cache_root=settings.feature_cache_root,
+    )
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
     policy = _resolve_execution_policy(session, state, settings, regime)
@@ -660,11 +712,6 @@ def run_paper_step(
     resolved_timeframes: list[str] = []
 
     if should_generate:
-        store = store or DataStore(
-            parquet_root=settings.parquet_root,
-            duckdb_path=settings.duckdb_path,
-            feature_cache_root=settings.feature_cache_root,
-        )
         resolved_timeframes = _resolve_timeframes(payload, policy)
         resolved_bundle_id = _resolve_bundle_id(session, payload, policy)
         resolved_dataset_id = _resolve_dataset_id(session, payload, policy, resolved_timeframes)
@@ -727,8 +774,20 @@ def run_paper_step(
             )
         signals_source = "generated"
 
+    if not resolved_timeframes:
+        resolved_timeframes = _resolve_timeframes(payload, policy)
+    if resolved_bundle_id is None:
+        resolved_bundle_id = _resolve_bundle_id(session, payload, policy)
+    if resolved_dataset_id is None:
+        resolved_dataset_id = _resolve_dataset_id(session, payload, policy, resolved_timeframes)
+    primary_timeframe = resolved_timeframes[0] if resolved_timeframes else "1d"
+
     current_positions = get_positions(session)
     open_symbols = {p.symbol for p in current_positions}
+    open_underlyings = {
+        str((p.metadata_json or {}).get("underlying_symbol", p.symbol)).upper()
+        for p in current_positions
+    }
     max_positions = int(policy["max_positions"])
     correlation_threshold = float(
         state_settings.get(
@@ -748,28 +807,43 @@ def run_paper_step(
         key=lambda item: float(item.get("signal_strength", 0.0)),
         reverse=True,
     )
+    candidate_symbols = {
+        str(item.get("symbol", "")).upper() for item in candidates if str(item.get("symbol", "")).strip()
+    }
+    candidate_symbols.update(open_underlyings)
     sectors = {
         row.symbol: (row.sector or "UNKNOWN")
         for row in session.exec(
             select(Symbol).where(
-                Symbol.symbol.in_([str(s.get("symbol", "")).upper() for s in candidates])
+                Symbol.symbol.in_(list(candidate_symbols))
             )
         ).all()
     }
     sector_counts: dict[str, int] = {}
     for pos in current_positions:
-        sector = sectors.get(pos.symbol, "UNKNOWN")
+        underlying = str((pos.metadata_json or {}).get("underlying_symbol", pos.symbol)).upper()
+        sector = sectors.get(underlying, sectors.get(pos.symbol, "UNKNOWN"))
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
     selected_symbols = set(open_symbols)
+    selected_underlyings = set(open_underlyings)
 
     for signal in candidates:
         symbol = str(signal.get("symbol", "")).upper()
         side = str(signal.get("side", "BUY")).upper()
         template = str(signal.get("template", "trend_breakout"))
-        instrument_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
+        requested_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
+        underlying_symbol = str(signal.get("underlying_symbol", symbol)).upper()
+        allowed_set: set[str] | None = None
+        if isinstance(policy_allowed_instruments, dict):
+            allowed_for_side = policy_allowed_instruments.get(side)
+            if isinstance(allowed_for_side, list) and allowed_for_side:
+                allowed_set = {str(item).upper() for item in allowed_for_side}
+        instrument_kind = requested_kind
+        instrument_choice_reason = "provided"
         base_meta = {
             "symbol": symbol,
+            "underlying_symbol": underlying_symbol,
             "template": template,
             "side": side,
             "instrument_kind": instrument_kind,
@@ -781,7 +855,7 @@ def run_paper_step(
         if len(current_positions) + len(selected_signals) >= max_positions:
             skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
             continue
-        if symbol in open_symbols:
+        if underlying_symbol in selected_underlyings:
             skipped_signals.append({**base_meta, "reason": "already_open"})
             continue
         if side not in {"BUY", "SELL"}:
@@ -806,11 +880,99 @@ def run_paper_step(
             )
             continue
 
-        if isinstance(policy_allowed_instruments, dict):
-            allowed_for_side = policy_allowed_instruments.get(side)
-            if isinstance(allowed_for_side, list) and allowed_for_side:
-                allowed_set = {str(item).upper() for item in allowed_for_side}
-                if instrument_kind not in allowed_set:
+        if side == "SELL":
+            explicit_future = None
+            if _is_futures_kind(instrument_kind):
+                explicit_future = store.find_instrument(
+                    session,
+                    symbol=symbol,
+                    instrument_kind=instrument_kind,
+                )
+            if explicit_future is not None:
+                underlying_symbol = str(explicit_future.underlying or underlying_symbol).upper()
+                signal["symbol"] = explicit_future.symbol
+                signal["underlying_symbol"] = underlying_symbol
+                signal["instrument_kind"] = explicit_future.kind
+                signal["lot_size"] = max(1, int(explicit_future.lot_size))
+                instrument_kind = explicit_future.kind
+                instrument_choice_reason = "provided_futures_signal"
+                if explicit_future.id is not None:
+                    fut_frame = store.get_ohlcv_for_instrument(
+                        session,
+                        instrument_id=int(explicit_future.id),
+                        timeframe=primary_timeframe,
+                        asof=asof_dt,
+                        window=20,
+                    )
+                    if not fut_frame.empty:
+                        fut_bar = fut_frame.iloc[-1]
+                        fut_open = float(fut_bar["open"])
+                        fut_close = float(fut_bar["close"])
+                        signal["price"] = fut_open if fut_open > 0 else fut_close
+                        signal["adv"] = float(
+                            np.nan_to_num(
+                                (fut_frame["close"] * fut_frame["volume"]).tail(20).mean(),
+                                nan=0.0,
+                            )
+                        )
+            if explicit_future is not None:
+                pass
+            else:
+                futures_candidate: Instrument | None = None
+                if allowed_set is None or "STOCK_FUT" in allowed_set:
+                    futures_candidate = store.find_futures_instrument_for_underlying(
+                        session,
+                        underlying=underlying_symbol,
+                        bundle_id=resolved_bundle_id,
+                        timeframe=primary_timeframe,
+                    )
+                if futures_candidate is not None:
+                    instrument_kind = futures_candidate.kind
+                    symbol = futures_candidate.symbol
+                    signal["symbol"] = symbol
+                    signal["underlying_symbol"] = underlying_symbol
+                    signal["instrument_kind"] = instrument_kind
+                    signal["lot_size"] = max(1, int(futures_candidate.lot_size))
+                    instrument_choice_reason = "swing_short_requires_futures"
+                    if futures_candidate.id is not None:
+                        fut_frame = store.get_ohlcv_for_instrument(
+                            session,
+                            instrument_id=int(futures_candidate.id),
+                            timeframe=primary_timeframe,
+                            asof=asof_dt,
+                            window=20,
+                        )
+                        if not fut_frame.empty:
+                            fut_bar = fut_frame.iloc[-1]
+                            fut_open = float(fut_bar["open"])
+                            fut_close = float(fut_bar["close"])
+                            signal["price"] = fut_open if fut_open > 0 else fut_close
+                            signal["adv"] = float(
+                                np.nan_to_num(
+                                    (fut_frame["close"] * fut_frame["volume"]).tail(20).mean(),
+                                    nan=0.0,
+                                )
+                            )
+                elif allowed_set is None or "EQUITY_CASH" in allowed_set:
+                    instrument_kind = "EQUITY_CASH"
+                    signal["instrument_kind"] = instrument_kind
+                    signal["symbol"] = underlying_symbol
+                    signal["underlying_symbol"] = underlying_symbol
+                    instrument_choice_reason = "cash_intraday_short_fallback"
+                else:
+                    skipped_signals.append(
+                        {
+                            **base_meta,
+                            "reason": "no_short_instrument_available",
+                        }
+                    )
+                    continue
+        else:
+            if allowed_set is not None and instrument_kind not in allowed_set:
+                if "EQUITY_CASH" in allowed_set:
+                    instrument_kind = "EQUITY_CASH"
+                    signal["instrument_kind"] = instrument_kind
+                else:
                     skipped_signals.append(
                         {
                             **base_meta,
@@ -819,7 +981,20 @@ def run_paper_step(
                     )
                     continue
 
-        sector = sectors.get(symbol, "UNKNOWN")
+        if allowed_set is not None and instrument_kind not in allowed_set:
+            skipped_signals.append(
+                {
+                    **base_meta,
+                    "instrument_kind": instrument_kind,
+                    "reason": "instrument_blocked_by_policy",
+                }
+            )
+            continue
+
+        signal["instrument_kind"] = instrument_kind
+        signal["instrument_choice_reason"] = instrument_choice_reason
+
+        sector = sectors.get(underlying_symbol, sectors.get(symbol, "UNKNOWN"))
         if sector_counts.get(sector, 0) >= 2:
             skipped_signals.append({**base_meta, "reason": "sector_concentration"})
             continue
@@ -831,6 +1006,7 @@ def run_paper_step(
 
         selected_signals.append(signal)
         selected_symbols.add(symbol)
+        selected_underlyings.add(underlying_symbol)
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
     entry_cost_total = 0.0
@@ -839,14 +1015,26 @@ def run_paper_step(
 
     for signal in selected_signals:
         symbol = str(signal.get("symbol", "")).upper()
+        underlying_symbol = str(signal.get("underlying_symbol", symbol)).upper()
         side = str(signal.get("side", "BUY")).upper()
         template = str(signal.get("template", "trend_breakout"))
         instrument_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
         lot_size = max(1, int(signal.get("lot_size", 1)))
+        is_futures = _is_futures_kind(instrument_kind)
         price = float(signal.get("price", 0.0))
         stop_distance = float(signal.get("stop_distance", 0.0))
-        qty = _position_size(state.equity, float(policy["risk_per_trade"]), stop_distance)
-        qty = _adjust_qty_for_lot(qty, lot_size)
+        if is_futures:
+            qty_lots = _position_size_lots(
+                state.equity,
+                float(policy["risk_per_trade"]),
+                stop_distance,
+                lot_size,
+            )
+            qty = qty_lots * lot_size
+        else:
+            qty = _position_size(state.equity, float(policy["risk_per_trade"]), stop_distance)
+            qty = _adjust_qty_for_lot(qty, lot_size)
+            qty_lots = max(1, int(np.floor(qty / max(1, lot_size)))) if qty > 0 else 0
         if price <= 0 or qty <= 0:
             skipped_signals.append(
                 {
@@ -866,24 +1054,43 @@ def run_paper_step(
         adv_notional = float(signal.get("adv", 0.0))
         if adv_notional > 0 and max_position_value_pct_adv > 0:
             max_notional = adv_notional * max_position_value_pct_adv
-            qty_adv = int(np.floor(max_notional / max(fill_price, 1e-9)))
-            qty_adv = _adjust_qty_for_lot(qty_adv, lot_size)
-            if qty_adv <= 0:
-                skipped_signals.append(
-                    {
-                        "symbol": symbol,
-                        "template": template,
-                        "side": side,
-                        "instrument_kind": instrument_kind,
-                        "reason": "adv_cap_zero_qty",
-                        "policy_mode": policy.get("mode"),
-                        "policy_id": policy.get("policy_id"),
-                    }
-                )
-                continue
-            qty = min(qty, qty_adv)
+            if is_futures:
+                qty_adv_lots = int(np.floor(max_notional / max(fill_price * lot_size, 1e-9)))
+                if qty_adv_lots <= 0:
+                    skipped_signals.append(
+                        {
+                            "symbol": symbol,
+                            "template": template,
+                            "side": side,
+                            "instrument_kind": instrument_kind,
+                            "reason": "adv_cap_zero_qty",
+                            "policy_mode": policy.get("mode"),
+                            "policy_id": policy.get("policy_id"),
+                        }
+                    )
+                    continue
+                qty_lots = min(qty_lots, qty_adv_lots)
+                qty = qty_lots * lot_size
+            else:
+                qty_adv = int(np.floor(max_notional / max(fill_price, 1e-9)))
+                qty_adv = _adjust_qty_for_lot(qty_adv, lot_size)
+                if qty_adv <= 0:
+                    skipped_signals.append(
+                        {
+                            "symbol": symbol,
+                            "template": template,
+                            "side": side,
+                            "instrument_kind": instrument_kind,
+                            "reason": "adv_cap_zero_qty",
+                            "policy_mode": policy.get("mode"),
+                            "policy_id": policy.get("policy_id"),
+                        }
+                    )
+                    continue
+                qty = min(qty, qty_adv)
+                qty_lots = max(1, int(np.floor(qty / max(1, lot_size)))) if qty > 0 else 0
 
-        if qty <= 0:
+        if qty <= 0 or qty_lots <= 0:
             skipped_signals.append(
                 {
                     "symbol": symbol,
@@ -899,6 +1106,9 @@ def run_paper_step(
 
         must_exit_by_eod = side == "SELL" and instrument_kind == "EQUITY_CASH"
         notional = qty * fill_price
+        margin_required = (
+            notional * _futures_margin_pct(state_settings, settings) if is_futures else 0.0
+        )
         cost_override = dict(policy.get("cost_model", {}))
         if must_exit_by_eod:
             cost_override["mode"] = "intraday"
@@ -910,7 +1120,20 @@ def run_paper_step(
             state_settings=state_settings,
             override_cost_model=cost_override,
         )
-        if side == "BUY" and (notional + entry_cost > state.cash):
+        if is_futures and (margin_required + entry_cost > state.cash):
+            skipped_signals.append(
+                {
+                    "symbol": symbol,
+                    "template": template,
+                    "side": side,
+                    "instrument_kind": instrument_kind,
+                    "reason": "insufficient_margin",
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                }
+            )
+            continue
+        if (not is_futures) and side == "BUY" and (notional + entry_cost > state.cash):
             skipped_signals.append(
                 {
                     "symbol": symbol,
@@ -930,6 +1153,7 @@ def run_paper_step(
             side=side,
             instrument_kind=instrument_kind,
             lot_size=lot_size,
+            qty_lots=qty_lots,
             qty=qty,
             fill_price=fill_price,
             status="FILLED",
@@ -946,7 +1170,10 @@ def run_paper_step(
                 target_price = float(signal.get("target_price"))
             else:
                 target_price = None
-            state.cash -= notional + entry_cost
+            if is_futures:
+                state.cash -= margin_required + entry_cost
+            else:
+                state.cash -= notional + entry_cost
         else:
             stop_price = fill_price + stop_distance
             if (
@@ -956,19 +1183,28 @@ def run_paper_step(
                 target_price = float(signal.get("target_price"))
             else:
                 target_price = None
-            state.cash += notional - entry_cost
+            if is_futures:
+                state.cash -= margin_required + entry_cost
+            else:
+                state.cash += notional - entry_cost
 
         position = PaperPosition(
             symbol=symbol,
             side=side,
             instrument_kind=instrument_kind,
             lot_size=lot_size,
+            qty_lots=qty_lots,
+            margin_reserved=margin_required,
             must_exit_by_eod=must_exit_by_eod,
             qty=qty,
             avg_price=fill_price,
             stop_price=stop_price,
             target_price=target_price,
-            metadata_json={"template": template},
+            metadata_json={
+                "template": template,
+                "underlying_symbol": underlying_symbol,
+                "instrument_choice_reason": signal.get("instrument_choice_reason", "provided"),
+            },
             opened_at=_utc_now(),
         )
         entry_cost_total += entry_cost
@@ -981,10 +1217,14 @@ def run_paper_step(
             "signal_selected",
             {
                 "symbol": symbol,
+                "underlying_symbol": underlying_symbol,
                 "template": template,
                 "side": side,
                 "instrument_kind": instrument_kind,
+                "instrument_choice_reason": signal.get("instrument_choice_reason", "provided"),
                 "qty": qty,
+                "qty_lots": qty_lots,
+                "margin_reserved": margin_required,
                 "fill_price": fill_price,
                 "signal_strength": float(signal.get("signal_strength", 0.0)),
                 "selection_reason": policy.get("selection_reason"),
@@ -1008,6 +1248,7 @@ def run_paper_step(
             )
         current_positions.append(position)
         open_symbols.add(symbol)
+        open_underlyings.add(underlying_symbol)
 
     mark_prices = payload.get("mark_prices", {})
     for position in list(current_positions):

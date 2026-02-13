@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     futures_stt_sell_bps: float = 1.0
     futures_exchange_txn_bps: float = 0.19
     futures_stamp_buy_bps: float = 0.0
+    futures_initial_margin_pct: float = 0.18
+    futures_symbol_mapping_strategy: str = "underlying_lookup"
     max_position_value_pct_adv: float = 0.01
     diversification_corr_threshold: float = 0.75
     allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])

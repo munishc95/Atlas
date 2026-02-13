@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from app.engine.costs import estimate_equity_delivery_cost, estimate_intraday_cost
+from app.engine.costs import estimate_equity_delivery_cost, estimate_futures_cost, estimate_intraday_cost
 from app.engine.indicators import atr
 from app.engine.metrics import calculate_metrics
 
@@ -64,7 +64,10 @@ def _transaction_cost(notional: float, side: str, config: BacktestConfig) -> flo
     if notional <= 0:
         return 0.0
     if config.cost_model_enabled:
-        if str(config.cost_mode).lower() == "intraday":
+        mode = str(config.cost_mode).lower()
+        if mode in {"futures", "derivatives"}:
+            return estimate_futures_cost(notional=notional, side=side, config=config.cost_params)
+        if mode == "intraday":
             return estimate_intraday_cost(notional=notional, side=side, config=config.cost_params)
         return estimate_equity_delivery_cost(
             notional=notional, side=side, config=config.cost_params

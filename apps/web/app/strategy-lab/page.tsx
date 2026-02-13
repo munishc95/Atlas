@@ -15,9 +15,20 @@ import { atlasApi } from "@/src/lib/api/endpoints";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import { qk } from "@/src/lib/query/keys";
 
-function parseNumeric(value: string): number {
+function parseParamValue(raw: string, current: unknown): unknown {
+  if (typeof current === "number") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof current === "boolean") {
+    return raw.trim().toLowerCase() === "true";
+  }
+  return raw;
+}
+
+function asNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 export default function StrategyLabPage() {
@@ -25,7 +36,7 @@ export default function StrategyLabPage() {
   const [symbol, setSymbol] = useState("NIFTY500");
   const [timeframe, setTimeframe] = useState("1d");
   const [selectedTemplate, setSelectedTemplate] = useState<string>("trend_breakout");
-  const [params, setParams] = useState<Record<string, number>>({});
+  const [params, setParams] = useState<Record<string, unknown>>({});
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [backtestId, setBacktestId] = useState<number | null>(null);
   const [tradePage, setTradePage] = useState(1);
@@ -51,7 +62,7 @@ export default function StrategyLabPage() {
     if (!fallback) {
       return;
     }
-    const defaults = (fallback.default_params ?? {}) as Record<string, number>;
+    const defaults = (fallback.default_params ?? {}) as Record<string, unknown>;
     setSelectedTemplate(String(fallback.key));
     setParams(defaults);
   }, [templatesQuery.data, selectedTemplate]);
@@ -65,8 +76,8 @@ export default function StrategyLabPage() {
           strategy_template: selectedTemplate,
           params,
           config: {
-            atr_stop_mult: params.atr_stop_mult ?? 2,
-            atr_trail_mult: params.atr_trail_mult ?? 2,
+            atr_stop_mult: asNumber(params.atr_stop_mult, 2),
+            atr_trail_mult: asNumber(params.atr_trail_mult, 2),
           },
         })
       ).data,
@@ -206,7 +217,7 @@ export default function StrategyLabPage() {
                   type="button"
                   onClick={() => {
                     setSelectedTemplate(key);
-                    setParams((template.default_params ?? {}) as Record<string, number>);
+                    setParams((template.default_params ?? {}) as Record<string, unknown>);
                   }}
                   className={`rounded-xl border p-3 text-left ${
                     selected ? "border-accent bg-accent/5" : "border-border"
@@ -244,6 +255,7 @@ export default function StrategyLabPage() {
             </select>
           </label>
           {Object.entries(params)
+            .filter(([, value]) => typeof value !== "object" || value === null)
             .slice(0, 6)
             .map(([key, value]) => (
               <label key={key} className="text-sm text-muted">
@@ -254,7 +266,7 @@ export default function StrategyLabPage() {
                   onChange={(event) =>
                     setParams((prev) => ({
                       ...prev,
-                      [key]: parseNumeric(event.target.value),
+                      [key]: parseParamValue(event.target.value, value),
                     }))
                   }
                 />

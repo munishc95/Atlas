@@ -15,6 +15,9 @@ export default function UniverseDataPage() {
   const queryClient = useQueryClient();
   const [symbol, setSymbol] = useState("NIFTY500");
   const [timeframe, setTimeframe] = useState("1d");
+  const [instrumentKind, setInstrumentKind] = useState("EQUITY_CASH");
+  const [underlying, setUnderlying] = useState("");
+  const [lotSize, setLotSize] = useState("1");
   const [bundleId, setBundleId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -53,6 +56,13 @@ export default function UniverseDataPage() {
       formData.append("symbol", symbol);
       formData.append("timeframe", timeframe);
       formData.append("provider", "csv");
+      formData.append("instrument_kind", instrumentKind);
+      if (underlying.trim()) {
+        formData.append("underlying", underlying.trim().toUpperCase());
+      }
+      if (instrumentKind !== "EQUITY_CASH") {
+        formData.append("lot_size", lotSize);
+      }
       if (bundleId) {
         formData.append("bundle_id", String(bundleId));
       }
@@ -124,6 +134,7 @@ export default function UniverseDataPage() {
                 <tr>
                   <th className="px-3 py-2 font-medium">Bundle</th>
                   <th className="px-3 py-2 font-medium">Symbol</th>
+                  <th className="px-3 py-2 font-medium">Instrument</th>
                   <th className="px-3 py-2 font-medium">Timeframe</th>
                   <th className="px-3 py-2 font-medium">Start</th>
                   <th className="px-3 py-2 font-medium">End</th>
@@ -135,6 +146,17 @@ export default function UniverseDataPage() {
                   <tr key={String(row.id)} className="border-t border-border">
                     <td className="px-3 py-2">{String(row.bundle_name ?? "-")}</td>
                     <td className="px-3 py-2">{String(row.symbol)}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs ${
+                          String(row.instrument_kind ?? "EQUITY_CASH").includes("FUT")
+                            ? "bg-warning/15 text-warning"
+                            : "bg-accent/10 text-accent"
+                        }`}
+                      >
+                        {String(row.instrument_kind ?? "EQUITY_CASH")}
+                      </span>
+                    </td>
                     <td className="px-3 py-2">{String(row.timeframe)}</td>
                     <td className="px-3 py-2">{String(row.start_date)}</td>
                     <td className="px-3 py-2">{String(row.end_date)}</td>
@@ -161,6 +183,15 @@ export default function UniverseDataPage() {
               placeholder="Symbol"
             />
             <select
+              value={instrumentKind}
+              onChange={(event) => setInstrumentKind(event.target.value)}
+              className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
+            >
+              <option value="EQUITY_CASH">EQUITY_CASH</option>
+              <option value="STOCK_FUT">STOCK_FUT</option>
+              <option value="INDEX_FUT">INDEX_FUT</option>
+            </select>
+            <select
               value={timeframe}
               onChange={(event) => setTimeframe(event.target.value)}
               className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
@@ -182,6 +213,19 @@ export default function UniverseDataPage() {
                 </option>
               ))}
             </select>
+            <input
+              className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
+              value={underlying}
+              onChange={(event) => setUnderlying(event.target.value.toUpperCase())}
+              placeholder="Underlying (optional)"
+            />
+            <input
+              className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
+              value={lotSize}
+              onChange={(event) => setLotSize(event.target.value)}
+              placeholder="Lot size"
+              disabled={instrumentKind === "EQUITY_CASH"}
+            />
             <input
               type="file"
               accept=".csv,.parquet"

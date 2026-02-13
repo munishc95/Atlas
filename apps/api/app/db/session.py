@@ -70,6 +70,12 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("paperposition", "lot_size"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE paperposition ADD COLUMN lot_size INTEGER DEFAULT 1"))
+    if not _has_column("paperposition", "qty_lots"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperposition ADD COLUMN qty_lots INTEGER DEFAULT 1"))
+    if not _has_column("paperposition", "margin_reserved"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperposition ADD COLUMN margin_reserved FLOAT DEFAULT 0"))
     if not _has_column("paperposition", "must_exit_by_eod"):
         bool_type = "INTEGER" if is_sqlite else "BOOLEAN"
         with engine.begin() as conn:
@@ -91,6 +97,9 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("paperorder", "lot_size"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE paperorder ADD COLUMN lot_size INTEGER DEFAULT 1"))
+    if not _has_column("paperorder", "qty_lots"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperorder ADD COLUMN qty_lots INTEGER DEFAULT 1"))
 
     with engine.begin() as conn:
         conn.execute(

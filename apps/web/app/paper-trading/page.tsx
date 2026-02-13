@@ -61,6 +61,10 @@ export default function PaperTradingPage() {
 
   const state = paperStateQuery.data?.state;
   const paperMode = String(state?.settings_json?.paper_mode ?? "strategy");
+  const allowedSides = Array.isArray(state?.settings_json?.allowed_sides)
+    ? (state?.settings_json?.allowed_sides as string[]).join(" / ")
+    : "BUY";
+  const squareoffCutoff = String(state?.settings_json?.paper_short_squareoff_time ?? "15:20");
 
   useEffect(() => {
     setAutopilotEnabled(paperMode === "policy");
@@ -231,6 +235,10 @@ export default function PaperTradingPage() {
           Execution mode: {paperMode === "policy" ? "Policy mode" : "Single strategy mode"}
           {activePolicy ? ` (${activePolicy.name})` : ""}
         </p>
+        <p className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+          Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off {squareoffCutoff}) +
+          Futures swing (if available).
+        </p>
         <div className="mt-3">
           <label className="text-xs text-muted">
             Universe bundle
@@ -331,7 +339,16 @@ export default function PaperTradingPage() {
                     onClick={() => setSelectedPositionId(position.id)}
                     className="focus-ring text-left"
                   >
-                    {position.symbol} qty {position.qty} @ {position.avg_price}
+                    <span
+                      className={`mr-2 inline-flex rounded-full px-2 py-0.5 text-[10px] ${
+                        position.instrument_kind.includes("FUT")
+                          ? "bg-warning/15 text-warning"
+                          : "bg-accent/10 text-accent"
+                      }`}
+                    >
+                      {position.instrument_kind.includes("FUT") ? "FUT" : "EQUITY"}
+                    </span>
+                    {position.symbol} qty {position.qty} ({position.qty_lots} lots) @ {position.avg_price}
                   </button>
                 </li>
               ))}
@@ -352,6 +369,7 @@ export default function PaperTradingPage() {
               <thead className="bg-surface text-left text-muted">
                 <tr>
                   <th className="px-3 py-2">Symbol</th>
+                  <th className="px-3 py-2">Instrument</th>
                   <th className="px-3 py-2">Side</th>
                   <th className="px-3 py-2">Qty</th>
                   <th className="px-3 py-2">Status</th>
@@ -361,8 +379,21 @@ export default function PaperTradingPage() {
                 {orders.map((order) => (
                   <tr key={order.id} className="border-t border-border">
                     <td className="px-3 py-2">{order.symbol}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${
+                          order.instrument_kind.includes("FUT")
+                            ? "bg-warning/15 text-warning"
+                            : "bg-accent/10 text-accent"
+                        }`}
+                      >
+                        {order.instrument_kind.includes("FUT") ? "FUT" : "EQUITY"}
+                      </span>
+                    </td>
                     <td className="px-3 py-2">{order.side}</td>
-                    <td className="px-3 py-2">{order.qty}</td>
+                    <td className="px-3 py-2">
+                      {order.qty} ({order.qty_lots} lots)
+                    </td>
                     <td className="px-3 py-2">
                       <button
                         type="button"
@@ -416,6 +447,12 @@ export default function PaperTradingPage() {
               <span className="text-muted">Quantity:</span> {selectedPosition.qty}
             </p>
             <p>
+              <span className="text-muted">Lots:</span> {selectedPosition.qty_lots}
+            </p>
+            <p>
+              <span className="text-muted">Reserved margin:</span> {selectedPosition.margin_reserved}
+            </p>
+            <p>
               <span className="text-muted">Average price:</span> {selectedPosition.avg_price}
             </p>
             <p>
@@ -450,6 +487,9 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Quantity:</span> {selectedOrder.qty}
+            </p>
+            <p>
+              <span className="text-muted">Lots:</span> {selectedOrder.qty_lots}
             </p>
             <p>
               <span className="text-muted">Fill:</span> {selectedOrder.fill_price ?? "-"}
@@ -490,6 +530,8 @@ export default function PaperTradingPage() {
                 <thead className="bg-surface text-left text-muted">
                   <tr>
                     <th className="px-2 py-2">Symbol</th>
+                    <th className="px-2 py-2">Side</th>
+                    <th className="px-2 py-2">Instrument</th>
                     <th className="px-2 py-2">Template</th>
                     <th className="px-2 py-2">Strength</th>
                   </tr>
@@ -498,6 +540,10 @@ export default function PaperTradingPage() {
                   {preview.signals.slice(0, 50).map((signal) => (
                     <tr key={`${signal.symbol}-${signal.template}-${signal.timeframe}`} className="border-t border-border">
                       <td className="px-2 py-2">{signal.symbol}</td>
+                      <td className="px-2 py-2">{signal.side}</td>
+                      <td className="px-2 py-2">
+                        {signal.instrument_kind ?? "EQUITY_CASH"} ({signal.lot_size ?? 1})
+                      </td>
                       <td className="px-2 py-2">{signal.template}</td>
                       <td className="px-2 py-2">{signal.signal_strength.toFixed(3)}</td>
                     </tr>

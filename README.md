@@ -87,11 +87,15 @@ Job progress stream:
 ## Sample workflow
 
 1. Go to `Universe & Data`, select/create a universe bundle, and import `data/sample/NIFTY500_1d.csv`.
-2. Go to `Strategy Lab` and run backtest.
-3. Go to `Walk-Forward` and run walk-forward (Optuna trials configurable).
-4. Go to `Auto Research` and run multi-template robust scan.
-5. Create a policy from the research run and click `Use in Paper`.
-6. Go to `Paper Trading`, enable `Autopilot`, click `Preview Signals`, then `Run Step`.
+2. Import futures series for short support (example `data/sample/NIFTY500_FUT_1d.csv`) with:
+   - `instrument_kind=STOCK_FUT`
+   - `underlying=NIFTY500`
+   - `lot_size` set (required for futures)
+3. Go to `Strategy Lab` and run backtest.
+4. Go to `Walk-Forward` and run walk-forward (Optuna trials configurable).
+5. Go to `Auto Research` and run multi-template robust scan.
+6. Create a policy from the research run and click `Use in Paper`.
+7. Go to `Paper Trading`, enable `Autopilot`, click `Preview Signals`, then `Run Step`.
 
 ## Auto Research workflow
 
@@ -110,7 +114,7 @@ From the UI:
 4. Review candidates and explanations.
 5. Click `Create Policy`, then `Use in Paper`.
 
-## Paper Trading Autopilot (v1.4)
+## Paper Trading Autopilot (v1.5)
 
 `POST /api/paper/run-step` now supports autonomous signal generation:
 
@@ -118,6 +122,8 @@ From the UI:
 - If paper mode is `policy` and `signals` is empty, generation is automatic.
 - Generation is bundle-scoped (policy universe bundle), deterministic, ranked, and explainable.
 - Feature cache is used for indicator reads (`data/features`) with incremental refresh.
+- Strategy templates are direction-aware (`long`, `short`, `both`) and can emit native SELL signals.
+- For SELL candidates, execution prefers `STOCK_FUT` when available in the selected bundle.
 
 Response now includes:
 
@@ -148,14 +154,31 @@ Paper Trading UI includes:
 - Paper Autopilot previews/runs can use `bundle_id` directly.
 - Symbol scans are deterministic and can be limited to top liquid names by ADV.
 
-## Short support (India-correct v1.4)
+## Short support (India-correct v1.5)
 
 - `allowed_sides` runtime setting controls allowed entry sides (default: `["BUY"]`).
 - Cash equity shorts (`EQUITY_CASH`) are intraday only:
   - open short positions are marked `must_exit_by_eod=true`
   - auto square-off is enforced after cutoff (`paper_short_squareoff_time`, default `15:20 IST`)
   - forced exits are logged in audit trail.
-- Derivatives short scaffold is added via `Instrument` model (`STOCK_FUT`, `INDEX_FUT`) and lot/tick metadata.
+- Swing shorts use futures when available:
+  - import continuous futures data locally (`*_FUT`) and map `underlying` + `lot_size`
+  - paper engine sizes futures in lots (`qty_lots`) and reserves margin (`futures_initial_margin_pct`)
+  - futures positions can be held overnight (no EOD forced square-off)
+- Instrument selection rule for SELL:
+  - prefer `STOCK_FUT` in selected bundle
+  - fallback to intraday `EQUITY_CASH` short (if allowed)
+  - otherwise skip with explicit reason (`no_short_instrument_available` / `shorts_disabled`)
+
+## Universe/Bundles and futures mapping
+
+- `DatasetBundle` is the deterministic universe boundary for research + autopilot scanning.
+- Bundle membership can include both cash symbols and futures symbols.
+- Futures import requires:
+  - valid OHLCV columns
+  - `instrument_kind=STOCK_FUT` (or `INDEX_FUT`)
+  - positive `lot_size`
+  - optional `underlying` (defaults from `_FUT` suffix convention).
 
 ## India-lite transaction costs
 

@@ -64,6 +64,8 @@ export default function SettingsPage() {
         futures_stt_sell_bps: Number(form.futures_stt_sell_bps),
         futures_exchange_txn_bps: Number(form.futures_exchange_txn_bps),
         futures_stamp_buy_bps: Number(form.futures_stamp_buy_bps),
+        futures_initial_margin_pct: Number(form.futures_initial_margin_pct),
+        futures_symbol_mapping_strategy: form.futures_symbol_mapping_strategy,
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -109,6 +111,8 @@ export default function SettingsPage() {
       { key: "futures_stt_sell_bps", label: "Futures STT sell (bps)" },
       { key: "futures_exchange_txn_bps", label: "Futures exchange txn charges (bps)" },
       { key: "futures_stamp_buy_bps", label: "Futures stamp duty buy (bps)" },
+      { key: "futures_initial_margin_pct", label: "Futures initial margin %" },
+      { key: "futures_symbol_mapping_strategy", label: "Futures symbol mapping strategy" },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],

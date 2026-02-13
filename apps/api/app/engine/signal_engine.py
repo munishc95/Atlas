@@ -10,9 +10,14 @@ import numpy as np
 import pandas as pd
 from sqlmodel import Session
 
-from app.engine.indicators import atr, ema, rsi
+from app.engine.indicators import atr
 from app.services.data_store import DataStore
-from app.strategies.templates import get_template, list_templates, signal_strength
+from app.strategies.templates import (
+    generate_signal_sides,
+    get_template,
+    list_templates,
+    signal_strength,
+)
 
 
 SignalMode = Literal["paper", "preview"]
@@ -70,28 +75,33 @@ def _normalize_templates(values: list[str] | None) -> list[str]:
 def _merge_params(
     template_key: str,
     params_overrides: dict[str, Any] | None,
-) -> dict[str, float | int]:
+) -> dict[str, Any]:
     template = get_template(template_key)
-    merged: dict[str, float | int] = dict(template.default_params)
+    merged: dict[str, Any] = dict(template.default_params)
     if not isinstance(params_overrides, dict):
         return merged
+
+    def _copy_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return dict(value)
+        return value
 
     global_params = params_overrides.get("global")
     if isinstance(global_params, dict):
         merged.update(
             {
-                str(key): value
+                str(key): _copy_value(value)
                 for key, value in global_params.items()
-                if isinstance(value, (int, float))
+                if isinstance(value, (int, float, str, dict))
             }
         )
     template_params = params_overrides.get(template_key)
     if isinstance(template_params, dict):
         merged.update(
             {
-                str(key): value
+                str(key): _copy_value(value)
                 for key, value in template_params.items()
-                if isinstance(value, (int, float))
+                if isinstance(value, (int, float, str, dict))
             }
         )
 
@@ -99,8 +109,8 @@ def _merge_params(
     for key, value in params_overrides.items():
         if key in {"global", template_key}:
             continue
-        if isinstance(value, (int, float)):
-            merged[str(key)] = value
+        if isinstance(value, (int, float, str, dict)):
+            merged[str(key)] = _copy_value(value)
     return merged
 
 
@@ -156,79 +166,25 @@ def _corr_map(frames: dict[str, pd.DataFrame]) -> dict[str, dict[str, float]]:
 def _deterministic_tiebreak(
     *,
     symbol: str,
+    side: str,
     template: str,
     timeframe: str,
     seed: int,
 ) -> str:
-    return hashlib.sha1(f"{seed}:{symbol}:{template}:{timeframe}".encode("utf-8")).hexdigest()
+    return hashlib.sha1(f"{seed}:{symbol}:{side}:{template}:{timeframe}".encode("utf-8")).hexdigest()
 
 
-def _resolve_ema(features: pd.DataFrame, frame: pd.DataFrame, period: int) -> pd.Series:
-    key = f"ema_{period}"
-    if key in features.columns:
-        return pd.Series(features[key].to_numpy(), index=frame.index, dtype="float64")
-    return ema(frame["close"], period)
-
-
-def _resolve_rsi(features: pd.DataFrame, frame: pd.DataFrame, period: int) -> pd.Series:
-    key = f"rsi_{period}"
-    if key in features.columns:
-        return pd.Series(features[key].to_numpy(), index=frame.index, dtype="float64")
-    return rsi(frame["close"], period)
-
-
-def _trigger_template(
+def _signal_sides_for_template(
     *,
     template_key: str,
     frame: pd.DataFrame,
-    features: pd.DataFrame,
-    params: dict[str, float | int],
-) -> bool:
-    if len(frame) < 50 or len(features) < 50:
-        return False
-    frame = frame.reset_index(drop=True)
-    features = features.reset_index(drop=True)
-
-    if template_key == "trend_breakout":
-        trend_period = int(params.get("trend_period", 200))
-        breakout_lookback = int(params.get("breakout_lookback", 20))
-        trend = frame["close"] > _resolve_ema(features, frame, trend_period)
-        breakout_level = (
-            frame["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
-        )
-        if breakout_level.empty:
-            return False
-        return bool(trend.iloc[-1] and frame["close"].iloc[-1] > breakout_level.iloc[-1])
-
-    if template_key == "pullback_trend":
-        ema_fast = _resolve_ema(features, frame, int(params.get("ema_fast", 20)))
-        ema_mid = _resolve_ema(features, frame, int(params.get("ema_mid", 50)))
-        ema_slow = _resolve_ema(features, frame, int(params.get("ema_slow", 100)))
-        rsi_period = int(params.get("rsi_period", 4))
-        rsi_oversold = float(params.get("rsi_oversold", 25))
-        pullback_band = float(params.get("pullback_band", 0.99))
-        trend = (frame["close"] > ema_slow) & (ema_fast > ema_mid)
-        pullback = _resolve_rsi(features, frame, rsi_period) < rsi_oversold
-        near_band = frame["close"] <= (ema_fast * pullback_band)
-        return bool((trend & pullback & near_band).fillna(False).iloc[-1])
-
-    if template_key == "squeeze_breakout":
-        breakout_lookback = int(params.get("breakout_lookback", 20))
-        squeeze_prev = (features["bb_upper"] < features["kc_upper"]) & (
-            features["bb_lower"] > features["kc_lower"]
-        )
-        breakout_level = (
-            frame["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
-        )
-        vol_confirm = pd.Series(True, index=frame.index)
-        if "volume" in frame.columns:
-            vol_ma = frame["volume"].rolling(20, min_periods=20).mean()
-            vol_confirm = frame["volume"] >= vol_ma
-        shifted = squeeze_prev.shift(1).astype("boolean").fillna(False).astype(bool)
-        trigger = shifted & (frame["close"] > breakout_level) & vol_confirm.fillna(False)
-        return bool(trigger.fillna(False).iloc[-1])
-
-    return False
+    params: dict[str, Any],
+) -> dict[str, pd.Series]:
+    signals = generate_signal_sides(template_key, frame, params=params)
+    return {
+        "BUY": signals.get("BUY", pd.Series(False, index=frame.index)).fillna(False).astype(bool),
+        "SELL": signals.get("SELL", pd.Series(False, index=frame.index)).fillna(False).astype(bool),
+    }
 
 
 def _resolve_symbols(
@@ -363,110 +319,178 @@ def generate_signals_for_policy(
             min_len = min(len(frame), len(features))
             frame = frame.tail(min_len).reset_index(drop=True)
             features = features.tail(min_len).reset_index(drop=True)
+            if len(frame) < 2:
+                continue
 
             for template_key in templates:
                 evaluated_candidates += 1
                 params = _merge_params(template_key, params_overrides)
-                if not _trigger_template(
+                side_series = _signal_sides_for_template(
                     template_key=template_key,
                     frame=frame,
-                    features=features,
                     params=params,
-                ):
-                    continue
-
-                atr_period = int(params.get("atr_period", 14))
-                if atr_period == 14 and "atr_14" in features.columns:
-                    atr_value = float(np.nan_to_num(features["atr_14"].iloc[-1], nan=0.0))
-                else:
-                    # Fallback for non-cached ATR period.
-                    atr_value = float(
-                        np.nan_to_num(atr(frame, period=atr_period).iloc[-1], nan=0.0)
-                    )
-                price = float(frame.iloc[-1]["close"])
-                if price <= 0 or atr_value <= 0:
-                    continue
-
-                atr_mult = float(params.get("atr_stop_mult", params.get("atr_stop", 2.0)))
-                stop_distance = atr_value * atr_mult
-                if stop_distance <= 0:
-                    continue
-
-                side = _merge_string_override(
-                    template_key,
-                    params_overrides,
-                    key="side",
-                    default="BUY",
                 )
+                instrument = store.find_instrument(session, symbol=symbol)
+                default_instrument_kind = instrument.kind if instrument is not None else "EQUITY_CASH"
                 instrument_kind = _merge_string_override(
                     template_key,
                     params_overrides,
                     key="instrument_kind",
-                    default="EQUITY_CASH",
+                    default=default_instrument_kind,
                 )
-                lot_size = max(
-                    1,
-                    int(
-                        params.get(
-                            "lot_size",
-                            store.get_lot_size(
-                                session,
-                                symbol=symbol,
-                                instrument_kind=instrument_kind,
-                            ),
-                        )
-                    ),
+                side_override = _merge_string_override(
+                    template_key,
+                    params_overrides,
+                    key="side",
+                    default="AUTO",
                 )
+                decision_idx = len(frame) - 2
+                fill_idx = len(frame) - 1
+                candidate_sides = ["BUY", "SELL"]
+                if side_override in {"BUY", "SELL"}:
+                    candidate_sides = [side_override]
 
-                take_profit_r = params.get("take_profit_r")
-                if isinstance(take_profit_r, (int, float)):
-                    target_price = (
-                        price + float(take_profit_r) * stop_distance
-                        if side == "BUY"
-                        else max(0.0, price - float(take_profit_r) * stop_distance)
+                for side in candidate_sides:
+                    signal_on_decision_bar = bool(
+                        side_series.get(side, pd.Series(False, index=frame.index)).iloc[decision_idx]
                     )
-                else:
-                    target_price = None
+                    if not signal_on_decision_bar:
+                        continue
 
-                raw_strength = float(signal_strength(frame, len(frame) - 1))
-                adv = float(
-                    np.nan_to_num((frame["close"] * frame["volume"]).tail(20).mean(), nan=0.0)
-                )
-                atr_pct = float(
-                    np.nan_to_num(features.get("atr_pct", pd.Series([0.0])).iloc[-1], nan=0.0)
-                )
-                liquidity_component = float(np.tanh(np.log1p(max(0.0, adv)) / 20.0))
-                stability_component = 1.0 - min(1.0, max(0.0, atr_pct) * 15.0)
-                ranking_score = (
-                    weights["signal"] * raw_strength
-                    + weights["liquidity"] * liquidity_component
-                    + weights["stability"] * stability_component
-                )
-
-                ranked.append(
-                    {
-                        "symbol": symbol.upper(),
-                        "side": "SELL" if side == "SELL" else "BUY",
-                        "template": template_key,
-                        "timeframe": timeframe,
-                        "price": price,
-                        "stop_distance": stop_distance,
-                        "target_price": target_price,
-                        "signal_strength": float(ranking_score),
-                        "raw_signal_strength": raw_strength,
-                        "adv": adv,
-                        "vol_scale": max(0.0, atr_pct),
-                        "signal_at": str(frame.iloc[-1]["datetime"]),
-                        "source_mode": mode,
-                        "instrument_kind": instrument_kind,
-                        "lot_size": lot_size,
-                        "ranking_weights": weights,
-                        "explanation": (
-                            f"{template_key} triggered on latest {timeframe} bar "
-                            f"(rank={ranking_score:.3f}, raw={raw_strength:.3f}, adv={adv:.0f})."
+                    atr_period = int(params.get("atr_period", 14))
+                    if atr_period == 14 and "atr_14" in features.columns:
+                        atr_value = float(np.nan_to_num(features["atr_14"].iloc[decision_idx], nan=0.0))
+                    else:
+                        # Fallback for non-cached ATR period.
+                        atr_value = float(
+                            np.nan_to_num(atr(frame, period=atr_period).iloc[decision_idx], nan=0.0)
+                        )
+                    execution_symbol = symbol.upper()
+                    underlying_symbol = symbol.upper()
+                    instrument_choice_reason = "provided"
+                    chosen_instrument_kind = instrument_kind
+                    chosen_lot_size = max(
+                        1,
+                        int(
+                            params.get(
+                                "lot_size",
+                                store.get_lot_size(
+                                    session,
+                                    symbol=symbol,
+                                    instrument_kind=instrument_kind,
+                                ),
+                            )
                         ),
-                    }
-                )
+                    )
+
+                    chosen_frame = frame
+                    chosen_features = features
+                    chosen_decision_idx = decision_idx
+                    chosen_fill_idx = fill_idx
+
+                    if side == "SELL" and instrument_kind not in {"STOCK_FUT", "INDEX_FUT"}:
+                        futures_instrument = store.find_futures_instrument_for_underlying(
+                            session,
+                            underlying=underlying_symbol,
+                            bundle_id=bundle_id,
+                            timeframe=timeframe,
+                        )
+                        if futures_instrument is not None:
+                            fut_frame = _filtered_frame(
+                                store.load_ohlcv(symbol=futures_instrument.symbol, timeframe=timeframe),
+                                asof_ts,
+                            )
+                            if len(fut_frame) >= 2:
+                                fut_features = _filtered_frame(
+                                    store.load_features(symbol=futures_instrument.symbol, timeframe=timeframe),
+                                    asof_ts,
+                                )
+                                if len(fut_features) >= 2:
+                                    fut_min_len = min(len(fut_frame), len(fut_features))
+                                    fut_frame = fut_frame.tail(fut_min_len).reset_index(drop=True)
+                                    fut_features = fut_features.tail(fut_min_len).reset_index(drop=True)
+                                    chosen_features = fut_features
+                                chosen_frame = fut_frame.reset_index(drop=True)
+                                chosen_decision_idx = len(chosen_frame) - 2
+                                chosen_fill_idx = len(chosen_frame) - 1
+                                execution_symbol = futures_instrument.symbol.upper()
+                                chosen_instrument_kind = futures_instrument.kind
+                                chosen_lot_size = max(1, int(futures_instrument.lot_size))
+                                instrument_choice_reason = "swing_short_requires_futures"
+
+                    price = float(chosen_frame.iloc[chosen_fill_idx]["open"])
+                    if price <= 0:
+                        price = float(chosen_frame.iloc[chosen_decision_idx]["close"])
+                    if price <= 0 or atr_value <= 0:
+                        continue
+
+                    atr_mult = float(params.get("atr_stop_mult", params.get("atr_stop", 2.0)))
+                    stop_distance = atr_value * atr_mult
+                    if stop_distance <= 0:
+                        continue
+
+                    take_profit_r = params.get("take_profit_r")
+                    if isinstance(take_profit_r, (int, float)):
+                        target_price = (
+                            price + float(take_profit_r) * stop_distance
+                            if side == "BUY"
+                            else max(0.0, price - float(take_profit_r) * stop_distance)
+                        )
+                    else:
+                        target_price = None
+
+                    raw_strength = float(signal_strength(frame, decision_idx))
+                    adv = float(
+                        np.nan_to_num(
+                            (
+                                chosen_frame["close"] * chosen_frame["volume"]
+                            ).iloc[: chosen_decision_idx + 1].tail(20).mean(),
+                            nan=0.0,
+                        )
+                    )
+                    atr_pct = float(
+                        np.nan_to_num(
+                            chosen_features.get("atr_pct", pd.Series([0.0])).iloc[
+                                chosen_decision_idx
+                            ],
+                            nan=0.0,
+                        )
+                    )
+                    liquidity_component = float(np.tanh(np.log1p(max(0.0, adv)) / 20.0))
+                    stability_component = 1.0 - min(1.0, max(0.0, atr_pct) * 15.0)
+                    ranking_score = (
+                        weights["signal"] * raw_strength
+                        + weights["liquidity"] * liquidity_component
+                        + weights["stability"] * stability_component
+                    )
+
+                    ranked.append(
+                        {
+                            "symbol": execution_symbol,
+                            "underlying_symbol": underlying_symbol,
+                            "side": side,
+                            "template": template_key,
+                            "timeframe": timeframe,
+                            "price": price,
+                            "stop_distance": stop_distance,
+                            "target_price": target_price,
+                            "signal_strength": float(ranking_score),
+                            "raw_signal_strength": raw_strength,
+                            "adv": adv,
+                            "vol_scale": max(0.0, atr_pct),
+                            "signal_at": str(frame.iloc[decision_idx]["datetime"]),
+                            "fill_at": str(chosen_frame.iloc[chosen_fill_idx]["datetime"]),
+                            "source_mode": mode,
+                            "instrument_kind": chosen_instrument_kind,
+                            "lot_size": chosen_lot_size,
+                            "instrument_choice_reason": instrument_choice_reason,
+                            "ranking_weights": weights,
+                            "explanation": (
+                                f"{template_key} {side} signal at close on {timeframe} "
+                                f"(rank={ranking_score:.3f}, raw={raw_strength:.3f}, adv={adv:.0f})."
+                            ),
+                        }
+                    )
         else:
             continue
         break
@@ -491,10 +515,12 @@ def generate_signals_for_policy(
             -float(row.get("signal_strength", 0.0)),
             -float(row.get("adv", 0.0)),
             str(row["symbol"]),
+            str(row.get("side", "BUY")),
             str(row.get("template", "")),
             str(row.get("timeframe", "")),
             _deterministic_tiebreak(
                 symbol=str(row["symbol"]),
+                side=str(row.get("side", "BUY")),
                 template=str(row.get("template", "")),
                 timeframe=str(row.get("timeframe", "")),
                 seed=seed,

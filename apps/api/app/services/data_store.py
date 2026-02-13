@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from sqlmodel import Session, select
 
+from app.core.exceptions import APIError
 from app.db.models import Dataset, DatasetBundle, Instrument, Symbol
 from app.engine.indicators import adx, atr, bollinger_bands, ema, keltner_channels, rsi
 
@@ -48,6 +49,14 @@ class DataStore:
     def _normalize_symbols(self, symbols: list[str]) -> list[str]:
         values = [str(item).upper().strip() for item in symbols if str(item).strip()]
         return list(dict.fromkeys(sorted(values)))
+
+    def _infer_underlying(self, symbol: str, instrument_kind: str) -> str:
+        symbol_up = symbol.upper()
+        if instrument_kind == "EQUITY_CASH":
+            return symbol_up
+        if symbol_up.endswith("_FUT"):
+            return symbol_up.removesuffix("_FUT")
+        return symbol_up
 
     def _get_or_create_bundle(
         self,
@@ -128,6 +137,10 @@ class DataStore:
         frame: pd.DataFrame,
         provider: str,
         checksum: str | None = None,
+        instrument_kind: str = "EQUITY_CASH",
+        underlying: str | None = None,
+        lot_size: int | None = None,
+        tick_size: float = 0.05,
         *,
         bundle_id: int | None = None,
         bundle_name: str | None = None,
@@ -138,6 +151,21 @@ class DataStore:
 
         init_db()
         symbol = symbol.upper()
+        kind = str(instrument_kind or "EQUITY_CASH").upper()
+        resolved_underlying = (
+            str(underlying).upper().strip()
+            if isinstance(underlying, str) and underlying.strip()
+            else self._infer_underlying(symbol, kind)
+        )
+        resolved_lot_size = int(lot_size) if lot_size is not None else 1
+        if kind in {"STOCK_FUT", "INDEX_FUT"} and resolved_lot_size <= 0:
+            raise APIError(
+                code="invalid_instrument_metadata",
+                message="Futures datasets require a positive lot_size.",
+            )
+        if resolved_lot_size <= 0:
+            resolved_lot_size = 1
+
         clean = frame.copy()
         clean["datetime"] = pd.to_datetime(clean["datetime"], utc=True)
         clean = clean.sort_values("datetime")
@@ -149,22 +177,30 @@ class DataStore:
         if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:
             session.add(Symbol(symbol=symbol, name=symbol))
         if (
-            session.exec(
-                select(Instrument)
-                .where(Instrument.symbol == symbol)
-                .where(Instrument.kind == "EQUITY_CASH")
-            ).first()
-            is None
+            resolved_underlying != symbol
+            and session.exec(select(Symbol).where(Symbol.symbol == resolved_underlying)).first() is None
         ):
-            session.add(
-                Instrument(
-                    symbol=symbol,
-                    kind="EQUITY_CASH",
-                    underlying=symbol,
-                    lot_size=1,
-                    tick_size=0.05,
-                )
+            session.add(Symbol(symbol=resolved_underlying, name=resolved_underlying))
+
+        instrument = session.exec(
+            select(Instrument)
+            .where(Instrument.symbol == symbol)
+            .where(Instrument.kind == kind)
+            .order_by(Instrument.id.desc())
+        ).first()
+        if instrument is None:
+            instrument = Instrument(
+                symbol=symbol,
+                kind=kind,
+                underlying=resolved_underlying,
+                lot_size=resolved_lot_size,
+                tick_size=float(tick_size),
             )
+        else:
+            instrument.underlying = resolved_underlying
+            instrument.lot_size = resolved_lot_size
+            instrument.tick_size = float(tick_size)
+        session.add(instrument)
 
         bundle = self._get_or_create_bundle(
             session,
@@ -228,6 +264,15 @@ class DataStore:
                 select(DatasetBundle).where(DatasetBundle.id.in_(list(bundle_ids)))
             ).all()
             bundle_lookup = {int(row.id): row.name for row in bundle_rows if row.id is not None}
+        symbols = {row.symbol for row in rows}
+        instrument_lookup: dict[str, Instrument] = {}
+        if symbols:
+            instrument_rows = session.exec(
+                select(Instrument).where(Instrument.symbol.in_(list(symbols))).order_by(Instrument.id.desc())
+            ).all()
+            for item in instrument_rows:
+                if item.symbol not in instrument_lookup:
+                    instrument_lookup[item.symbol] = item
         return [
             {
                 "id": row.id,
@@ -237,6 +282,17 @@ class DataStore:
                 else None,
                 "provider": row.provider,
                 "symbol": row.symbol,
+                "instrument_kind": (
+                    instrument_lookup[row.symbol].kind if row.symbol in instrument_lookup else "EQUITY_CASH"
+                ),
+                "underlying": (
+                    instrument_lookup[row.symbol].underlying
+                    if row.symbol in instrument_lookup
+                    else row.symbol
+                ),
+                "lot_size": (
+                    instrument_lookup[row.symbol].lot_size if row.symbol in instrument_lookup else 1
+                ),
                 "timeframe": row.timeframe,
                 "start_date": row.start_date.isoformat(),
                 "end_date": row.end_date.isoformat(),
@@ -540,6 +596,76 @@ class DataStore:
         if row is None:
             return 1
         return max(1, int(row.lot_size))
+
+    def get_instrument(
+        self,
+        session: Session,
+        instrument_id: int,
+    ) -> Instrument | None:
+        return session.get(Instrument, instrument_id)
+
+    def find_instrument(
+        self,
+        session: Session,
+        *,
+        symbol: str,
+        instrument_kind: str | None = None,
+    ) -> Instrument | None:
+        query = select(Instrument).where(Instrument.symbol == symbol.upper())
+        if instrument_kind:
+            query = query.where(Instrument.kind == instrument_kind.upper())
+        return session.exec(query.order_by(Instrument.id.desc())).first()
+
+    def find_futures_instrument_for_underlying(
+        self,
+        session: Session,
+        *,
+        underlying: str,
+        bundle_id: int | None = None,
+        timeframe: str | None = None,
+    ) -> Instrument | None:
+        query = (
+            select(Instrument)
+            .where(Instrument.underlying == underlying.upper())
+            .where(Instrument.kind == "STOCK_FUT")
+            .order_by(Instrument.symbol.asc())
+        )
+        rows = session.exec(query).all()
+        if not rows:
+            return None
+        if bundle_id is None:
+            return rows[0]
+        bundle_symbols = set(self.get_bundle_symbols(session, bundle_id, timeframe=timeframe))
+        for row in rows:
+            if row.symbol in bundle_symbols:
+                return row
+        return None
+
+    def get_ohlcv_for_instrument(
+        self,
+        session: Session,
+        *,
+        instrument_id: int,
+        timeframe: str,
+        asof: datetime | None = None,
+        window: int | None = None,
+    ) -> pd.DataFrame:
+        instrument = self.get_instrument(session, instrument_id)
+        if instrument is None:
+            return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
+        frame = self.load_ohlcv(symbol=instrument.symbol, timeframe=timeframe)
+        if frame.empty:
+            return frame
+        if asof is not None:
+            ts = pd.Timestamp(asof)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            frame = frame[frame["datetime"] <= ts]
+        if window is not None and int(window) > 0:
+            frame = frame.tail(int(window))
+        return frame.reset_index(drop=True)
 
     def get_futures_chain(
         self,

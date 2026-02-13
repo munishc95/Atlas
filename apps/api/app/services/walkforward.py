@@ -129,6 +129,10 @@ def execute_walkforward(
         "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
         "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
         "gst_rate": settings.gst_rate,
+        "futures_brokerage_bps": settings.futures_brokerage_bps,
+        "futures_stt_sell_bps": settings.futures_stt_sell_bps,
+        "futures_exchange_txn_bps": settings.futures_exchange_txn_bps,
+        "futures_stamp_buy_bps": settings.futures_stamp_buy_bps,
     }
 
     fold_rows: list[dict[str, Any]] = []

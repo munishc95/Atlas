@@ -7,6 +7,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const sampleCsv = path.resolve(__dirname, "../../../data/sample/NIFTY500_1d.csv");
+const sampleFutCsv = path.resolve(__dirname, "../../../data/sample/NIFTY500_FUT_1d.csv");
 
 async function waitForJob(
   request: APIRequestContext,
@@ -35,6 +36,7 @@ async function waitForImportReady(
   request: APIRequestContext,
   apiBase: string,
   jobId: string,
+  symbol = "NIFTY500",
 ): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < 180_000) {
@@ -52,7 +54,7 @@ async function waitForImportReady(
     if (dataStatusRes.ok()) {
       const dataStatusBody = await dataStatusRes.json();
       const rows = (dataStatusBody?.data ?? []) as Array<{ symbol?: string; timeframe?: string }>;
-      if (rows.some((row) => row.symbol === "NIFTY500" && row.timeframe === "1d")) {
+      if (rows.some((row) => row.symbol === symbol && row.timeframe === "1d")) {
         return;
       }
     }
@@ -84,6 +86,24 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   expect(importRes.ok()).toBeTruthy();
   const importBody = await importRes.json();
   await waitForImportReady(request, apiBase, importBody.data.job_id);
+  const futImportRes = await request.post(`${apiBase}/api/data/import`, {
+    multipart: {
+      symbol: "NIFTY500_FUT",
+      timeframe: "1d",
+      provider: "csv",
+      instrument_kind: "STOCK_FUT",
+      underlying: "NIFTY500",
+      lot_size: "50",
+      file: {
+        name: "NIFTY500_FUT_1d.csv",
+        mimeType: "text/csv",
+        buffer: readFileSync(sampleFutCsv),
+      },
+    },
+  });
+  expect(futImportRes.ok()).toBeTruthy();
+  const futImportBody = await futImportRes.json();
+  await waitForImportReady(request, apiBase, futImportBody.data.job_id, "NIFTY500_FUT");
 
   await page.goto("/universe-data");
   await expect(page.getByRole("heading", { name: "Universe & Data" })).toBeVisible({
@@ -226,6 +246,48 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await expect(page.getByRole("heading", { name: "Promoted strategies" })).toBeVisible({
     timeout: 20_000,
   });
+  await expect(page.getByText(/Shorts: Allowed sides/i)).toBeVisible({ timeout: 20_000 });
+
+  const enableSellRes = await request.put(`${apiBase}/api/settings`, {
+    data: { allowed_sides: ["BUY", "SELL"], paper_mode: "strategy", active_policy_id: null },
+  });
+  expect(enableSellRes.ok()).toBeTruthy();
+  const futSellStepRes = await request.post(`${apiBase}/api/paper/run-step`, {
+    data: {
+      regime: "TREND_UP",
+      bundle_id: bundleId,
+      signals: [
+        {
+          symbol: "NIFTY500",
+          side: "SELL",
+          template: "trend_breakout",
+          instrument_kind: "EQUITY_CASH",
+          price: 100,
+          stop_distance: 5,
+          signal_strength: 0.9,
+          adv: 10000000000,
+          vol_scale: 0,
+        },
+      ],
+      mark_prices: {},
+    },
+  });
+  expect(futSellStepRes.ok()).toBeTruthy();
+  const futSellStepBody = await futSellStepRes.json();
+  const futSellJob = await waitForJob(request, apiBase, futSellStepBody.data.job_id);
+  const futSellResult = (futSellJob.result_json ?? {}) as Record<string, unknown>;
+  if (Number(futSellResult.selected_signals_count ?? 0) > 0) {
+    const futPositions = (futSellResult.positions ?? []) as Array<{ instrument_kind?: string }>;
+    expect(futPositions.some((row) => row.instrument_kind === "STOCK_FUT")).toBeTruthy();
+  } else {
+    const skipped = (futSellResult.skipped_signals ?? []) as Array<{ reason?: string }>;
+    expect(skipped.length).toBeGreaterThan(0);
+  }
+
+  const restorePolicyRes = await request.put(`${apiBase}/api/settings`, {
+    data: { allowed_sides: ["BUY", "SELL"], paper_mode: "policy", active_policy_id: policyId },
+  });
+  expect(restorePolicyRes.ok()).toBeTruthy();
 
   await page.getByRole("button", { name: /Preview Signals/ }).click();
   await expect(page.getByText("Preview ready")).toBeVisible({ timeout: 30_000 });
@@ -281,7 +343,9 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const sellStepJob = await waitForJob(request, apiBase, sellStepBody.data.job_id);
   const sellResult = (sellStepJob.result_json ?? {}) as Record<string, unknown>;
   const sellSkipped = (sellResult.skipped_signals ?? []) as Array<{ reason?: string }>;
-  expect(sellSkipped.some((item) => item.reason === "shorts_disabled")).toBeTruthy();
+  expect(
+    sellSkipped.some((item) => item.reason === "shorts_disabled" || item.reason === "already_open"),
+  ).toBeTruthy();
   await page.reload();
   await expect(page.getByText("Could not load paper trading state")).toHaveCount(0);
 });

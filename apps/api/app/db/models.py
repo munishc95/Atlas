@@ -163,6 +163,8 @@ class PaperPosition(SQLModel, table=True):
     side: str = Field(default="BUY", max_length=8)
     instrument_kind: str = Field(default="EQUITY_CASH", max_length=16)
     lot_size: int = 1
+    qty_lots: int = 1
+    margin_reserved: float = 0.0
     must_exit_by_eod: bool = False
     qty: int
     avg_price: float
@@ -178,6 +180,7 @@ class PaperOrder(SQLModel, table=True):
     side: str = Field(max_length=8)
     instrument_kind: str = Field(default="EQUITY_CASH", max_length=16)
     lot_size: int = 1
+    qty_lots: int = 1
     qty: int
     limit_price: float | None = None
     fill_price: float | None = None

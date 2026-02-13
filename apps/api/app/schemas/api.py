@@ -21,7 +21,7 @@ class BacktestRunRequest(BaseModel):
     symbol: str
     timeframe: str = "1d"
     strategy_template: str
-    params: dict[str, float | int] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
     start: str | None = None
     end: str | None = None
@@ -119,3 +119,5 @@ class RuntimeSettingsRequest(BaseModel):
     futures_stt_sell_bps: float | None = None
     futures_exchange_txn_bps: float | None = None
     futures_stamp_buy_bps: float | None = None
+    futures_initial_margin_pct: float | None = None
+    futures_symbol_mapping_strategy: str | None = None

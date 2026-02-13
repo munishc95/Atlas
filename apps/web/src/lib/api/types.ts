@@ -87,6 +87,8 @@ export type ApiPaperPosition = {
   side: "BUY" | "SELL";
   instrument_kind: string;
   lot_size: number;
+  qty_lots: number;
+  margin_reserved: number;
   must_exit_by_eod: boolean;
   qty: number;
   avg_price: number;
@@ -101,6 +103,7 @@ export type ApiPaperOrder = {
   side: "BUY" | "SELL";
   instrument_kind: string;
   lot_size: number;
+  qty_lots: number;
   qty: number;
   fill_price?: number | null;
   status: string;

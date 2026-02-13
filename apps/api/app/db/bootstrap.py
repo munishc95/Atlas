@@ -43,6 +43,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "futures_stt_sell_bps": settings.futures_stt_sell_bps,
                     "futures_exchange_txn_bps": settings.futures_exchange_txn_bps,
                     "futures_stamp_buy_bps": settings.futures_stamp_buy_bps,
+                    "futures_initial_margin_pct": settings.futures_initial_margin_pct,
+                    "futures_symbol_mapping_strategy": settings.futures_symbol_mapping_strategy,
                     "paper_mode": "strategy",
                     "active_policy_id": None,
                 },
