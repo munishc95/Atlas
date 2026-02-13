@@ -26,7 +26,9 @@ def true_range(df: pd.DataFrame) -> pd.Series:
     high = df["high"]
     low = df["low"]
     prev_close = df["close"].shift(1)
-    tr_parts = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1)
+    tr_parts = pd.concat(
+        [(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    )
     return tr_parts.max(axis=1)
 
 
@@ -44,8 +46,12 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
     tr = true_range(df)
     tr_smooth = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / tr_smooth
-    minus_di = 100 * minus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / tr_smooth
+    plus_di = (
+        100 * plus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / tr_smooth
+    )
+    minus_di = (
+        100 * minus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean() / tr_smooth
+    )
 
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     return dx.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()

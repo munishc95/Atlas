@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from math import sqrt
 
-import numpy as np
 import pandas as pd
 
 
@@ -52,7 +51,9 @@ def calculate_metrics(
 
     downside = returns[returns < 0]
     downside_std = float(downside.std(ddof=0)) if not downside.empty else 0.0
-    sortino = _safe_div(mean_ret, downside_std) * sqrt(periods_per_year) if downside_std > 0 else 0.0
+    sortino = (
+        _safe_div(mean_ret, downside_std) * sqrt(periods_per_year) if downside_std > 0 else 0.0
+    )
 
     wins = trades[trades["pnl"] > 0] if not trades.empty else pd.DataFrame()
     losses = trades[trades["pnl"] <= 0] if not trades.empty else pd.DataFrame()
@@ -64,7 +65,9 @@ def calculate_metrics(
     gross_loss = float(losses["pnl"].sum()) if not losses.empty else 0.0
     profit_factor = _safe_div(gross_win, abs(gross_loss)) if gross_loss < 0 else 0.0
 
-    exposure_pct = float((open_position_count > 0).mean() * 100) if not open_position_count.empty else 0.0
+    exposure_pct = (
+        float((open_position_count > 0).mean() * 100) if not open_position_count.empty else 0.0
+    )
     turnover = float(trades["notional"].sum() / equity.mean()) if not trades.empty else 0.0
     avg_holding_period = float(trades["holding_bars"].mean()) if not trades.empty else 0.0
 

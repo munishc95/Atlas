@@ -69,7 +69,10 @@ export default function UniverseDataPage() {
   }, [activeJobId, queryClient, stream.isTerminal, stream.status]);
 
   const symbols = universeQuery.data?.symbols ?? [];
-  const pagedRows = useMemo(() => (dataStatusQuery.data ?? []).slice(0, 50), [dataStatusQuery.data]);
+  const pagedRows = useMemo(
+    () => (dataStatusQuery.data ?? []).slice(0, 50),
+    [dataStatusQuery.data],
+  );
 
   return (
     <div className="space-y-5">
@@ -77,7 +80,9 @@ export default function UniverseDataPage() {
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Universe & Data</h2>
-        <p className="mt-1 text-sm text-muted">NIFTY 500 universe management, liquidity filters, and data health.</p>
+        <p className="mt-1 text-sm text-muted">
+          NIFTY 500 universe management, liquidity filters, and data health.
+        </p>
 
         {dataStatusQuery.isLoading ? (
           <LoadingState label="Loading data status" />
@@ -125,7 +130,9 @@ export default function UniverseDataPage() {
       <section className="grid gap-4 lg:grid-cols-3">
         <article className="card p-4 lg:col-span-2">
           <h3 className="text-base font-semibold">Import wizard</h3>
-          <p className="mt-1 text-sm text-muted">Upload CSV/Parquet and register the dataset for backtests.</p>
+          <p className="mt-1 text-sm text-muted">
+            Upload CSV/Parquet and register the dataset for backtests.
+          </p>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <input
               className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
@@ -145,7 +152,9 @@ export default function UniverseDataPage() {
             <input
               type="file"
               accept=".csv,.parquet"
-              onChange={(event: ChangeEvent<HTMLInputElement>) => setFile(event.target.files?.[0] ?? null)}
+              onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                setFile(event.target.files?.[0] ?? null)
+              }
               className="focus-ring rounded-xl border border-border bg-panel px-3 py-2 md:col-span-2"
             />
             <button

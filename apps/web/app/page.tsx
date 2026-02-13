@@ -54,7 +54,9 @@ export default function DashboardPage() {
     if (activeJobId) {
       return;
     }
-    const running = (jobsQuery.data ?? []).find((job) => ["QUEUED", "RUNNING"].includes(job.status));
+    const running = (jobsQuery.data ?? []).find((job) =>
+      ["QUEUED", "RUNNING"].includes(job.status),
+    );
     if (running) {
       setActiveJobId(running.id);
     }
@@ -100,7 +102,10 @@ export default function DashboardPage() {
         {equityQuery.isLoading ? (
           <LoadingState label="Loading equity series" />
         ) : equityPoints.length === 0 ? (
-          <EmptyState title="No equity curve yet" action="Run a backtest in Strategy Lab to populate this chart." />
+          <EmptyState
+            title="No equity curve yet"
+            action="Run a backtest in Strategy Lab to populate this chart."
+          />
         ) : (
           <EquityChart points={equityPoints} />
         )}
@@ -118,7 +123,10 @@ export default function DashboardPage() {
               onRetry={() => void strategiesQuery.refetch()}
             />
           ) : (strategiesQuery.data ?? []).length === 0 ? (
-            <EmptyState title="No promoted strategy" action="Run walk-forward and promote a strategy." />
+            <EmptyState
+              title="No promoted strategy"
+              action="Run walk-forward and promote a strategy."
+            />
           ) : (
             <div className="mt-3 overflow-hidden rounded-xl border border-border">
               <table className="w-full text-sm">

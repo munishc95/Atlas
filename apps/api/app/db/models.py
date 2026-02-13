@@ -82,6 +82,47 @@ class WalkForwardFold(SQLModel, table=True):
     metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
+class ResearchRun(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    dataset_id: int | None = Field(default=None, foreign_key="dataset.id")
+    timeframes_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+class ResearchCandidate(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_researchcandidate_run_score", "run_id", "score"),
+        Index("ix_researchcandidate_run_rank", "run_id", "rank"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(foreign_key="researchrun.id", index=True)
+    symbol: str = Field(index=True, max_length=32)
+    timeframe: str = Field(max_length=16)
+    strategy_key: str = Field(index=True, max_length=64)
+    best_params_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    oos_metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    stress_metrics_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    param_dispersion: float = 0.0
+    fold_variance: float = 0.0
+    stress_pass_rate: float = 0.0
+    score: float = 0.0
+    rank: int = 0
+    accepted: bool = False
+    explanations_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+
+class Policy(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, max_length=128)
+    created_at: datetime = Field(default_factory=utc_now)
+    definition_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    promoted_from_research_run_id: int | None = Field(default=None, foreign_key="researchrun.id")
+
+
 class PaperState(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     equity: float = 1_000_000.0

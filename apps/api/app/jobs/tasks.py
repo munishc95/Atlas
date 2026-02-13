@@ -15,6 +15,7 @@ from app.services.data_store import DataStore
 from app.services.importer import import_ohlcv_bytes
 from app.services.jobs import append_job_log, update_job
 from app.services.paper import run_paper_step
+from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
 
 
@@ -78,7 +79,9 @@ def _execute_with_retry(
             raise
 
 
-def run_backtest_job(job_id: str, payload: dict[str, Any], max_runtime_seconds: int | None = None) -> None:
+def run_backtest_job(
+    job_id: str, payload: dict[str, Any], max_runtime_seconds: int | None = None
+) -> None:
     settings = get_settings()
     store = _store()
     with Session(engine) as session:
@@ -112,13 +115,18 @@ def run_backtest_job(job_id: str, payload: dict[str, Any], max_runtime_seconds: 
             )
 
 
-def run_walkforward_job(job_id: str, payload: dict[str, Any], max_runtime_seconds: int | None = None) -> None:
+def run_walkforward_job(
+    job_id: str, payload: dict[str, Any], max_runtime_seconds: int | None = None
+) -> None:
     settings = get_settings()
     store = _store()
 
     def progress_cb(progress: int, message: str | None = None) -> None:
-        with Session(engine) as cb_session:
-            _set_progress(cb_session, job_id, progress, message)
+        try:
+            with Session(engine) as cb_session:
+                _set_progress(cb_session, job_id, progress, message)
+        except Exception:  # noqa: BLE001
+            return
 
     with Session(engine) as session:
         try:
@@ -223,4 +231,48 @@ def run_paper_step_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "paper_step_failed", "message": str(exc)}},
+            )
+
+
+def run_research_job(
+    job_id: str, payload: dict[str, Any], max_runtime_seconds: int | None = None
+) -> None:
+    settings = get_settings()
+    store = _store()
+
+    def progress_cb(progress: int, message: str | None = None) -> None:
+        try:
+            with Session(engine) as cb_session:
+                _set_progress(cb_session, job_id, progress, message)
+        except Exception:  # noqa: BLE001
+            return
+
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=5)
+            _set_progress(session, job_id, 10, "Auto Research job started")
+            result = _execute_with_retry(
+                fn=lambda: execute_research_run(
+                    session=session,
+                    store=store,
+                    settings=settings,
+                    payload=payload,
+                    progress_cb=progress_cb,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="research",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Auto Research job finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Auto Research failed: {exc}")
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "research_failed", "message": str(exc)}},
             )

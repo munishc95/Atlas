@@ -42,7 +42,11 @@ export function JobDrawer({ jobId, title = "Job Progress", onClose }: JobDrawerP
   }
 
   return (
-    <aside className="fixed right-3 top-3 z-30 w-[360px] max-w-[calc(100vw-1.5rem)]" role="dialog" aria-label={title}>
+    <aside
+      className="fixed right-3 top-3 z-30 w-[360px] max-w-[calc(100vw-1.5rem)]"
+      role="dialog"
+      aria-label={title}
+    >
       <div className="card p-4">
         <div className="mb-3 flex items-center justify-between">
           <div>

@@ -11,11 +11,7 @@ type TileProps = {
 
 export function MetricTile({ label, value, hint, tone = "default", helpKey }: TileProps) {
   const toneClass =
-    tone === "success"
-      ? "text-success"
-      : tone === "warning"
-        ? "text-warning"
-        : "text-ink";
+    tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : "text-ink";
 
   return (
     <article className="card p-4">

@@ -50,7 +50,9 @@ export function CommandPalette({ open, commands, onClose, onSelect }: CommandPal
       return commands;
     }
     return commands.filter((item) => {
-      const haystack = [item.label, item.subtitle ?? "", ...(item.keywords ?? [])].join(" ").toLowerCase();
+      const haystack = [item.label, item.subtitle ?? "", ...(item.keywords ?? [])]
+        .join(" ")
+        .toLowerCase();
       return haystack.includes(q);
     });
   }, [commands, query]);
@@ -75,7 +77,9 @@ export function CommandPalette({ open, commands, onClose, onSelect }: CommandPal
           </div>
           <div className="max-h-[55vh] overflow-auto p-2">
             {filtered.length === 0 ? (
-              <p className="rounded-lg px-3 py-2 text-sm text-muted">No command found for this search.</p>
+              <p className="rounded-lg px-3 py-2 text-sm text-muted">
+                No command found for this search.
+              </p>
             ) : (
               <ul className="space-y-1">
                 {filtered.map((item) => (
@@ -95,7 +99,12 @@ export function CommandPalette({ open, commands, onClose, onSelect }: CommandPal
           </div>
         </div>
       </div>
-      <button type="button" className="absolute inset-0 -z-10" onClick={onClose} aria-label="Close command palette" />
+      <button
+        type="button"
+        className="absolute inset-0 -z-10"
+        onClick={onClose}
+        aria-label="Close command palette"
+      />
     </div>
   );
 }

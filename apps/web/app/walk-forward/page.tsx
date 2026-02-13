@@ -153,11 +153,17 @@ export default function WalkForwardPage() {
 
   return (
     <div className="space-y-5">
-      <JobDrawer jobId={activeJobId} onClose={() => setActiveJobId(null)} title="Walk-Forward Job" />
+      <JobDrawer
+        jobId={activeJobId}
+        onClose={() => setActiveJobId(null)}
+        title="Walk-Forward Job"
+      />
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Walk-Forward & Robustness</h2>
-        <p className="mt-1 text-sm text-muted">IS/OOS split, fold stability, and stress tests before promotion.</p>
+        <p className="mt-1 text-sm text-muted">
+          IS/OOS split, fold stability, and stress tests before promotion.
+        </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <label className="text-sm text-muted">
@@ -244,14 +250,17 @@ export default function WalkForwardPage() {
       <section className="card p-4">
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold">Fold summary</h3>
-          <span className={`badge ${eligible ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}>
+          <span
+            className={`badge ${eligible ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}`}
+          >
             {eligible ? "Eligible for promotion" : "Blocked"}
           </span>
         </div>
 
         <div className="mt-3 grid gap-3 md:grid-cols-4">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
-            OOS profitable folds: {(Number(oosSummary.fold_profitability_pct ?? 0) * 100).toFixed(1)}%
+            OOS profitable folds:{" "}
+            {(Number(oosSummary.fold_profitability_pct ?? 0) * 100).toFixed(1)}%
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Worst fold drawdown: {Number(oosSummary.worst_fold_drawdown ?? 0).toFixed(3)}
@@ -291,7 +300,9 @@ export default function WalkForwardPage() {
                     <td className="px-3 py-2">{fold.fold_index}</td>
                     <td className="px-3 py-2">{fold.test_end}</td>
                     <td className="px-3 py-2">{fold.oos_score.toFixed(4)}</td>
-                    <td className={`px-3 py-2 ${fold.stress_pass ? "text-success" : "text-warning"}`}>
+                    <td
+                      className={`px-3 py-2 ${fold.stress_pass ? "text-success" : "text-warning"}`}
+                    >
                       <button
                         type="button"
                         onClick={() => setSelectedFoldIndex(fold.fold_index)}
@@ -331,9 +342,16 @@ export default function WalkForwardPage() {
       >
         {selectedFold ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Test end:</span> {selectedFold.test_end}</p>
-            <p><span className="text-muted">OOS score:</span> {selectedFold.oos_score.toFixed(4)}</p>
-            <p><span className="text-muted">Stress:</span> {selectedFold.stress_pass ? "Pass" : "Fail"}</p>
+            <p>
+              <span className="text-muted">Test end:</span> {selectedFold.test_end}
+            </p>
+            <p>
+              <span className="text-muted">OOS score:</span> {selectedFold.oos_score.toFixed(4)}
+            </p>
+            <p>
+              <span className="text-muted">Stress:</span>{" "}
+              {selectedFold.stress_pass ? "Pass" : "Fail"}
+            </p>
             <p className="text-sm font-semibold">Parameters</p>
             <pre className="overflow-auto rounded-xl bg-surface p-2 text-xs">
               {JSON.stringify(selectedFold.params, null, 2)}

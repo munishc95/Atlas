@@ -14,7 +14,13 @@ type SeriesInput = {
   color?: string;
 };
 
-export function EquityChart({ points = [], series = [] }: { points?: Point[]; series?: SeriesInput[] }) {
+export function EquityChart({
+  points = [],
+  series = [],
+}: {
+  points?: Point[];
+  series?: SeriesInput[];
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -60,7 +66,7 @@ export function EquityChart({ points = [], series = [] }: { points?: Point[]; se
         bottomColor: "rgba(0, 122, 255, 0.02)",
         lineWidth: 2,
       });
-      const source = series.length === 1 ? series[0]?.points ?? [] : points;
+      const source = series.length === 1 ? (series[0]?.points ?? []) : points;
       area.setData(source.map((p) => ({ time: p.time as never, value: p.value })));
     }
 

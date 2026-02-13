@@ -46,7 +46,8 @@ export default function StrategyLabPage() {
     if (!templatesQuery.data || templatesQuery.data.length === 0) {
       return;
     }
-    const fallback = templatesQuery.data.find((x) => String(x.key) === selectedTemplate) ?? templatesQuery.data[0];
+    const fallback =
+      templatesQuery.data.find((x) => String(x.key) === selectedTemplate) ?? templatesQuery.data[0];
     if (!fallback) {
       return;
     }
@@ -85,7 +86,9 @@ export default function StrategyLabPage() {
       return;
     }
     if (stream.status === "SUCCEEDED" || stream.status === "DONE") {
-      const maybeBacktestId = Number((stream.result as { backtest_id?: number } | null)?.backtest_id);
+      const maybeBacktestId = Number(
+        (stream.result as { backtest_id?: number } | null)?.backtest_id,
+      );
       if (Number.isFinite(maybeBacktestId) && maybeBacktestId > 0) {
         setBacktestId(maybeBacktestId);
         setTradePage(1);
@@ -152,10 +155,12 @@ export default function StrategyLabPage() {
     if (!backtestQuery.data) {
       return [] as Array<{ key: string; value: string }>;
     }
-    return Object.entries(backtestQuery.data.metrics_json ?? {}).slice(0, 8).map(([key, value]) => ({
-      key,
-      value: typeof value === "number" ? value.toFixed(4) : String(value),
-    }));
+    return Object.entries(backtestQuery.data.metrics_json ?? {})
+      .slice(0, 8)
+      .map(([key, value]) => ({
+        key,
+        value: typeof value === "number" ? value.toFixed(4) : String(value),
+      }));
   }, [backtestQuery.data]);
 
   const tradeRows = tradesQuery.data?.data ?? [];
@@ -178,7 +183,9 @@ export default function StrategyLabPage() {
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Strategy Lab</h2>
-        <p className="mt-1 text-sm text-muted">Template-based strategy research with realistic backtesting defaults.</p>
+        <p className="mt-1 text-sm text-muted">
+          Template-based strategy research with realistic backtesting defaults.
+        </p>
 
         {templatesQuery.isLoading ? (
           <LoadingState label="Loading templates" />
@@ -268,7 +275,10 @@ export default function StrategyLabPage() {
         {backtestQuery.isLoading && backtestId !== null ? (
           <LoadingState label="Loading backtest metrics" />
         ) : metricEntries.length === 0 ? (
-          <EmptyState title="No results yet" action="Run a backtest to render metrics and trades." />
+          <EmptyState
+            title="No results yet"
+            action="Run a backtest to render metrics and trades."
+          />
         ) : (
           metricEntries.map((entry) => (
             <MetricTile
@@ -354,7 +364,11 @@ export default function StrategyLabPage() {
             </div>
             <div className="mt-3 flex items-center justify-between text-sm text-muted">
               <span>
-                Page {tradePage} / {Math.max(1, Math.ceil(Number(tradeMeta.total ?? 0) / Number(tradeMeta.page_size ?? 20)))}
+                Page {tradePage} /{" "}
+                {Math.max(
+                  1,
+                  Math.ceil(Number(tradeMeta.total ?? 0) / Number(tradeMeta.page_size ?? 20)),
+                )}
               </span>
               <div className="space-x-2">
                 <button
@@ -381,7 +395,9 @@ export default function StrategyLabPage() {
 
       <section className="card p-4">
         <h3 className="text-base font-semibold">Backtest leaderboard</h3>
-        <p className="mt-1 text-sm text-muted">Filter, rank, and compare recent runs across templates and timeframes.</p>
+        <p className="mt-1 text-sm text-muted">
+          Filter, rank, and compare recent runs across templates and timeframes.
+        </p>
 
         <div className="mt-3 grid gap-2 md:grid-cols-5">
           <input
@@ -442,9 +458,16 @@ export default function StrategyLabPage() {
         {runsQuery.isLoading ? (
           <LoadingState label="Loading leaderboard" />
         ) : runsQuery.isError ? (
-          <ErrorState title="Could not load runs" action="Retry runs query." onRetry={() => void runsQuery.refetch()} />
+          <ErrorState
+            title="Could not load runs"
+            action="Retry runs query."
+            onRetry={() => void runsQuery.refetch()}
+          />
         ) : runRows.length === 0 ? (
-          <EmptyState title="No runs available" action="Run at least one backtest to populate the leaderboard." />
+          <EmptyState
+            title="No runs available"
+            action="Run at least one backtest to populate the leaderboard."
+          />
         ) : (
           <>
             <div className="mt-3 overflow-hidden rounded-xl border border-border">
@@ -498,11 +521,17 @@ export default function StrategyLabPage() {
                           </button>
                         </td>
                         <td className="px-3 py-2">{row.timeframe}</td>
-                        <td className="px-3 py-2">{row.start_date} {"->"} {row.end_date}</td>
+                        <td className="px-3 py-2">
+                          {row.start_date} {"->"} {row.end_date}
+                        </td>
                         <td className="px-3 py-2">{Number(row.metrics.calmar ?? 0).toFixed(3)}</td>
-                        <td className="px-3 py-2">{Number(row.metrics.max_drawdown ?? 0).toFixed(3)}</td>
+                        <td className="px-3 py-2">
+                          {Number(row.metrics.max_drawdown ?? 0).toFixed(3)}
+                        </td>
                         <td className="px-3 py-2">{Number(row.metrics.cvar_95 ?? 0).toFixed(3)}</td>
-                        <td className="px-3 py-2">{Number(row.metrics.turnover ?? 0).toFixed(3)}</td>
+                        <td className="px-3 py-2">
+                          {Number(row.metrics.turnover ?? 0).toFixed(3)}
+                        </td>
                         <td className="px-3 py-2">{row.status}</td>
                       </tr>
                     );
@@ -512,7 +541,11 @@ export default function StrategyLabPage() {
             </div>
             <div className="mt-3 flex items-center justify-between text-sm text-muted">
               <span>
-                Page {runsPage} / {Math.max(1, Math.ceil(Number(runMeta.total ?? 0) / Number(runMeta.page_size ?? 12)))}
+                Page {runsPage} /{" "}
+                {Math.max(
+                  1,
+                  Math.ceil(Number(runMeta.total ?? 0) / Number(runMeta.page_size ?? 12)),
+                )}
               </span>
               <div className="space-x-2">
                 <button
@@ -543,11 +576,18 @@ export default function StrategyLabPage() {
           <span className="text-xs text-muted">Select 2-3 runs from leaderboard</span>
         </div>
         {compareIds.length < 2 ? (
-          <EmptyState title="Comparison inactive" action="Pick at least two runs to overlay equity curves." />
+          <EmptyState
+            title="Comparison inactive"
+            action="Pick at least two runs to overlay equity curves."
+          />
         ) : compareQuery.isLoading ? (
           <LoadingState label="Loading comparison" />
         ) : compareQuery.isError ? (
-          <ErrorState title="Comparison failed" action="Retry compare query." onRetry={() => void compareQuery.refetch()} />
+          <ErrorState
+            title="Comparison failed"
+            action="Retry compare query."
+            onRetry={() => void compareQuery.refetch()}
+          />
         ) : (
           <>
             <EquityChart series={compareSeries} />
@@ -555,10 +595,18 @@ export default function StrategyLabPage() {
               {(compareQuery.data ?? []).map((item) => (
                 <article key={item.id} className="rounded-xl border border-border p-3 text-sm">
                   <p className="font-semibold">{item.label}</p>
-                  <p className="mt-1 text-muted">Calmar: {Number(item.metrics.calmar ?? 0).toFixed(3)}</p>
-                  <p className="text-muted">MaxDD: {Number(item.metrics.max_drawdown ?? 0).toFixed(3)}</p>
-                  <p className="text-muted">CVaR95: {Number(item.metrics.cvar_95 ?? 0).toFixed(3)}</p>
-                  <p className="text-muted">Turnover: {Number(item.metrics.turnover ?? 0).toFixed(3)}</p>
+                  <p className="mt-1 text-muted">
+                    Calmar: {Number(item.metrics.calmar ?? 0).toFixed(3)}
+                  </p>
+                  <p className="text-muted">
+                    MaxDD: {Number(item.metrics.max_drawdown ?? 0).toFixed(3)}
+                  </p>
+                  <p className="text-muted">
+                    CVaR95: {Number(item.metrics.cvar_95 ?? 0).toFixed(3)}
+                  </p>
+                  <p className="text-muted">
+                    Turnover: {Number(item.metrics.turnover ?? 0).toFixed(3)}
+                  </p>
                 </article>
               ))}
             </div>
@@ -578,18 +626,40 @@ export default function StrategyLabPage() {
         />
       )}
 
-      <DetailsDrawer open={Boolean(selectedTrade)} onClose={() => setSelectedTradeId(null)} title="Trade Details">
+      <DetailsDrawer
+        open={Boolean(selectedTrade)}
+        onClose={() => setSelectedTradeId(null)}
+        title="Trade Details"
+      >
         {selectedTrade ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Symbol:</span> {selectedTrade.symbol}</p>
-            <p><span className="text-muted">Entry:</span> {selectedTrade.entry_dt}</p>
-            <p><span className="text-muted">Exit:</span> {selectedTrade.exit_dt}</p>
-            <p><span className="text-muted">Quantity:</span> {selectedTrade.qty}</p>
-            <p><span className="text-muted">Entry price:</span> {selectedTrade.entry_px.toFixed(2)}</p>
-            <p><span className="text-muted">Exit price:</span> {selectedTrade.exit_px.toFixed(2)}</p>
-            <p><span className="text-muted">PnL:</span> {selectedTrade.pnl.toFixed(2)}</p>
-            <p><span className="text-muted">R multiple:</span> {selectedTrade.r_multiple.toFixed(3)}</p>
-            <p><span className="text-muted">Exit reason:</span> {selectedTrade.reason}</p>
+            <p>
+              <span className="text-muted">Symbol:</span> {selectedTrade.symbol}
+            </p>
+            <p>
+              <span className="text-muted">Entry:</span> {selectedTrade.entry_dt}
+            </p>
+            <p>
+              <span className="text-muted">Exit:</span> {selectedTrade.exit_dt}
+            </p>
+            <p>
+              <span className="text-muted">Quantity:</span> {selectedTrade.qty}
+            </p>
+            <p>
+              <span className="text-muted">Entry price:</span> {selectedTrade.entry_px.toFixed(2)}
+            </p>
+            <p>
+              <span className="text-muted">Exit price:</span> {selectedTrade.exit_px.toFixed(2)}
+            </p>
+            <p>
+              <span className="text-muted">PnL:</span> {selectedTrade.pnl.toFixed(2)}
+            </p>
+            <p>
+              <span className="text-muted">R multiple:</span> {selectedTrade.r_multiple.toFixed(3)}
+            </p>
+            <p>
+              <span className="text-muted">Exit reason:</span> {selectedTrade.reason}
+            </p>
             <p className="text-xs text-muted">
               Stop/target trail history is not yet persisted per trade in current schema.
             </p>

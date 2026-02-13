@@ -32,8 +32,12 @@ class MockProvider(DataProvider):
 
         frame = pd.DataFrame({"datetime": dt_index, "close": close})
         frame["open"] = frame["close"].shift(1).fillna(frame["close"])
-        frame["high"] = frame[["open", "close"]].max(axis=1) * (1 + rng.uniform(0.001, 0.01, periods))
-        frame["low"] = frame[["open", "close"]].min(axis=1) * (1 - rng.uniform(0.001, 0.01, periods))
+        frame["high"] = frame[["open", "close"]].max(axis=1) * (
+            1 + rng.uniform(0.001, 0.01, periods)
+        )
+        frame["low"] = frame[["open", "close"]].min(axis=1) * (
+            1 - rng.uniform(0.001, 0.01, periods)
+        )
         frame["volume"] = rng.integers(200_000, 1_200_000, periods)
 
         if start is not None:

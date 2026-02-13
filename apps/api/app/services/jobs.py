@@ -21,7 +21,10 @@ def _utc_now() -> datetime:
 
 def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in sorted(value.items(), key=lambda x: str(x[0]))}
+        return {
+            str(key): _json_safe(item)
+            for key, item in sorted(value.items(), key=lambda x: str(x[0]))
+        }
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     if isinstance(value, bytes):
@@ -32,7 +35,9 @@ def _json_safe(value: Any) -> Any:
 
 
 def hash_payload(payload: Any) -> str:
-    encoded = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    encoded = json.dumps(
+        _json_safe(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -124,10 +129,7 @@ def list_recent_jobs(session: Session, page: int = 1, page_size: int = 20) -> tu
     total = int(session.exec(select(func.count()).select_from(Job)).one())
     offset = max(0, (page - 1) * page_size)
     statement = (
-        select(Job)
-        .order_by(Job.created_at.desc(), Job.id.desc())
-        .offset(offset)
-        .limit(page_size)
+        select(Job).order_by(Job.created_at.desc(), Job.id.desc()).offset(offset).limit(page_size)
     )
     return list(session.exec(statement).all()), total
 

@@ -112,3 +112,39 @@ export type ApiPaperState = {
   cooldown_days_left: number;
   settings_json: Record<string, unknown>;
 };
+
+export type ApiResearchRun = {
+  id: number;
+  created_at: string;
+  dataset_id?: number | null;
+  timeframes_json: string[];
+  config_json: Record<string, unknown>;
+  status: string;
+  summary_json: Record<string, unknown>;
+};
+
+export type ApiResearchCandidate = {
+  id: number;
+  run_id: number;
+  symbol: string;
+  timeframe: string;
+  strategy_key: string;
+  best_params_json: Record<string, unknown>;
+  oos_metrics_json: Record<string, number>;
+  stress_metrics_json: Record<string, number>;
+  param_dispersion: number;
+  fold_variance: number;
+  stress_pass_rate: number;
+  score: number;
+  rank: number;
+  accepted: boolean;
+  explanations_json: string[];
+};
+
+export type ApiPolicy = {
+  id: number;
+  name: string;
+  created_at: string;
+  definition_json: Record<string, unknown>;
+  promoted_from_research_run_id?: number | null;
+};

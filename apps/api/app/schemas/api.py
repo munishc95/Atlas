@@ -35,11 +35,26 @@ class WalkForwardRunRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class ResearchRunRequest(BaseModel):
+    dataset_id: int | None = None
+    timeframes: list[str] = Field(default_factory=lambda: ["1d"])
+    strategy_templates: list[str] = Field(
+        default_factory=lambda: ["trend_breakout", "pullback_trend", "squeeze_breakout"]
+    )
+    symbol_scope: str = "liquid"
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class PromoteStrategyRequest(BaseModel):
     strategy_id: int | None = None
     strategy_name: str
     template: str
     params_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreatePolicyRequest(BaseModel):
+    research_run_id: int
+    name: str
 
 
 class PaperRunStepRequest(BaseModel):
@@ -59,3 +74,5 @@ class RuntimeSettingsRequest(BaseModel):
     max_position_value_pct_adv: float | None = None
     diversification_corr_threshold: float | None = None
     four_hour_bars: str | None = None
+    paper_mode: str | None = None
+    active_policy_id: int | None = None

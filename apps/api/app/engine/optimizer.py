@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 import optuna
 import pandas as pd
@@ -17,7 +16,9 @@ def robust_score(metrics: dict[str, float], oos_consistency: float = 0.0) -> flo
     tail_norm = float(metrics.get("tail_loss_norm", 1.0))
     turnover = float(metrics.get("turnover", 0.0))
     turnover_penalty = min(1.0, turnover / 10.0)
-    return 0.45 * calmar + 0.25 * (1.0 - tail_norm) + 0.20 * oos_consistency - 0.10 * turnover_penalty
+    return (
+        0.45 * calmar + 0.25 * (1.0 - tail_norm) + 0.20 * oos_consistency - 0.10 * turnover_penalty
+    )
 
 
 def _sampler(kind: str, seed: int | None) -> optuna.samplers.BaseSampler:
@@ -39,8 +40,10 @@ def _pruner(kind: str) -> optuna.pruners.BasePruner:
 def _storage_url(settings: Settings) -> str | None:
     if settings.optuna_storage_url:
         return settings.optuna_storage_url
-    if settings.database_url.startswith("postgresql") or settings.database_url.startswith("sqlite"):
+    if settings.database_url.startswith("postgresql"):
         return settings.database_url
+    if settings.database_url.startswith("sqlite"):
+        return "sqlite:///./apps/api/.atlas/optuna.db"
     return None
 
 
@@ -102,7 +105,7 @@ def optimize_template_params(
         direction="maximize",
         sampler=_sampler(sampler, seed),
         pruner=_pruner(pruner),
-        study_name=f"atlas-{template.key}-{symbol}-{started.strftime('%Y%m%d%H%M%S')}",
+        study_name=f"atlas-{template.key}-{symbol}-{started.strftime('%Y%m%d%H%M%S%f')}",
         storage=_storage_url(settings),
         load_if_exists=False,
     )

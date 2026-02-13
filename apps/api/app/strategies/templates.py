@@ -6,7 +6,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from app.engine.indicators import atr, bollinger_bands, ema, keltner_channels, rsi, sma
+from app.engine.indicators import bollinger_bands, ema, keltner_channels, rsi, sma
 
 
 @dataclass
@@ -24,7 +24,9 @@ def trend_breakout_signals(df: pd.DataFrame, params: dict[str, float | int]) -> 
     breakout_lookback = int(params.get("breakout_lookback", 20))
 
     trend = df["close"] > sma(df["close"], trend_period)
-    breakout_level = df["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
+    breakout_level = (
+        df["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
+    )
     return (trend & (df["close"] > breakout_level)).fillna(False)
 
 
@@ -54,15 +56,21 @@ def squeeze_breakout_signals(df: pd.DataFrame, params: dict[str, float | int]) -
     kc = keltner_channels(df, period=kc_period, atr_mult=kc_mult)
 
     in_squeeze = (bb["upper"] < kc["upper"]) & (bb["lower"] > kc["lower"])
-    breakout_level = df["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
+    breakout_level = (
+        df["high"].rolling(breakout_lookback, min_periods=breakout_lookback).max().shift(1)
+    )
 
     vol_confirm = pd.Series(True, index=df.index)
     if "volume" in df.columns:
         vol_ma = df["volume"].rolling(20, min_periods=20).mean()
         vol_confirm = df["volume"] >= vol_ma
 
-    squeeze_prev = pd.Series(in_squeeze.shift(1), index=df.index, dtype="boolean").fillna(False).astype(bool)
-    return ((squeeze_prev) & (df["close"] > breakout_level) & vol_confirm).fillna(False).astype(bool)
+    squeeze_prev = (
+        pd.Series(in_squeeze.shift(1), index=df.index, dtype="boolean").fillna(False).astype(bool)
+    )
+    return (
+        ((squeeze_prev) & (df["close"] > breakout_level) & vol_confirm).fillna(False).astype(bool)
+    )
 
 
 def list_templates() -> list[StrategyTemplate]:
@@ -162,8 +170,10 @@ def signal_strength(df: pd.DataFrame, signal_index: int, lookback: int = 20) -> 
         return 0.0
 
     price = float(df.iloc[signal_index]["close"])
-    recent_high = float(df["high"].iloc[max(0, signal_index - lookback): signal_index].max())
-    trend = float((ema(df["close"], 20).iloc[signal_index] - ema(df["close"], 50).iloc[signal_index]))
+    recent_high = float(df["high"].iloc[max(0, signal_index - lookback) : signal_index].max())
+    trend = float(
+        (ema(df["close"], 20).iloc[signal_index] - ema(df["close"], 50).iloc[signal_index])
+    )
     breakout_component = (price / recent_high - 1.0) if recent_high > 0 else 0.0
     return float(np.nan_to_num(0.7 * breakout_component + 0.3 * trend / max(price, 1.0)))
 

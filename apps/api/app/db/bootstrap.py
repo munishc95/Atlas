@@ -23,6 +23,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "kill_switch_dd": settings.kill_switch_drawdown,
                     "max_position_value_pct_adv": settings.max_position_value_pct_adv,
                     "diversification_corr_threshold": settings.diversification_corr_threshold,
+                    "paper_mode": "strategy",
+                    "active_policy_id": None,
                 },
             )
         )

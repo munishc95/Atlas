@@ -7,7 +7,9 @@ from fastapi.responses import JSONResponse
 class APIError(Exception):
     """Domain error that maps to a structured API response."""
 
-    def __init__(self, code: str, message: str, status_code: int = 400, details: Any = None) -> None:
+    def __init__(
+        self, code: str, message: str, status_code: int = 400, details: Any = None
+    ) -> None:
         self.code = code
         self.message = message
         self.status_code = status_code

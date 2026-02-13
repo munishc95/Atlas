@@ -74,8 +74,23 @@ Job progress stream:
 1. Go to `Universe & Data` and import `data/sample/NIFTY500_1d.csv`.
 2. Go to `Strategy Lab` and run backtest.
 3. Go to `Walk-Forward` and run walk-forward (Optuna trials configurable).
-4. Promote strategy to paper.
-5. Go to `Paper Trading` and run step.
+4. Go to `Auto Research` and run multi-template robust scan.
+5. Create a policy from the research run and click `Use in Paper`.
+6. Go to `Paper Trading` and run step.
+
+## Auto Research workflow
+`Auto Research` runs systematic, explainable strategy evaluation:
+- Walk-forward optimization with Optuna for each candidate tuple `(symbol, timeframe, strategy template)`
+- OOS-first robustness scoring with deterministic penalties and hard gates
+- Stress test evaluation and parameter stability checks
+- Ranked candidates + policy preview (`regime -> strategy -> params -> risk scaling`)
+
+From the UI:
+1. Open `Auto Research`.
+2. Set timeframes, templates, trial/symbol budgets, and gating constraints.
+3. Click `Run Auto Research` and monitor progress via SSE logs.
+4. Review candidates and explanations.
+5. Click `Create Policy`, then `Use in Paper`.
 
 ## API additions in this phase
 - `GET /api/jobs`
@@ -88,6 +103,14 @@ Job progress stream:
 - `GET /api/backtests/{id}/trades/export.csv`
 - `GET /api/backtests/{id}/summary/export.json`
 - `GET /api/walkforward/{id}/folds`
+- `POST /api/research/run`
+- `GET /api/research/runs`
+- `GET /api/research/runs/{id}`
+- `GET /api/research/runs/{id}/candidates`
+- `POST /api/policies`
+- `GET /api/policies`
+- `GET /api/policies/{id}`
+- `POST /api/policies/{id}/promote-to-paper`
 
 ## Testing
 
@@ -128,6 +151,27 @@ pnpm -C apps/web test:e2e
 ```
 
 Playwright test command auto-starts a clean Next dev server via Playwright `webServer`.
+
+### Formatting and line endings
+```powershell
+pnpm format
+```
+
+This runs:
+- Backend formatting and autofixes via Ruff
+- Frontend formatting via Prettier
+- Docs formatting for markdown files
+
+Repository guardrails:
+- `.gitattributes` enforces LF for code/config/docs files
+- `.editorconfig` enforces UTF-8, LF, and whitespace defaults
+
+## CI (GitHub Actions)
+Workflow: `.github/workflows/ci.yml`
+- `backend-tests`: installs backend deps and runs `pytest`
+- `frontend-checks`: installs frontend deps, runs lint + typecheck
+- `e2e`: installs both stacks, installs Playwright Chromium, starts API, runs E2E smoke
+- Failure logs are uploaded as artifacts for troubleshooting
 
 ## Developer docs
 - `docs/add-strategy-template.md`

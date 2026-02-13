@@ -116,9 +116,13 @@ def run_backtest(
         entries_aligned = pd.Series(entries.to_numpy(), index=frame.index)
     else:
         entries_aligned = entries.reindex(frame.index)
-    entries = pd.Series(entries_aligned, index=frame.index, dtype="boolean").fillna(False).astype(bool)
+    entries = (
+        pd.Series(entries_aligned, index=frame.index, dtype="boolean").fillna(False).astype(bool)
+    )
     atr_series = atr(frame, config.atr_period)
-    adv_notional = (frame["close"] * frame["volume"]).rolling(config.adv_lookback, min_periods=1).mean()
+    adv_notional = (
+        (frame["close"] * frame["volume"]).rolling(config.adv_lookback, min_periods=1).mean()
+    )
 
     cash = config.initial_equity
     positions: list[Position] = []
@@ -133,7 +137,9 @@ def run_backtest(
         survivors: list[Position] = []
         for pos in positions:
             pos.bars_held += 1
-            trail_candidate = float(bar["close"]) - config.atr_trail_mult * float(atr_series.iloc[i])
+            trail_candidate = float(bar["close"]) - config.atr_trail_mult * float(
+                atr_series.iloc[i]
+            )
             if not np.isnan(trail_candidate):
                 pos.trail_price = max(pos.trail_price, trail_candidate)
 
@@ -172,7 +178,12 @@ def run_backtest(
             >= config.min_notional
         )
 
-        if signal_on_close and liquidity_ok and len(positions) < config.max_positions and config.allow_long:
+        if (
+            signal_on_close
+            and liquidity_ok
+            and len(positions) < config.max_positions
+            and config.allow_long
+        ):
             stop_distance = config.atr_stop_mult * float(atr_series.iloc[signal_bar_idx])
             if stop_distance > 0 and not np.isnan(stop_distance):
                 risk_amount = cash * config.risk_per_trade
@@ -184,11 +195,14 @@ def run_backtest(
                     qty_adv = int(np.floor(max_position_value / float(bar["open"])))
                 qty = min(qty_risk, qty_adv)
                 if qty > 0:
-                    slip = _slippage_bps(
-                        float(atr_series.iloc[signal_bar_idx]),
-                        float(frame.iloc[signal_bar_idx]["close"]),
-                        config,
-                    ) / 10_000
+                    slip = (
+                        _slippage_bps(
+                            float(atr_series.iloc[signal_bar_idx]),
+                            float(frame.iloc[signal_bar_idx]["close"]),
+                            config,
+                        )
+                        / 10_000
+                    )
                     entry_px = float(bar["open"]) * (1 + slip)
                     entry_value = qty * entry_px
                     entry_commission = entry_value * config.commission_bps / 10_000
@@ -235,12 +249,16 @@ def run_backtest(
 
     trades_df = pd.DataFrame(trade_rows)
     equity_df = pd.DataFrame(equity_rows)
-    equity_series = equity_df.set_index("datetime")["equity"] if not equity_df.empty else pd.Series()
+    equity_series = (
+        equity_df.set_index("datetime")["equity"] if not equity_df.empty else pd.Series()
+    )
     open_count_series = pd.Series(open_counts)
 
     metrics = calculate_metrics(
         equity=equity_series,
-        trades=trades_df if not trades_df.empty else pd.DataFrame(columns=["pnl", "notional", "holding_bars"]),
+        trades=trades_df
+        if not trades_df.empty
+        else pd.DataFrame(columns=["pnl", "notional", "holding_bars"]),
         open_position_count=open_count_series,
     )
 

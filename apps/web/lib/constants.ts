@@ -8,6 +8,7 @@ export const navItems: NavItem[] = [
   { href: "/universe-data", label: "Universe & Data" },
   { href: "/strategy-lab", label: "Strategy Lab" },
   { href: "/walk-forward", label: "Walk-Forward" },
+  { href: "/auto-research", label: "Auto Research" },
   { href: "/paper-trading", label: "Paper Trading" },
   { href: "/settings", label: "Settings" },
   { href: "/help", label: "Help" },

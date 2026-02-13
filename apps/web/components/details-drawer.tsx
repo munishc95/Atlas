@@ -30,7 +30,10 @@ export function DetailsDrawer({ open, title, onClose, children }: DetailsDrawerP
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/20 backdrop-blur-[1px]" role="presentation">
+    <div
+      className="fixed inset-0 z-40 flex justify-end bg-black/20 backdrop-blur-[1px]"
+      role="presentation"
+    >
       <button
         type="button"
         className="h-full flex-1 cursor-default"

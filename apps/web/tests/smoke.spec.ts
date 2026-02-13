@@ -12,9 +12,10 @@ async function waitForJob(
   request: APIRequestContext,
   apiBase: string,
   jobId: string,
+  timeoutMs = 120_000,
 ): Promise<Record<string, unknown>> {
   const started = Date.now();
-  while (Date.now() - started < 120_000) {
+  while (Date.now() - started < timeoutMs) {
     const statusRes = await request.get(`${apiBase}/api/jobs/${jobId}`);
     const statusBody = await statusRes.json();
     const data = (statusBody?.data ?? {}) as Record<string, unknown>;
@@ -30,7 +31,11 @@ async function waitForJob(
   throw new Error(`Timed out waiting for job ${jobId}`);
 }
 
-async function waitForImportReady(request: APIRequestContext, apiBase: string, jobId: string): Promise<void> {
+async function waitForImportReady(
+  request: APIRequestContext,
+  apiBase: string,
+  jobId: string,
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < 180_000) {
     const statusRes = await request.get(`${apiBase}/api/jobs/${jobId}`);
@@ -57,7 +62,10 @@ async function waitForImportReady(request: APIRequestContext, apiBase: string, j
   throw new Error(`Timed out waiting for import readiness (job ${jobId})`);
 }
 
-test("smoke: import -> backtest -> walk-forward -> promote -> paper", async ({ page, request }) => {
+test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> paper", async ({
+  page,
+  request,
+}) => {
   test.setTimeout(420_000);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
@@ -111,7 +119,9 @@ test("smoke: import -> backtest -> walk-forward -> promote -> paper", async ({ p
   await waitForJob(request, apiBase, runBacktestBody2.data.job_id);
 
   await expect(page.getByRole("heading", { name: "Backtest leaderboard" })).toBeVisible();
-  const compareBoxes = page.locator('section:has-text("Backtest leaderboard") tbody input[type="checkbox"]');
+  const compareBoxes = page.locator(
+    'section:has-text("Backtest leaderboard") tbody input[type="checkbox"]',
+  );
   await expect(compareBoxes.first()).toBeVisible();
   await compareBoxes.nth(0).check();
   await compareBoxes.nth(1).check();
@@ -144,10 +154,48 @@ test("smoke: import -> backtest -> walk-forward -> promote -> paper", async ({ p
   const promoteButton = page.getByRole("button", { name: "Promote to Paper" });
   if (await promoteButton.isEnabled()) {
     await promoteButton.click();
-    await expect(page.getByText("Strategy promoted to paper mode")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Strategy promoted to paper mode")).toBeVisible({
+      timeout: 20_000,
+    });
   }
 
-  await page.getByRole("link", { name: "Paper Trading" }).click();
+  await page.getByRole("link", { name: "Auto Research" }).click();
+  await expect(page.getByRole("heading", { name: "Auto Research" })).toBeVisible();
+
+  await page.getByLabel("Trials per strategy").fill(process.env.PW_RESEARCH_TRIALS ?? "1");
+  await page.getByLabel("Max symbols sampled").fill("1");
+  await page.getByLabel("Max evaluations (0 = no cap)").fill("1");
+  await page.getByLabel("Minimum average trades").fill("1");
+  await page.getByLabel("Stress pass threshold").fill("0");
+
+  const runResearchRes = page.waitForResponse(
+    (res) => res.url().includes("/api/research/run") && res.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Run Auto Research" }).click();
+  const runResearchBody = await (await runResearchRes).json();
+  const researchJob = await waitForJob(request, apiBase, runResearchBody.data.job_id, 300_000);
+  const researchResult = (researchJob.result_json ?? {}) as Record<string, unknown>;
+  const researchRunId = Number(researchResult.run_id);
+  expect(Number.isFinite(researchRunId) && researchRunId > 0).toBeTruthy();
+
+  await page.getByRole("button", { name: "Candidates" }).click();
+  const candidateSection = page.locator("article").filter({
+    has: page.getByRole("heading", { name: "Results" }),
+  });
+  const candidateRows = candidateSection.locator("table tbody tr");
+  await expect(candidateRows.first()).toBeVisible({ timeout: 120_000 });
+
+  await page.getByRole("button", { name: "Policy" }).click();
+  await page.getByRole("button", { name: "Create Policy" }).click();
+  const policyDialog = page.getByRole("dialog", { name: "Create policy" });
+  await policyDialog.getByPlaceholder("Atlas Policy - 2026-02-13").fill("E2E Auto Policy");
+  await policyDialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByText("Policy created")).toBeVisible({ timeout: 20_000 });
+
+  const useInPaperButton = page.getByRole("button", { name: "Use in Paper" });
+  await expect(useInPaperButton).toBeEnabled({ timeout: 30_000 });
+  await useInPaperButton.click();
+
   await expect(page.getByRole("heading", { name: "Paper Trading" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Promoted strategies" })).toBeVisible();
 });

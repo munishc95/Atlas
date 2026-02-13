@@ -1,0 +1,8 @@
+node_modules
+.next
+dist
+coverage
+apps/web/playwright-report
+apps/web/test-results
+apps/api/.atlas
+data/parquet

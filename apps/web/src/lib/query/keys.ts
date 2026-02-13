@@ -15,6 +15,12 @@ export const qk = {
   walkForward: (id: number | null) => ["walkForward", id] as const,
   walkForwardFolds: (id: number | null, page: number, pageSize: number) =>
     ["walkForwardFolds", id, page, pageSize] as const,
+  researchRuns: (page: number, pageSize: number) => ["researchRuns", page, pageSize] as const,
+  researchRun: (id: number | null) => ["researchRun", id] as const,
+  researchCandidates: (id: number | null, page: number, pageSize: number) =>
+    ["researchCandidates", id, page, pageSize] as const,
+  policies: (page: number, pageSize: number) => ["policies", page, pageSize] as const,
+  policy: (id: number | null) => ["policy", id] as const,
   paperState: ["paperState"] as const,
   paperPositions: ["paperPositions"] as const,
   paperOrders: ["paperOrders"] as const,

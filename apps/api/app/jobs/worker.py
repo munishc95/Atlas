@@ -7,6 +7,7 @@ from rq import Queue, SimpleWorker, Worker
 
 from app.core.config import get_settings
 
+
 def main() -> None:
     settings = get_settings()
     redis_url = os.getenv("ATLAS_REDIS_URL", settings.redis_url)

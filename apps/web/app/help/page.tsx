@@ -20,7 +20,10 @@ export default function HelpPage() {
       ))}
 
       <section className="card p-4 text-sm text-muted">
-        <p>Need deeper context? Use the strategy and walk-forward docs in `docs/` for implementation details.</p>
+        <p>
+          Need deeper context? Use the strategy and walk-forward docs in `docs/` for implementation
+          details.
+        </p>
         <Link href="/strategy-lab" className="mt-2 inline-block text-accent underline">
           Back to Strategy Lab
         </Link>

@@ -35,6 +35,11 @@ export default function PaperTradingPage() {
     queryFn: async () => (await atlasApi.strategies()).data,
   });
 
+  const policiesQuery = useQuery({
+    queryKey: qk.policies(1, 50),
+    queryFn: async () => (await atlasApi.policies(1, 50)).data,
+  });
+
   const runStepMutation = useMutation({
     mutationFn: async () =>
       (
@@ -91,6 +96,15 @@ export default function PaperTradingPage() {
     () => (strategiesQuery.data ?? []).filter((item) => Boolean(item.enabled)),
     [strategiesQuery.data],
   );
+  const paperMode = String(state?.settings_json?.paper_mode ?? "strategy");
+  const activePolicyId =
+    typeof state?.settings_json?.active_policy_id === "number"
+      ? (state.settings_json.active_policy_id as number)
+      : null;
+  const activePolicy =
+    activePolicyId === null
+      ? null
+      : ((policiesQuery.data ?? []).find((policy) => policy.id === activePolicyId) ?? null);
 
   return (
     <div className="space-y-5">
@@ -98,15 +112,28 @@ export default function PaperTradingPage() {
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Paper Trading</h2>
-        <p className="mt-1 text-sm text-muted">Live signal queue, paper blotter, and stop/target management.</p>
+        <p className="mt-1 text-sm text-muted">
+          Live signal queue, paper blotter, and stop/target management.
+        </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <p className="rounded-xl border border-border px-3 py-2 text-sm">Equity: {state?.equity ?? "-"}</p>
-          <p className="rounded-xl border border-border px-3 py-2 text-sm">Cash: {state?.cash ?? "-"}</p>
-          <p className="rounded-xl border border-border px-3 py-2 text-sm">Drawdown: {state?.drawdown ?? "-"}</p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Equity: {state?.equity ?? "-"}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Cash: {state?.cash ?? "-"}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Drawdown: {state?.drawdown ?? "-"}
+          </p>
         </div>
+        <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+          Execution mode: {paperMode === "policy" ? "Policy mode" : "Single strategy mode"}
+          {activePolicy ? ` (${activePolicy.name})` : ""}
+        </p>
         {riskScaled ? (
           <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            Risk scaled due to regime: HIGH_VOL policy active (lower risk per trade and max positions).
+            Risk scaled due to regime: HIGH_VOL policy active (lower risk per trade and max
+            positions).
           </p>
         ) : null}
         <button
@@ -142,7 +169,10 @@ export default function PaperTradingPage() {
           {paperStateQuery.isLoading ? (
             <LoadingState label="Loading positions" />
           ) : positions.length === 0 ? (
-            <EmptyState title="No open positions" action="Run paper step after promoting a strategy." />
+            <EmptyState
+              title="No open positions"
+              action="Run paper step after promoting a strategy."
+            />
           ) : (
             <ul className="mt-3 space-y-2 text-sm">
               {positions.map((position) => (
@@ -201,7 +231,10 @@ export default function PaperTradingPage() {
         )}
       </section>
 
-      {(paperStateQuery.isError || strategiesQuery.isError || regimeQuery.isError) && (
+      {(paperStateQuery.isError ||
+        strategiesQuery.isError ||
+        regimeQuery.isError ||
+        policiesQuery.isError) && (
         <ErrorState
           title="Could not load paper trading state"
           action="Check API status and retry."
@@ -209,6 +242,7 @@ export default function PaperTradingPage() {
             void paperStateQuery.refetch();
             void strategiesQuery.refetch();
             void regimeQuery.refetch();
+            void policiesQuery.refetch();
           }}
         />
       )}
@@ -220,13 +254,24 @@ export default function PaperTradingPage() {
       >
         {selectedPosition ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Opened:</span> {selectedPosition.opened_at}</p>
-            <p><span className="text-muted">Quantity:</span> {selectedPosition.qty}</p>
-            <p><span className="text-muted">Average price:</span> {selectedPosition.avg_price}</p>
-            <p><span className="text-muted">Stop:</span> {selectedPosition.stop_price ?? "-"}</p>
-            <p><span className="text-muted">Target:</span> {selectedPosition.target_price ?? "-"}</p>
+            <p>
+              <span className="text-muted">Opened:</span> {selectedPosition.opened_at}
+            </p>
+            <p>
+              <span className="text-muted">Quantity:</span> {selectedPosition.qty}
+            </p>
+            <p>
+              <span className="text-muted">Average price:</span> {selectedPosition.avg_price}
+            </p>
+            <p>
+              <span className="text-muted">Stop:</span> {selectedPosition.stop_price ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">Target:</span> {selectedPosition.target_price ?? "-"}
+            </p>
             <p className="text-xs text-muted">
-              Stop/target update timeline is not yet persisted per event in the current paper schema.
+              Stop/target update timeline is not yet persisted per event in the current paper
+              schema.
             </p>
           </div>
         ) : null}
@@ -239,12 +284,24 @@ export default function PaperTradingPage() {
       >
         {selectedOrder ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Created:</span> {selectedOrder.created_at}</p>
-            <p><span className="text-muted">Side:</span> {selectedOrder.side}</p>
-            <p><span className="text-muted">Quantity:</span> {selectedOrder.qty}</p>
-            <p><span className="text-muted">Fill:</span> {selectedOrder.fill_price ?? "-"}</p>
-            <p><span className="text-muted">Status:</span> {selectedOrder.status}</p>
-            <p><span className="text-muted">Reason:</span> {selectedOrder.reason ?? "-"}</p>
+            <p>
+              <span className="text-muted">Created:</span> {selectedOrder.created_at}
+            </p>
+            <p>
+              <span className="text-muted">Side:</span> {selectedOrder.side}
+            </p>
+            <p>
+              <span className="text-muted">Quantity:</span> {selectedOrder.qty}
+            </p>
+            <p>
+              <span className="text-muted">Fill:</span> {selectedOrder.fill_price ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">Status:</span> {selectedOrder.status}
+            </p>
+            <p>
+              <span className="text-muted">Reason:</span> {selectedOrder.reason ?? "-"}
+            </p>
           </div>
         ) : null}
       </DetailsDrawer>

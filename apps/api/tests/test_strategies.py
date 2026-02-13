@@ -38,8 +38,8 @@ def test_templates_produce_at_least_one_candidate_signal() -> None:
     pullback = base.copy()
     dip_idx = pullback.index[120:150]
     pullback.loc[dip_idx, "close"] = pullback.loc[dip_idx, "close"] * 0.93
-    pullback.loc[dip_idx, "open"] = pullback.loc[dip_idx, "close"].shift(1).fillna(
-        pullback.loc[dip_idx, "close"]
+    pullback.loc[dip_idx, "open"] = (
+        pullback.loc[dip_idx, "close"].shift(1).fillna(pullback.loc[dip_idx, "close"])
     )
     pullback_signals = generate_signals("pullback_trend", pullback)
     assert pullback_signals.any()

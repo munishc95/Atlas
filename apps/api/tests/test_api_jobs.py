@@ -154,6 +154,9 @@ def test_idempotency_key_returns_same_job_id() -> None:
 
 def test_paper_diversification_limits_sector_concentration() -> None:
     with _client_inline_jobs() as client:
+        reset = client.put("/api/settings", json={"paper_mode": "strategy", "active_policy_id": None})
+        assert reset.status_code == 200
+
         with Session(engine) as session:
             for symbol in ("BANKA", "BANKB", "BANKC"):
                 if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:
@@ -165,9 +168,30 @@ def test_paper_diversification_limits_sector_concentration() -> None:
             json={
                 "regime": "TREND_UP",
                 "signals": [
-                    {"symbol": "BANKA", "side": "BUY", "template": "trend_breakout", "price": 100, "stop_distance": 10, "signal_strength": 0.9},
-                    {"symbol": "BANKB", "side": "BUY", "template": "trend_breakout", "price": 100, "stop_distance": 10, "signal_strength": 0.8},
-                    {"symbol": "BANKC", "side": "BUY", "template": "trend_breakout", "price": 100, "stop_distance": 10, "signal_strength": 0.7},
+                    {
+                        "symbol": "BANKA",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "price": 100,
+                        "stop_distance": 10,
+                        "signal_strength": 0.9,
+                    },
+                    {
+                        "symbol": "BANKB",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "price": 100,
+                        "stop_distance": 10,
+                        "signal_strength": 0.8,
+                    },
+                    {
+                        "symbol": "BANKC",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "price": 100,
+                        "stop_distance": 10,
+                        "signal_strength": 0.7,
+                    },
                 ],
                 "mark_prices": {},
             },

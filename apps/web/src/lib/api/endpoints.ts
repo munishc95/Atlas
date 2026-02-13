@@ -6,6 +6,9 @@ import type {
   ApiPaperOrder,
   ApiPaperPosition,
   ApiPaperState,
+  ApiPolicy,
+  ApiResearchCandidate,
+  ApiResearchRun,
   ApiTrade,
   ApiWalkForwardRun,
   Job,
@@ -56,14 +59,17 @@ export const atlasApi = {
     if (params?.sort_dir) search.set("sort_dir", params.sort_dir);
     if (params?.page) search.set("page", String(params.page));
     if (params?.page_size) search.set("page_size", String(params.page_size));
-    return apiFetch<ApiBacktestRunRow[]>(`/api/backtests${search.toString() ? `?${search.toString()}` : ""}`);
+    return apiFetch<ApiBacktestRunRow[]>(
+      `/api/backtests${search.toString() ? `?${search.toString()}` : ""}`,
+    );
   },
   compareBacktests: (ids: number[], maxPoints = 1000) =>
     apiFetch<ApiBacktestComparison[]>(
       `/api/backtests/compare?ids=${encodeURIComponent(ids.join(","))}&max_points=${maxPoints}`,
     ),
   backtestById: (id: number) => apiFetch<ApiBacktest>(`/api/backtests/${id}`),
-  backtestEquity: (id: number) => apiFetch<Array<{ datetime: string; equity: number }>>(`/api/backtests/${id}/equity`),
+  backtestEquity: (id: number) =>
+    apiFetch<Array<{ datetime: string; equity: number }>>(`/api/backtests/${id}/equity`),
   backtestTrades: (id: number, page = 1, pageSize = 50) =>
     apiFetch<ApiTrade[]>(`/api/backtests/${id}/trades?page=${page}&page_size=${pageSize}`),
   backtestTradesExportUrl: (id: number) => buildApiUrl(`/api/backtests/${id}/trades/export.csv`),
@@ -76,13 +82,43 @@ export const atlasApi = {
     }),
   walkForwardById: (id: number) => apiFetch<ApiWalkForwardRun>(`/api/walkforward/${id}`),
   walkForwardFolds: (id: number, page = 1, pageSize = 20) =>
-    apiFetch<Array<Record<string, unknown>>>(`/api/walkforward/${id}/folds?page=${page}&page_size=${pageSize}`),
+    apiFetch<Array<Record<string, unknown>>>(
+      `/api/walkforward/${id}/folds?page=${page}&page_size=${pageSize}`,
+    ),
 
   promoteStrategy: (payload: Record<string, unknown>) =>
     apiFetch<{ strategy_id: number; status: string }>("/api/strategies/promote", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  runResearch: (payload: Record<string, unknown>) =>
+    apiFetch<JobStart>("/api/research/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  researchRuns: (page = 1, pageSize = 20) =>
+    apiFetch<ApiResearchRun[]>(`/api/research/runs?page=${page}&page_size=${pageSize}`),
+  researchRunById: (id: number) => apiFetch<ApiResearchRun>(`/api/research/runs/${id}`),
+  researchCandidates: (runId: number, page = 1, pageSize = 25) =>
+    apiFetch<ApiResearchCandidate[]>(
+      `/api/research/runs/${runId}/candidates?page=${page}&page_size=${pageSize}`,
+    ),
+  createPolicy: (payload: { research_run_id: number; name: string }) =>
+    apiFetch<ApiPolicy>("/api/policies", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  policies: (page = 1, pageSize = 50) =>
+    apiFetch<ApiPolicy[]>(`/api/policies?page=${page}&page_size=${pageSize}`),
+  policyById: (id: number) => apiFetch<ApiPolicy>(`/api/policies/${id}`),
+  promotePolicyToPaper: (id: number) =>
+    apiFetch<{ policy_id: number; status: string; paper_mode: string; active_policy_id: number }>(
+      `/api/policies/${id}/promote-to-paper`,
+      {
+        method: "POST",
+      },
+    ),
 
   paperState: () =>
     apiFetch<{ state: ApiPaperState; positions: ApiPaperPosition[]; orders: ApiPaperOrder[] }>(

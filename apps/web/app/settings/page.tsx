@@ -75,7 +75,9 @@ export default function SettingsPage() {
     <div className="space-y-5">
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Settings</h2>
-        <p className="mt-1 text-sm text-muted">Risk controls, costs/slippage, market session, and scheduling.</p>
+        <p className="mt-1 text-sm text-muted">
+          Risk controls, costs/slippage, market session, and scheduling.
+        </p>
 
         {settingsQuery.isLoading ? (
           <LoadingState label="Loading runtime settings" />
@@ -86,7 +88,10 @@ export default function SettingsPage() {
             onRetry={() => void settingsQuery.refetch()}
           />
         ) : Object.keys(form).length === 0 ? (
-          <EmptyState title="No settings payload" action="Refresh once backend settings endpoint is reachable." />
+          <EmptyState
+            title="No settings payload"
+            action="Refresh once backend settings endpoint is reachable."
+          />
         ) : (
           <>
             <div className="mt-4 grid gap-3 md:grid-cols-2">

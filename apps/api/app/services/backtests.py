@@ -21,11 +21,19 @@ def _build_config(settings: Settings, payload_config: dict[str, Any]) -> Backtes
         max_positions=int(payload_config.get("max_positions", settings.max_positions)),
         initial_equity=float(payload_config.get("initial_equity", 1_000_000.0)),
         commission_bps=float(payload_config.get("commission_bps", settings.commission_bps)),
-        slippage_base_bps=float(payload_config.get("slippage_base_bps", settings.slippage_base_bps)),
-        slippage_vol_factor=float(payload_config.get("slippage_vol_factor", settings.slippage_vol_factor)),
+        slippage_base_bps=float(
+            payload_config.get("slippage_base_bps", settings.slippage_base_bps)
+        ),
+        slippage_vol_factor=float(
+            payload_config.get("slippage_vol_factor", settings.slippage_vol_factor)
+        ),
         atr_period=int(payload_config.get("atr_period", 14)),
-        atr_stop_mult=float(payload_config.get("atr_stop_mult", payload_config.get("atr_stop", 2.0))),
-        atr_trail_mult=float(payload_config.get("atr_trail_mult", payload_config.get("atr_trail", 2.0))),
+        atr_stop_mult=float(
+            payload_config.get("atr_stop_mult", payload_config.get("atr_stop", 2.0))
+        ),
+        atr_trail_mult=float(
+            payload_config.get("atr_trail_mult", payload_config.get("atr_trail", 2.0))
+        ),
         take_profit_r=(
             None
             if payload_config.get("take_profit_r") is None
@@ -79,7 +87,9 @@ def execute_backtest(
 
     frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe, start=start_dt, end=end_dt)
     if frame.empty:
-        raise APIError(code="missing_data", message="No data available for requested symbol/timeframe")
+        raise APIError(
+            code="missing_data", message="No data available for requested symbol/timeframe"
+        )
 
     if job_id:
         append_job_log(session, job_id, f"Generating signals: {strategy_template}")

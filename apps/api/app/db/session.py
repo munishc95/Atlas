@@ -36,7 +36,9 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("job", "created_at"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE job ADD COLUMN created_at TIMESTAMP"))
-            conn.execute(text("UPDATE job SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"))
+            conn.execute(
+                text("UPDATE job SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
+            )
     if not _has_column("job", "idempotency_key"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE job ADD COLUMN idempotency_key VARCHAR(128)"))
@@ -45,9 +47,30 @@ def _ensure_indexes_and_columns() -> None:
             conn.execute(text("ALTER TABLE job ADD COLUMN request_hash VARCHAR(128)"))
 
     with engine.begin() as conn:
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_job_status_created_at ON job (status, created_at)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_backtest_entry_dt ON trade (backtest_id, entry_dt)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_paperorder_created_at ON paperorder (created_at)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_job_status_created_at ON job (status, created_at)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_trade_backtest_entry_dt ON trade (backtest_id, entry_dt)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_walkforwardfold_run_id ON walkforwardfold (run_id)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_paperorder_created_at ON paperorder (created_at)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_researchcandidate_run_score ON researchcandidate (run_id, score)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_researchcandidate_run_rank ON researchcandidate (run_id, rank)"
+            )
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

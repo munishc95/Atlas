@@ -102,7 +102,9 @@ def execute_walkforward(
 
     folds, train_m, test_m, step_m = _with_adaptive_windows(frame.index, train_m, test_m, step_m)
     if not folds:
-        raise APIError(code="insufficient_data", message="Not enough data for configured walk-forward windows")
+        raise APIError(
+            code="insufficient_data", message="Not enough data for configured walk-forward windows"
+        )
 
     run = WalkForwardRun(config_json=payload, summary_json={})
     session.add(run)
@@ -189,9 +191,9 @@ def execute_walkforward(
             slippage_base_bps=settings.slippage_base_bps * 2,
             slippage_vol_factor=settings.slippage_vol_factor,
         )
-        delayed_entries = pd.Series(signals_test.shift(1), index=test_frame.index, dtype="boolean").fillna(
-            False
-        )
+        delayed_entries = pd.Series(
+            signals_test.shift(1), index=test_frame.index, dtype="boolean"
+        ).fillna(False)
         bt_stress = run_backtest(
             price_df=test_frame,
             entries=delayed_entries.astype(bool),
@@ -216,6 +218,9 @@ def execute_walkforward(
                 "n_trials": optimization.n_trials,
                 "elapsed_seconds": optimization.elapsed_seconds,
             },
+            "train_trade_count": int(len(bt_train.trades)),
+            "test_trade_count": int(len(bt_test.trades)),
+            "stress_trade_count": int(len(bt_stress.trades)),
             "train_metrics": bt_train.metrics,
             "test_metrics": bt_test.metrics,
             "stress_metrics": bt_stress.metrics,
@@ -233,6 +238,9 @@ def execute_walkforward(
                 params_json=best_params,
                 metrics_json={
                     "optimization": fold_payload["optimization"],
+                    "train_trade_count": fold_payload["train_trade_count"],
+                    "test_trade_count": fold_payload["test_trade_count"],
+                    "stress_trade_count": fold_payload["stress_trade_count"],
                     "train": bt_train.metrics,
                     "test": bt_test.metrics,
                     "stress": bt_stress.metrics,
@@ -242,15 +250,21 @@ def execute_walkforward(
         )
 
     if not fold_rows:
-        raise APIError(code="no_valid_folds", message="No fold had enough observations after window split")
+        raise APIError(
+            code="no_valid_folds", message="No fold had enough observations after window split"
+        )
 
     session.commit()
 
     oos_consistency = float(sum(score > 0 for score in oos_scores) / len(oos_scores))
     oos_max_dd = min(float(f["test_metrics"].get("max_drawdown", 0.0)) for f in fold_rows)
     too_few_trades = any(float(f["test_metrics"].get("turnover", 0.0)) < 0.01 for f in fold_rows)
-    fold_profitability_pct = float(sum(float(f["oos_score"]) > 0 for f in fold_rows) / len(fold_rows))
-    worst_fold_drawdown = float(min(float(f["test_metrics"].get("max_drawdown", 0.0)) for f in fold_rows))
+    fold_profitability_pct = float(
+        sum(float(f["oos_score"]) > 0 for f in fold_rows) / len(fold_rows)
+    )
+    worst_fold_drawdown = float(
+        min(float(f["test_metrics"].get("max_drawdown", 0.0)) for f in fold_rows)
+    )
     stress_pass_rate = float(sum(bool(f["stress_pass"]) for f in fold_rows) / len(fold_rows))
 
     stability_components: list[float] = []
@@ -266,7 +280,9 @@ def execute_walkforward(
         std = float(np.std(values))
         cv = std / max(mean, 1e-9)
         stability_components.append(1.0 / (1.0 + cv))
-    parameter_stability_score = float(np.mean(stability_components)) if stability_components else 0.0
+    parameter_stability_score = (
+        float(np.mean(stability_components)) if stability_components else 0.0
+    )
 
     promoted_ok = True
     reasons: list[str] = []
