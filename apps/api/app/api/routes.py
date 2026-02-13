@@ -75,7 +75,11 @@ def _data(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def get_store(settings: Settings = Depends(get_settings)) -> DataStore:
-    return DataStore(parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path)
+    return DataStore(
+        parquet_root=settings.parquet_root,
+        duckdb_path=settings.duckdb_path,
+        feature_cache_root=settings.feature_cache_root,
+    )
 
 
 def _enqueue_or_inline(
@@ -177,6 +181,14 @@ def universe(
     return _data({"symbols": store.list_symbols(session)})
 
 
+@router.get("/universes")
+def universes(
+    session: Session = Depends(get_session),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    return _data(store.list_bundles(session))
+
+
 @router.get("/strategies")
 def strategy_list(session: Session = Depends(get_session)) -> dict[str, Any]:
     rows = session.exec(select(Strategy).order_by(Strategy.created_at.desc())).all()
@@ -193,6 +205,9 @@ def import_data(
     symbol: str = Form(...),
     timeframe: str = Form("1d"),
     provider: str = Form("csv"),
+    bundle_id: int | None = Form(default=None),
+    bundle_name: str | None = Form(default=None),
+    bundle_description: str | None = Form(default=None),
     mapping_json: str | None = Form(default=None),
     file: UploadFile = File(...),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -208,6 +223,9 @@ def import_data(
         "symbol": symbol.upper(),
         "timeframe": timeframe,
         "provider": provider,
+        "bundle_id": bundle_id,
+        "bundle_name": bundle_name,
+        "bundle_description": bundle_description,
         "mapping": mapping,
     }
     request_hash = hash_payload(
@@ -775,6 +793,8 @@ def get_settings_payload(
         "commission_bps": settings.commission_bps,
         "slippage_base_bps": settings.slippage_base_bps,
         "slippage_vol_factor": settings.slippage_vol_factor,
+        "allowed_sides": settings.allowed_sides,
+        "paper_short_squareoff_time": settings.paper_short_squareoff_time,
         "cost_model_enabled": settings.cost_model_enabled,
         "cost_mode": settings.cost_mode,
         "brokerage_bps": settings.brokerage_bps,
@@ -787,8 +807,14 @@ def get_settings_payload(
         "stamp_delivery_buy_bps": settings.stamp_delivery_buy_bps,
         "stamp_intraday_buy_bps": settings.stamp_intraday_buy_bps,
         "gst_rate": settings.gst_rate,
+        "futures_brokerage_bps": settings.futures_brokerage_bps,
+        "futures_stt_sell_bps": settings.futures_stt_sell_bps,
+        "futures_exchange_txn_bps": settings.futures_exchange_txn_bps,
+        "futures_stamp_buy_bps": settings.futures_stamp_buy_bps,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
+        "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,
+        "autopilot_max_runtime_seconds": settings.autopilot_max_runtime_seconds,
         "four_hour_bars": settings.four_hour_bars,
         "paper_mode": "strategy",
         "active_policy_id": None,

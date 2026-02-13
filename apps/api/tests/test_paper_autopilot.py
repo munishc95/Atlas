@@ -10,7 +10,7 @@ import pandas as pd
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import PaperOrder, PaperPosition, PaperState, Policy
+from app.db.models import DatasetBundle, PaperOrder, PaperPosition, PaperState, Policy
 from app.db.session import engine
 from app.main import app
 from app.services.data_store import DataStore
@@ -54,6 +54,7 @@ def _seed_dataset_symbols(
     provider: str,
     symbols: list[str],
     timeframe: str = "1d",
+    bundle_name: str | None = None,
 ) -> tuple[int, DataStore]:
     settings = get_settings()
     store = DataStore(parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path)
@@ -66,6 +67,7 @@ def _seed_dataset_symbols(
                 timeframe=timeframe,
                 frame=_frame(start=100.0 + (offset * 2.0)),
                 provider=provider,
+                bundle_name=bundle_name,
             )
             if dataset_id is None:
                 dataset_id = dataset.id
@@ -120,6 +122,45 @@ def test_dataset_scoped_preview_excludes_outside_symbols() -> None:
         assert symbols
         assert symbols.issubset({"SCOPE_A", "SCOPE_B"})
         assert "OUTSIDE_A" not in symbols
+
+
+def test_bundle_scoped_preview_only_returns_bundle_members() -> None:
+    provider = f"bundle-{uuid4().hex[:8]}"
+    _, store = _seed_dataset_symbols(
+        provider=provider,
+        symbols=["BUNDLE_A", "BUNDLE_B"],
+        bundle_name=f"alpha-{provider}",
+    )
+    with Session(engine) as session:
+        alpha_bundle = session.exec(
+            select(DatasetBundle).where(DatasetBundle.name == f"alpha-{provider}")
+        ).first()
+    _seed_dataset_symbols(
+        provider=provider,
+        symbols=["BUNDLE_C"],
+        bundle_name=f"beta-{provider}",
+    )
+
+    assert alpha_bundle is not None and alpha_bundle.id is not None
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        response = client.post(
+            "/api/paper/signals/preview",
+            json={
+                "bundle_id": alpha_bundle.id,
+                "timeframes": ["1d"],
+                "symbol_scope": "all",
+                "max_symbols_scan": 20,
+                "seed": 5,
+                "regime": "TREND_UP",
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        symbols = {item["symbol"] for item in payload["signals"]}
+        assert symbols
+        assert symbols.issubset({"BUNDLE_A", "BUNDLE_B"})
+        assert "BUNDLE_C" not in symbols
 
 
 def test_liquidity_sampling_is_deterministic_with_seed() -> None:
@@ -301,3 +342,113 @@ def test_cost_model_changes_cash_with_estimated_costs() -> None:
         expected_cash = 1_000_000.0 - notional - expected_cost
         assert state["cash"] < 1_000_000.0 - notional + 1e-6
         assert abs(state["cash"] - expected_cash) < 1e-4
+
+
+def test_allowed_sides_blocks_sell_signal_when_disabled() -> None:
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        update = client.put("/api/settings", json={"allowed_sides": ["BUY"]})
+        assert update.status_code == 200
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "signals": [
+                    {
+                        "symbol": "NIFTY500",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 100.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.9,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 0
+        skipped = result.get("skipped_signals", [])
+        assert any(item.get("reason") == "shorts_disabled" for item in skipped)
+
+
+def test_intraday_short_forced_squareoff_at_eod() -> None:
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        update = client.put(
+            "/api/settings",
+            json={"allowed_sides": ["BUY", "SELL"], "paper_short_squareoff_time": "15:20"},
+        )
+        assert update.status_code == 200
+
+        open_step = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "asof": "2026-01-05T10:00:00+05:30",
+                "signals": [
+                    {
+                        "symbol": "NIFTY500",
+                        "side": "SELL",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 100.0,
+                        "stop_distance": 5.0,
+                        "signal_strength": 0.9,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert open_step.status_code == 200
+        open_job = _wait_job(client, open_step.json()["data"]["job_id"])
+        assert open_job["status"] == "SUCCEEDED"
+        open_result = open_job["result_json"] or {}
+        assert open_result.get("selected_signals_count") == 1
+        assert any(
+            row.get("side") == "SELL" and row.get("must_exit_by_eod") is True
+            for row in (open_result.get("positions") or [])
+        )
+
+        close_step = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "asof": "2026-01-05T15:25:00+05:30",
+                "signals": [],
+                "mark_prices": {"NIFTY500": 97.0},
+            },
+        )
+        assert close_step.status_code == 200
+        close_job = _wait_job(client, close_step.json()["data"]["job_id"])
+        assert close_job["status"] == "SUCCEEDED"
+        close_result = close_job["result_json"] or {}
+        assert len(close_result.get("positions") or []) == 0
+        assert any(
+            row.get("reason") == "EOD_SQUARE_OFF" for row in (close_result.get("orders") or [])
+        )
+
+
+def test_feature_cache_matches_computed_indicators() -> None:
+    provider = f"feature-{uuid4().hex[:8]}"
+    _, store = _seed_dataset_symbols(provider=provider, symbols=["FEAT_A"], timeframe="1d")
+
+    base = store.load_ohlcv(symbol="FEAT_A", timeframe="1d")
+    expected = store._compute_feature_frame(base)  # noqa: SLF001
+    cached = store.load_features(symbol="FEAT_A", timeframe="1d")
+
+    assert not cached.empty
+    assert len(cached) == len(expected)
+    for column in ("atr_14", "rsi_4", "ema_20", "ema_50", "adx_14", "bb_width"):
+        left = np.nan_to_num(cached[column].to_numpy(), nan=0.0)
+        right = np.nan_to_num(expected[column].to_numpy(), nan=0.0)
+        assert np.allclose(left, right, atol=1e-8)

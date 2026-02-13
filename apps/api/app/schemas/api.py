@@ -36,6 +36,7 @@ class WalkForwardRunRequest(BaseModel):
 
 
 class ResearchRunRequest(BaseModel):
+    bundle_id: int | None = None
     dataset_id: int | None = None
     timeframes: list[str] = Field(default_factory=lambda: ["1d"])
     strategy_templates: list[str] = Field(
@@ -62,21 +63,25 @@ class PaperRunStepRequest(BaseModel):
     signals: list[dict[str, Any]] = Field(default_factory=list)
     mark_prices: dict[str, float] = Field(default_factory=dict)
     auto_generate_signals: bool = False
+    bundle_id: int | None = None
     dataset_id: int | None = None
     timeframes: list[str] = Field(default_factory=list)
     symbol_scope: str | None = None
     max_symbols_scan: int | None = None
+    max_runtime_seconds: int | None = None
     seed: int | None = None
     asof: str | None = None
 
 
 class PaperSignalsPreviewRequest(BaseModel):
     regime: str = "TREND_UP"
+    bundle_id: int | None = None
     dataset_id: int | None = None
     policy_id: int | None = None
     timeframes: list[str] = Field(default_factory=list)
     symbol_scope: str | None = None
     max_symbols_scan: int | None = None
+    max_runtime_seconds: int | None = None
     seed: int | None = None
     asof: str | None = None
 
@@ -91,6 +96,10 @@ class RuntimeSettingsRequest(BaseModel):
     slippage_vol_factor: float | None = None
     max_position_value_pct_adv: float | None = None
     diversification_corr_threshold: float | None = None
+    allowed_sides: list[str] | None = None
+    paper_short_squareoff_time: str | None = None
+    autopilot_max_symbols_scan: int | None = None
+    autopilot_max_runtime_seconds: int | None = None
     four_hour_bars: str | None = None
     paper_mode: str | None = None
     active_policy_id: int | None = None
@@ -106,3 +115,7 @@ class RuntimeSettingsRequest(BaseModel):
     stamp_delivery_buy_bps: float | None = None
     stamp_intraday_buy_bps: float | None = None
     gst_rate: float | None = None
+    futures_brokerage_bps: float | None = None
+    futures_stt_sell_bps: float | None = None
+    futures_exchange_txn_bps: float | None = None
+    futures_stamp_buy_bps: float | None = None

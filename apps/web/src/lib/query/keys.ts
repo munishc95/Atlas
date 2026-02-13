@@ -1,5 +1,6 @@
 export const qk = {
   universe: ["universe"] as const,
+  universes: ["universes"] as const,
   strategies: ["strategies"] as const,
   strategyTemplates: ["strategyTemplates"] as const,
   dataStatus: ["dataStatus"] as const,

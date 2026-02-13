@@ -25,7 +25,7 @@ export default function AutoResearchPage() {
   const [showPolicyModal, setShowPolicyModal] = useState(false);
   const [newPolicyName, setNewPolicyName] = useState("");
   const [createdPolicyId, setCreatedPolicyId] = useState<number | null>(null);
-  const [datasetId, setDatasetId] = useState<number | null>(null);
+  const [bundleId, setBundleId] = useState<number | null>(null);
   const [timeframes, setTimeframes] = useState<string[]>(["1d"]);
   const [templateFlags, setTemplateFlags] = useState<Record<string, boolean>>({
     trend_breakout: true,
@@ -47,15 +47,20 @@ export default function AutoResearchPage() {
     queryFn: async () => (await atlasApi.dataStatus()).data,
   });
 
+  const bundlesQuery = useQuery({
+    queryKey: qk.universes,
+    queryFn: async () => (await atlasApi.universes()).data,
+  });
+
   useEffect(() => {
-    if (datasetId !== null) {
+    if (bundleId !== null) {
       return;
     }
-    const firstId = Number((dataStatusQuery.data ?? [])[0]?.id);
+    const firstId = Number((bundlesQuery.data ?? [])[0]?.id);
     if (Number.isFinite(firstId) && firstId > 0) {
-      setDatasetId(firstId);
+      setBundleId(firstId);
     }
-  }, [dataStatusQuery.data, datasetId]);
+  }, [bundlesQuery.data, bundleId]);
 
   const runsQuery = useQuery({
     queryKey: qk.researchRuns(1, 20),
@@ -91,7 +96,7 @@ export default function AutoResearchPage() {
     mutationFn: async () =>
       (
         await atlasApi.runResearch({
-          dataset_id: datasetId ?? undefined,
+          bundle_id: bundleId ?? undefined,
           timeframes,
           strategy_templates: Object.entries(templateFlags)
             .filter(([, enabled]) => enabled)
@@ -251,18 +256,17 @@ export default function AutoResearchPage() {
 
           <div className="mt-4 space-y-3">
             <label className="block text-sm text-muted">
-              Universe dataset
+              Universe bundle
               <select
                 className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
-                value={datasetId ?? ""}
+                value={bundleId ?? ""}
                 onChange={(event) =>
-                  setDatasetId(event.target.value ? Number(event.target.value) : null)
+                  setBundleId(event.target.value ? Number(event.target.value) : null)
                 }
               >
-                {(dataStatusQuery.data ?? []).map((row) => (
+                {(bundlesQuery.data ?? []).map((row) => (
                   <option key={String(row.id)} value={String(row.id)}>
-                    {String(row.symbol)} / {String(row.timeframe)} ({String(row.start_date)} {"->"}{" "}
-                    {String(row.end_date)})
+                    {String(row.name)} ({row.symbols.length} symbols)
                   </option>
                 ))}
               </select>

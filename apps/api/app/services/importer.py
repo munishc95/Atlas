@@ -53,6 +53,9 @@ def import_ohlcv_upload(
     mapping: dict[str, str] | None,
     provider: str,
     bar_windows: str,
+    bundle_id: int | None = None,
+    bundle_name: str | None = None,
+    bundle_description: str | None = None,
 ) -> dict[str, Any]:
     raw = upload.file.read()
     return import_ohlcv_bytes(
@@ -65,6 +68,9 @@ def import_ohlcv_upload(
         mapping=mapping,
         provider=provider,
         bar_windows=bar_windows,
+        bundle_id=bundle_id,
+        bundle_name=bundle_name,
+        bundle_description=bundle_description,
     )
 
 
@@ -78,6 +84,9 @@ def import_ohlcv_bytes(
     mapping: dict[str, str] | None,
     provider: str,
     bar_windows: str,
+    bundle_id: int | None = None,
+    bundle_name: str | None = None,
+    bundle_description: str | None = None,
 ) -> dict[str, Any]:
     if not raw:
         raise APIError(code="empty_file", message="Uploaded file is empty")
@@ -102,10 +111,14 @@ def import_ohlcv_bytes(
         frame=frame,
         provider=provider,
         checksum=_checksum(raw),
+        bundle_id=bundle_id,
+        bundle_name=bundle_name,
+        bundle_description=bundle_description,
     )
 
     return {
         "dataset_id": dataset.id,
+        "bundle_id": dataset.bundle_id,
         "symbol": symbol,
         "timeframe": timeframe,
         "rows": int(len(frame)),

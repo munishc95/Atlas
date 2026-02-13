@@ -50,6 +50,47 @@ def _ensure_indexes_and_columns() -> None:
         column_type = "TEXT" if is_sqlite else "JSON"
         with engine.begin() as conn:
             conn.execute(text(f"ALTER TABLE dataset ADD COLUMN symbols_json {column_type}"))
+    if not _has_column("dataset", "bundle_id"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE dataset ADD COLUMN bundle_id INTEGER"))
+    if not _has_column("researchrun", "bundle_id"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE researchrun ADD COLUMN bundle_id INTEGER"))
+    if not _has_column("paperposition", "side"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperposition ADD COLUMN side VARCHAR(8) DEFAULT 'BUY'"))
+    if not _has_column("paperposition", "instrument_kind"):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE paperposition ADD COLUMN instrument_kind VARCHAR(16) "
+                    "DEFAULT 'EQUITY_CASH'"
+                )
+            )
+    if not _has_column("paperposition", "lot_size"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperposition ADD COLUMN lot_size INTEGER DEFAULT 1"))
+    if not _has_column("paperposition", "must_exit_by_eod"):
+        bool_type = "INTEGER" if is_sqlite else "BOOLEAN"
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE paperposition ADD COLUMN must_exit_by_eod {bool_type} DEFAULT 0")
+            )
+    if not _has_column("paperposition", "metadata_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE paperposition ADD COLUMN metadata_json {column_type}"))
+    if not _has_column("paperorder", "instrument_kind"):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE paperorder ADD COLUMN instrument_kind VARCHAR(16) "
+                    "DEFAULT 'EQUITY_CASH'"
+                )
+            )
+    if not _has_column("paperorder", "lot_size"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperorder ADD COLUMN lot_size INTEGER DEFAULT 1"))
 
     with engine.begin() as conn:
         conn.execute(
@@ -75,6 +116,10 @@ def _ensure_indexes_and_columns() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_researchcandidate_run_rank ON researchcandidate (run_id, rank)"
             )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_dataset_bundle_id ON dataset (bundle_id)"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_researchrun_bundle_id ON researchrun (bundle_id)")
         )
 
 

@@ -53,6 +53,17 @@ export default function SettingsPage() {
         gst_rate: Number(form.gst_rate),
         max_position_value_pct_adv: Number(form.max_position_value_pct_adv),
         diversification_corr_threshold: Number(form.diversification_corr_threshold),
+        allowed_sides: String(form.allowed_sides ?? "")
+          .split(",")
+          .map((value) => value.trim().toUpperCase())
+          .filter(Boolean),
+        paper_short_squareoff_time: form.paper_short_squareoff_time,
+        autopilot_max_symbols_scan: Number(form.autopilot_max_symbols_scan),
+        autopilot_max_runtime_seconds: Number(form.autopilot_max_runtime_seconds),
+        futures_brokerage_bps: Number(form.futures_brokerage_bps),
+        futures_stt_sell_bps: Number(form.futures_stt_sell_bps),
+        futures_exchange_txn_bps: Number(form.futures_exchange_txn_bps),
+        futures_stamp_buy_bps: Number(form.futures_stamp_buy_bps),
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -90,6 +101,14 @@ export default function SettingsPage() {
       { key: "gst_rate", label: "GST rate" },
       { key: "max_position_value_pct_adv", label: "Max position value / ADV" },
       { key: "diversification_corr_threshold", label: "Diversification correlation threshold" },
+      { key: "allowed_sides", label: "Allowed sides (comma-separated BUY,SELL)" },
+      { key: "paper_short_squareoff_time", label: "Cash short EOD square-off cutoff (HH:mm)" },
+      { key: "autopilot_max_symbols_scan", label: "Autopilot max symbols scan (hard cap)" },
+      { key: "autopilot_max_runtime_seconds", label: "Autopilot max runtime seconds" },
+      { key: "futures_brokerage_bps", label: "Futures brokerage (bps)" },
+      { key: "futures_stt_sell_bps", label: "Futures STT sell (bps)" },
+      { key: "futures_exchange_txn_bps", label: "Futures exchange txn charges (bps)" },
+      { key: "futures_stamp_buy_bps", label: "Futures stamp duty buy (bps)" },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],

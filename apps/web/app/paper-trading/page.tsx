@@ -27,6 +27,7 @@ export default function PaperTradingPage() {
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [autopilotEnabled, setAutopilotEnabled] = useState(true);
+  const [bundleId, setBundleId] = useState<number | null>(null);
   const [preview, setPreview] = useState<ApiPaperSignalPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [whyOpen, setWhyOpen] = useState(false);
@@ -52,6 +53,10 @@ export default function PaperTradingPage() {
   const policiesQuery = useQuery({
     queryKey: qk.policies(1, 50),
     queryFn: async () => (await atlasApi.policies(1, 50)).data,
+  });
+  const bundlesQuery = useQuery({
+    queryKey: qk.universes,
+    queryFn: async () => (await atlasApi.universes()).data,
   });
 
   const state = paperStateQuery.data?.state;
@@ -122,6 +127,24 @@ export default function PaperTradingPage() {
       ? null
       : ((policiesQuery.data ?? []).find((policy) => policy.id === activePolicyId) ?? null);
 
+  useEffect(() => {
+    if (bundleId !== null) {
+      return;
+    }
+    const policyUniverse = (
+      activePolicy?.definition_json as Record<string, unknown> | undefined
+    )?.["universe"] as Record<string, unknown> | undefined;
+    const policyBundle = Number(policyUniverse?.bundle_id);
+    if (Number.isFinite(policyBundle) && policyBundle > 0) {
+      setBundleId(policyBundle);
+      return;
+    }
+    const firstBundle = Number((bundlesQuery.data ?? [])[0]?.id);
+    if (Number.isFinite(firstBundle) && firstBundle > 0) {
+      setBundleId(firstBundle);
+    }
+  }, [activePolicy, bundleId, bundlesQuery.data]);
+
   const runStep = useCallback(() => {
     const regime = regimeQuery.data?.regime ?? "TREND_UP";
     const useAutopilot = autopilotEnabled || paperMode === "policy";
@@ -143,17 +166,19 @@ export default function PaperTradingPage() {
     runStepMutation.mutate({
       regime,
       auto_generate_signals: useAutopilot,
+      bundle_id: bundleId ?? undefined,
       signals: fallbackSignals,
       mark_prices: {},
     });
-  }, [autopilotEnabled, paperMode, regimeQuery.data?.regime, runStepMutation]);
+  }, [autopilotEnabled, bundleId, paperMode, regimeQuery.data?.regime, runStepMutation]);
 
   const previewSignals = useCallback(() => {
     previewMutation.mutate({
       regime: regimeQuery.data?.regime ?? "TREND_UP",
+      bundle_id: bundleId ?? undefined,
       max_symbols_scan: 50,
     });
-  }, [previewMutation, regimeQuery.data?.regime]);
+  }, [bundleId, previewMutation, regimeQuery.data?.regime]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -206,6 +231,24 @@ export default function PaperTradingPage() {
           Execution mode: {paperMode === "policy" ? "Policy mode" : "Single strategy mode"}
           {activePolicy ? ` (${activePolicy.name})` : ""}
         </p>
+        <div className="mt-3">
+          <label className="text-xs text-muted">
+            Universe bundle
+            <select
+              className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm"
+              value={bundleId ?? ""}
+              onChange={(event) =>
+                setBundleId(event.target.value ? Number(event.target.value) : null)
+              }
+            >
+              {(bundlesQuery.data ?? []).map((bundle) => (
+                <option key={bundle.id} value={bundle.id}>
+                  {bundle.name} ({bundle.symbols.length} symbols)
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         {riskScaled ? (
           <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
             Risk scaled due to regime and policy constraints.
@@ -364,6 +407,12 @@ export default function PaperTradingPage() {
               <span className="text-muted">Opened:</span> {selectedPosition.opened_at}
             </p>
             <p>
+              <span className="text-muted">Side:</span> {selectedPosition.side}
+            </p>
+            <p>
+              <span className="text-muted">Instrument:</span> {selectedPosition.instrument_kind}
+            </p>
+            <p>
               <span className="text-muted">Quantity:</span> {selectedPosition.qty}
             </p>
             <p>
@@ -374,6 +423,10 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Target:</span> {selectedPosition.target_price ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">EOD square-off:</span>{" "}
+              {selectedPosition.must_exit_by_eod ? "Yes" : "No"}
             </p>
           </div>
         ) : null}
@@ -391,6 +444,9 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Side:</span> {selectedOrder.side}
+            </p>
+            <p>
+              <span className="text-muted">Instrument:</span> {selectedOrder.instrument_kind}
             </p>
             <p>
               <span className="text-muted">Quantity:</span> {selectedOrder.qty}
@@ -420,6 +476,14 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Generated:</span> {preview.generated_signals_count}
+            </p>
+            <p>
+              <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">Scan:</span>{" "}
+              {preview.scanned_symbols ?? 0}/{preview.total_symbols ?? 0}
+              {preview.scan_truncated ? " (truncated)" : ""}
             </p>
             <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
               <table className="w-full text-xs">
@@ -487,4 +551,3 @@ export default function PaperTradingPage() {
     </div>
   );
 }
-

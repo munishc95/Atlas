@@ -11,6 +11,7 @@ import type {
   ApiResearchCandidate,
   ApiResearchRun,
   ApiTrade,
+  ApiUniverseBundle,
   ApiWalkForwardRun,
   Job,
 } from "@/src/lib/api/types";
@@ -20,6 +21,7 @@ export type JobStart = { job_id: string; status: string };
 export const atlasApi = {
   health: () => apiFetch<{ status: string }>("/api/health"),
   universe: () => apiFetch<{ symbols: string[] }>("/api/universe"),
+  universes: () => apiFetch<ApiUniverseBundle[]>("/api/universes"),
   strategyTemplates: () => apiFetch<Array<Record<string, unknown>>>("/api/strategies/templates"),
   strategies: () => apiFetch<Array<Record<string, unknown>>>("/api/strategies"),
   dataStatus: () => apiFetch<Array<Record<string, unknown>>>("/api/data/status"),

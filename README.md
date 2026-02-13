@@ -86,7 +86,7 @@ Job progress stream:
 
 ## Sample workflow
 
-1. Go to `Universe & Data` and import `data/sample/NIFTY500_1d.csv`.
+1. Go to `Universe & Data`, select/create a universe bundle, and import `data/sample/NIFTY500_1d.csv`.
 2. Go to `Strategy Lab` and run backtest.
 3. Go to `Walk-Forward` and run walk-forward (Optuna trials configurable).
 4. Go to `Auto Research` and run multi-template robust scan.
@@ -110,13 +110,14 @@ From the UI:
 4. Review candidates and explanations.
 5. Click `Create Policy`, then `Use in Paper`.
 
-## Paper Trading Autopilot (v1.3)
+## Paper Trading Autopilot (v1.4)
 
 `POST /api/paper/run-step` now supports autonomous signal generation:
 
 - If `auto_generate_signals=true`, Atlas generates signals from the active policy.
 - If paper mode is `policy` and `signals` is empty, generation is automatic.
-- Generation is dataset-scoped (policy dataset universe), ranked, and explainable.
+- Generation is bundle-scoped (policy universe bundle), deterministic, ranked, and explainable.
+- Feature cache is used for indicator reads (`data/features`) with incremental refresh.
 
 Response now includes:
 
@@ -125,6 +126,7 @@ Response now includes:
 - `selected_signals_count`
 - `selected_signals[]` and `skipped_signals[]` with reasons
 - `policy_mode`, `policy_selection_reason`, and `cost_summary`
+- `scan_truncated`, `scanned_symbols`, `evaluated_candidates`, `total_symbols`
 
 Preview endpoint (no orders placed):
 
@@ -137,15 +139,30 @@ Paper Trading UI includes:
 - Why drawer with selected/skipped reasons and cost summary
 - Shortcuts: `Ctrl/Cmd+Enter` (Run Step), `P` (Preview)
 
-## Dataset-scoped universe behavior
+## Universe Bundles (first-class scope)
 
-When a `dataset_id` is supplied for research/autopilot, symbol scanning is constrained to that dataset scope (provider + timeframe membership), with deterministic symbol sampling and optional liquid-only filtering by ADV.
+`DatasetBundle` is the explicit source of truth for universe membership:
+
+- Imports can be assigned to a bundle from `Universe & Data`.
+- Auto Research runs anchor to `bundle_id` (with compatibility fallback to `dataset_id`).
+- Paper Autopilot previews/runs can use `bundle_id` directly.
+- Symbol scans are deterministic and can be limited to top liquid names by ADV.
+
+## Short support (India-correct v1.4)
+
+- `allowed_sides` runtime setting controls allowed entry sides (default: `["BUY"]`).
+- Cash equity shorts (`EQUITY_CASH`) are intraday only:
+  - open short positions are marked `must_exit_by_eod=true`
+  - auto square-off is enforced after cutoff (`paper_short_squareoff_time`, default `15:20 IST`)
+  - forced exits are logged in audit trail.
+- Derivatives short scaffold is added via `Instrument` model (`STOCK_FUT`, `INDEX_FUT`) and lot/tick metadata.
 
 ## India-lite transaction costs
 
 A configurable cost model is available for both backtester and paper execution:
 
 - Delivery and intraday estimators (`brokerage`, `STT`, exchange charges, SEBI, stamp, GST)
+- Futures estimator for derivative instruments (configurable rates)
 - Controlled via runtime settings (`/api/settings`)
 - Applied directly to paper cash flows and included in run-step `cost_summary`
 
@@ -153,6 +170,7 @@ A configurable cost model is available for both backtester and paper execution:
 
 - `GET /api/jobs`
 - `GET /api/strategies`
+- `GET /api/universes`
 - `GET /api/paper/state`
 - `GET /api/settings`
 - `PUT /api/settings`

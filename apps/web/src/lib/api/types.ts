@@ -84,6 +84,10 @@ export type ApiWalkForwardRun = {
 export type ApiPaperPosition = {
   id: number;
   symbol: string;
+  side: "BUY" | "SELL";
+  instrument_kind: string;
+  lot_size: number;
+  must_exit_by_eod: boolean;
   qty: number;
   avg_price: number;
   stop_price?: number | null;
@@ -94,7 +98,9 @@ export type ApiPaperPosition = {
 export type ApiPaperOrder = {
   id: number;
   symbol: string;
-  side: string;
+  side: "BUY" | "SELL";
+  instrument_kind: string;
+  lot_size: number;
   qty: number;
   fill_price?: number | null;
   status: string;
@@ -107,6 +113,8 @@ export type ApiPaperSignal = {
   side: "BUY" | "SELL";
   template: string;
   timeframe?: string;
+  instrument_kind?: string;
+  lot_size?: number;
   price: number;
   stop_distance: number;
   target_price?: number | null;
@@ -124,9 +132,14 @@ export type ApiPaperSignalPreview = {
   signals_source: string;
   generated_signals_count: number;
   selected_signals_count: number;
+  bundle_id?: number;
   dataset_id?: number;
   timeframes?: string[];
   symbol_scope?: string;
+  scan_truncated?: boolean;
+  scanned_symbols?: number;
+  evaluated_candidates?: number;
+  total_symbols?: number;
   signals: ApiPaperSignal[];
   skipped_signals?: Array<Record<string, unknown>>;
 };
@@ -145,6 +158,7 @@ export type ApiPaperState = {
 export type ApiResearchRun = {
   id: number;
   created_at: string;
+  bundle_id?: number | null;
   dataset_id?: number | null;
   timeframes_json: string[];
   config_json: Record<string, unknown>;
@@ -176,4 +190,14 @@ export type ApiPolicy = {
   created_at: string;
   definition_json: Record<string, unknown>;
   promoted_from_research_run_id?: number | null;
+};
+
+export type ApiUniverseBundle = {
+  id: number;
+  name: string;
+  provider: string;
+  description?: string | null;
+  symbols: string[];
+  supported_timeframes: string[];
+  created_at: string;
 };

@@ -17,6 +17,7 @@ __pycache__/
 *.duckdb
 *.duckdb.wal
 data/parquet/
+data/features/
 apps/api/.atlas/
 
 # IDE

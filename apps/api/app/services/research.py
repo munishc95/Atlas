@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.core.exceptions import APIError
-from app.db.models import Dataset, Policy, ResearchCandidate, ResearchRun
+from app.db.models import Dataset, DatasetBundle, Policy, ResearchCandidate, ResearchRun
 from app.services.data_store import DataStore
 from app.services.walkforward import execute_walkforward
 from app.strategies.templates import list_templates
@@ -285,12 +285,25 @@ def _policy_from_candidates(run_id: int, candidates: list[ResearchCandidate]) ->
         )
 
     return {
-        "version": "v1.3",
+        "version": "v1.4",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_research_run_id": run_id,
-        "universe": {"dataset_id": None, "symbol_scope": "liquid", "max_symbols_scan": 50},
+        "universe": {
+            "bundle_id": None,
+            "dataset_id": None,
+            "symbol_scope": "liquid",
+            "max_symbols_scan": 50,
+        },
         "timeframes": ["1d"],
-        "ranking": {"method": "robust_score", "seed": 7, "weights": {"signal": 1.0}},
+        "ranking": {
+            "method": "robust_score",
+            "seed": 7,
+            "weights": {"signal": 0.65, "liquidity": 0.25, "stability": 0.10},
+        },
+        "allowed_instruments": {
+            "BUY": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
+            "SELL": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
+        },
         "cost_model": {"enabled": False, "mode": "delivery"},
         "regime_map": regime_map,
         "notes": notes,
@@ -310,6 +323,7 @@ def execute_research_run(
     cfg = dict(payload.get("config", {}))
     primary_timeframe = timeframes[0]
     symbol_scope = str(payload.get("symbol_scope", "liquid")).strip().lower() or "liquid"
+    requested_bundle_id = payload.get("bundle_id")
 
     trials_per_strategy = int(
         cfg.get("trials_per_strategy", max(20, settings.optuna_default_trials // 3))
@@ -332,6 +346,7 @@ def execute_research_run(
     _emit(progress_cb, 8, "Creating research run")
     run = ResearchRun(
         dataset_id=payload.get("dataset_id"),
+        bundle_id=requested_bundle_id,
         timeframes_json=timeframes,
         config_json={
             "symbol_scope": symbol_scope,
@@ -353,7 +368,30 @@ def execute_research_run(
     session.refresh(run)
 
     _emit(progress_cb, 12, f"Selecting symbols by {primary_timeframe} ADV")
-    if run.dataset_id is not None:
+    if run.bundle_id is not None:
+        bundle = session.get(DatasetBundle, run.bundle_id)
+        if bundle is None:
+            run.status = "FAILED"
+            run.summary_json = {
+                "error": {
+                    "code": "bundle_not_found",
+                    "message": f"Bundle {run.bundle_id} was not found.",
+                }
+            }
+            session.add(run)
+            session.commit()
+            raise APIError(
+                code="bundle_not_found", message=f"Bundle {run.bundle_id} was not found."
+            )
+        symbols = store.sample_bundle_symbols(
+            session=session,
+            bundle_id=run.bundle_id,
+            timeframe=timeframes[0],
+            symbol_scope=symbol_scope,
+            max_symbols_scan=max_symbols,
+            seed=seed or 7,
+        )
+    elif run.dataset_id is not None:
         dataset = session.get(Dataset, run.dataset_id)
         if dataset is None:
             run.status = "FAILED"
@@ -368,19 +406,32 @@ def execute_research_run(
             raise APIError(
                 code="dataset_not_found", message=f"Dataset {run.dataset_id} was not found."
             )
-        if dataset.timeframe not in timeframes:
-            timeframes = [dataset.timeframe, *timeframes]
-            run.timeframes_json = timeframes
+        if dataset.bundle_id is not None:
+            run.bundle_id = dataset.bundle_id
             session.add(run)
             session.commit()
-        symbols = store.sample_dataset_symbols(
-            session=session,
-            dataset_id=run.dataset_id,
-            timeframe=timeframes[0],
-            symbol_scope=symbol_scope,
-            max_symbols_scan=max_symbols,
-            seed=seed or 7,
-        )
+            symbols = store.sample_bundle_symbols(
+                session=session,
+                bundle_id=int(dataset.bundle_id),
+                timeframe=timeframes[0],
+                symbol_scope=symbol_scope,
+                max_symbols_scan=max_symbols,
+                seed=seed or 7,
+            )
+        else:
+            if dataset.timeframe not in timeframes:
+                timeframes = [dataset.timeframe, *timeframes]
+                run.timeframes_json = timeframes
+                session.add(run)
+                session.commit()
+            symbols = store.sample_dataset_symbols(
+                session=session,
+                dataset_id=run.dataset_id,
+                timeframe=timeframes[0],
+                symbol_scope=symbol_scope,
+                max_symbols_scan=max_symbols,
+                seed=seed or 7,
+            )
     else:
         symbols = _sample_symbols_by_adv(
             session=session,
@@ -506,6 +557,7 @@ def execute_research_run(
 
     policy_preview = _policy_from_candidates(run.id, candidates)
     policy_preview["universe"] = {
+        "bundle_id": run.bundle_id,
         "dataset_id": run.dataset_id,
         "symbol_scope": symbol_scope,
         "max_symbols_scan": max_symbols,
@@ -514,7 +566,7 @@ def execute_research_run(
     policy_preview["ranking"] = {
         "method": "robust_score",
         "seed": seed if seed is not None else 7,
-        "weights": {"signal": 1.0},
+        "weights": {"signal": 0.65, "liquidity": 0.25, "stability": 0.10},
     }
     policy_preview["cost_model"] = {
         "enabled": bool(settings.cost_model_enabled),
@@ -530,6 +582,8 @@ def execute_research_run(
         "accepted_count": len(accepted),
         "rejected_count": len(candidates) - len(accepted),
         "symbols": symbols,
+        "bundle_id": run.bundle_id,
+        "dataset_id": run.dataset_id,
         "timeframes": timeframes,
         "strategy_templates": templates,
         "top_candidate": {

@@ -166,24 +166,17 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await expect(page.getByRole("heading", { name: "Auto Research" })).toBeVisible({
     timeout: 20_000,
   });
-  const dataStatusRes = await request.get(`${apiBase}/api/data/status`);
-  expect(dataStatusRes.ok()).toBeTruthy();
-  const dataStatusBody = await dataStatusRes.json();
-  const dataRows = (dataStatusBody?.data ?? []) as Array<{
-    id?: number;
-    symbol?: string;
-    timeframe?: string;
-  }>;
-  const datasetRow =
-    [...dataRows]
-      .reverse()
-      .find((row) => row.symbol === "NIFTY500" && row.timeframe === "1d") ?? dataRows[0];
-  const datasetId = Number(datasetRow?.id ?? 0);
-  expect(datasetId > 0).toBeTruthy();
+  const bundlesRes = await request.get(`${apiBase}/api/universes`);
+  expect(bundlesRes.ok()).toBeTruthy();
+  const bundlesBody = await bundlesRes.json();
+  const bundles = (bundlesBody?.data ?? []) as Array<{ id?: number; symbols?: string[] }>;
+  const targetBundle = bundles.find((bundle) => (bundle.symbols ?? []).includes("NIFTY500")) ?? bundles[0];
+  const bundleId = Number(targetBundle?.id ?? 0);
+  expect(bundleId > 0).toBeTruthy();
 
   const runResearchApi = await request.post(`${apiBase}/api/research/run`, {
     data: {
-      dataset_id: datasetId,
+      bundle_id: bundleId,
       timeframes: ["1d"],
       strategy_templates: ["trend_breakout"],
       symbol_scope: "liquid",
@@ -229,6 +222,7 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await expect(page.getByRole("button", { name: "Run Step" })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(page.getByText("Universe bundle")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "Promoted strategies" })).toBeVisible({
     timeout: 20_000,
   });
@@ -258,4 +252,36 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
     await expect(page.getByRole("dialog", { name: "Why this run step" })).toBeVisible();
     await expect(page.getByText("Skipped reasons")).toBeVisible();
   }
+
+  const settingsRes = await request.put(`${apiBase}/api/settings`, {
+    data: { allowed_sides: ["BUY"], paper_mode: "strategy", active_policy_id: null },
+  });
+  expect(settingsRes.ok()).toBeTruthy();
+  const sellStepRes = await request.post(`${apiBase}/api/paper/run-step`, {
+    data: {
+      regime: "TREND_UP",
+      signals: [
+        {
+          symbol: "NIFTY500",
+          side: "SELL",
+          template: "trend_breakout",
+          instrument_kind: "EQUITY_CASH",
+          price: 100,
+          stop_distance: 5,
+          signal_strength: 0.9,
+          adv: 10000000000,
+          vol_scale: 0,
+        },
+      ],
+      mark_prices: {},
+    },
+  });
+  expect(sellStepRes.ok()).toBeTruthy();
+  const sellStepBody = await sellStepRes.json();
+  const sellStepJob = await waitForJob(request, apiBase, sellStepBody.data.job_id);
+  const sellResult = (sellStepJob.result_json ?? {}) as Record<string, unknown>;
+  const sellSkipped = (sellResult.skipped_signals ?? []) as Array<{ reason?: string }>;
+  expect(sellSkipped.some((item) => item.reason === "shorts_disabled")).toBeTruthy();
+  await page.reload();
+  await expect(page.getByText("Could not load paper trading state")).toHaveCount(0);
 });

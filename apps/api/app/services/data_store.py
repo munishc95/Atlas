@@ -9,20 +9,116 @@ import numpy as np
 import pandas as pd
 from sqlmodel import Session, select
 
-from app.db.models import Dataset, Symbol
+from app.db.models import Dataset, DatasetBundle, Instrument, Symbol
+from app.engine.indicators import adx, atr, bollinger_bands, ema, keltner_channels, rsi
 
 
 class DataStore:
-    """Persists OHLCV to Parquet and serves analytical reads through DuckDB."""
+    """Persists OHLCV/feature Parquet and serves analytical reads through DuckDB."""
 
-    def __init__(self, parquet_root: str, duckdb_path: str) -> None:
+    def __init__(
+        self,
+        parquet_root: str,
+        duckdb_path: str,
+        feature_cache_root: str | None = None,
+    ) -> None:
         self.parquet_root = Path(parquet_root)
         self.parquet_root.mkdir(parents=True, exist_ok=True)
+        self.feature_cache_root = Path(
+            feature_cache_root
+            if feature_cache_root is not None
+            else str(self.parquet_root.parent / "features")
+        )
+        self.feature_cache_root.mkdir(parents=True, exist_ok=True)
         self.duckdb_path = duckdb_path
         self._adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
+        self._bundle_adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
 
     def _parquet_path(self, symbol: str, timeframe: str) -> Path:
         return self.parquet_root / f"symbol={symbol}" / f"timeframe={timeframe}" / "ohlcv.parquet"
+
+    def _feature_path(self, symbol: str, timeframe: str) -> Path:
+        return (
+            self.feature_cache_root
+            / f"symbol={symbol}"
+            / f"timeframe={timeframe}"
+            / "features.parquet"
+        )
+
+    def _normalize_symbols(self, symbols: list[str]) -> list[str]:
+        values = [str(item).upper().strip() for item in symbols if str(item).strip()]
+        return list(dict.fromkeys(sorted(values)))
+
+    def _get_or_create_bundle(
+        self,
+        session: Session,
+        *,
+        provider: str,
+        bundle_id: int | None = None,
+        bundle_name: str | None = None,
+        bundle_description: str | None = None,
+    ) -> DatasetBundle | None:
+        if bundle_id is not None:
+            bundle = session.get(DatasetBundle, bundle_id)
+            if bundle is not None:
+                return bundle
+
+        if bundle_name:
+            existing = session.exec(
+                select(DatasetBundle).where(DatasetBundle.name == bundle_name)
+            ).first()
+            if existing is not None:
+                return existing
+            bundle = DatasetBundle(
+                name=bundle_name,
+                provider=provider,
+                description=bundle_description,
+                symbols_json=[],
+                supported_timeframes_json=[],
+            )
+            session.add(bundle)
+            session.flush()
+            return bundle
+
+        default_name = f"{provider}-universe"
+        bundle = session.exec(
+            select(DatasetBundle).where(DatasetBundle.name == default_name)
+        ).first()
+        if bundle is None:
+            bundle = DatasetBundle(
+                name=default_name,
+                provider=provider,
+                description="Compatibility default bundle for legacy imports.",
+                symbols_json=[],
+                supported_timeframes_json=[],
+            )
+            session.add(bundle)
+            session.flush()
+        return bundle
+
+    def _update_bundle_membership(
+        self,
+        session: Session,
+        *,
+        bundle: DatasetBundle | None,
+        symbol: str,
+        timeframe: str,
+    ) -> None:
+        if bundle is None:
+            return
+        symbols = self._normalize_symbols(list(bundle.symbols_json or []))
+        if symbol.upper() not in symbols:
+            symbols.append(symbol.upper())
+        timeframes = [
+            str(item).strip()
+            for item in (bundle.supported_timeframes_json or [])
+            if str(item).strip()
+        ]
+        if timeframe not in timeframes:
+            timeframes.append(timeframe)
+        bundle.symbols_json = self._normalize_symbols(symbols)
+        bundle.supported_timeframes_json = list(dict.fromkeys(timeframes))
+        session.add(bundle)
 
     def save_ohlcv(
         self,
@@ -32,7 +128,15 @@ class DataStore:
         frame: pd.DataFrame,
         provider: str,
         checksum: str | None = None,
+        *,
+        bundle_id: int | None = None,
+        bundle_name: str | None = None,
+        bundle_description: str | None = None,
     ) -> Dataset:
+        # Ensure newly added tables/columns exist for direct service usage in tests and scripts.
+        from app.db.session import init_db
+
+        init_db()
         symbol = symbol.upper()
         clean = frame.copy()
         clean["datetime"] = pd.to_datetime(clean["datetime"], utc=True)
@@ -44,8 +148,40 @@ class DataStore:
 
         if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:
             session.add(Symbol(symbol=symbol, name=symbol))
+        if (
+            session.exec(
+                select(Instrument)
+                .where(Instrument.symbol == symbol)
+                .where(Instrument.kind == "EQUITY_CASH")
+            ).first()
+            is None
+        ):
+            session.add(
+                Instrument(
+                    symbol=symbol,
+                    kind="EQUITY_CASH",
+                    underlying=symbol,
+                    lot_size=1,
+                    tick_size=0.05,
+                )
+            )
+
+        bundle = self._get_or_create_bundle(
+            session,
+            provider=provider,
+            bundle_id=bundle_id,
+            bundle_name=bundle_name,
+            bundle_description=bundle_description,
+        )
+        self._update_bundle_membership(
+            session,
+            bundle=bundle,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
 
         dataset = Dataset(
+            bundle_id=bundle.id if bundle is not None else None,
             provider=provider,
             symbol=symbol,
             timeframe=timeframe,
@@ -58,17 +194,47 @@ class DataStore:
         session.commit()
         session.refresh(dataset)
         self._adv_cache.clear()
+        self._bundle_adv_cache.clear()
         return dataset
 
     def list_symbols(self, session: Session) -> list[str]:
         rows = session.exec(select(Symbol).order_by(Symbol.symbol)).all()
         return [row.symbol for row in rows]
 
-    def data_status(self, session: Session) -> list[dict[str, object]]:
-        rows = session.exec(select(Dataset).order_by(Dataset.symbol, Dataset.timeframe)).all()
+    def list_bundles(self, session: Session) -> list[dict[str, object]]:
+        rows = session.exec(select(DatasetBundle).order_by(DatasetBundle.created_at.desc())).all()
         return [
             {
                 "id": row.id,
+                "name": row.name,
+                "provider": row.provider,
+                "description": row.description,
+                "symbols": list(row.symbols_json or []),
+                "supported_timeframes": list(row.supported_timeframes_json or []),
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
+
+    def get_bundle(self, session: Session, bundle_id: int) -> DatasetBundle | None:
+        return session.get(DatasetBundle, bundle_id)
+
+    def data_status(self, session: Session) -> list[dict[str, object]]:
+        rows = session.exec(select(Dataset).order_by(Dataset.symbol, Dataset.timeframe)).all()
+        bundle_ids = {row.bundle_id for row in rows if row.bundle_id is not None}
+        bundle_lookup: dict[int, str] = {}
+        if bundle_ids:
+            bundle_rows = session.exec(
+                select(DatasetBundle).where(DatasetBundle.id.in_(list(bundle_ids)))
+            ).all()
+            bundle_lookup = {int(row.id): row.name for row in bundle_rows if row.id is not None}
+        return [
+            {
+                "id": row.id,
+                "bundle_id": row.bundle_id,
+                "bundle_name": bundle_lookup.get(int(row.bundle_id))
+                if row.bundle_id is not None
+                else None,
                 "provider": row.provider,
                 "symbol": row.symbol,
                 "timeframe": row.timeframe,
@@ -83,6 +249,25 @@ class DataStore:
     def get_dataset(self, session: Session, dataset_id: int) -> Dataset | None:
         return session.get(Dataset, dataset_id)
 
+    def get_bundle_symbols(
+        self,
+        session: Session,
+        bundle_id: int,
+        *,
+        timeframe: str | None = None,
+    ) -> list[str]:
+        bundle = self.get_bundle(session, bundle_id)
+        if bundle is None:
+            return []
+        rows_stmt = select(Dataset.symbol).where(Dataset.bundle_id == bundle_id)
+        if timeframe:
+            rows_stmt = rows_stmt.where(Dataset.timeframe == timeframe)
+        rows = session.exec(rows_stmt.order_by(Dataset.symbol.asc())).all()
+        dataset_symbols = [str(item).upper() for item in rows if str(item).strip()]
+        if dataset_symbols:
+            return self._normalize_symbols(dataset_symbols)
+        return self._normalize_symbols(list(bundle.symbols_json or []))
+
     def get_dataset_symbols(
         self,
         session: Session,
@@ -95,19 +280,14 @@ class DataStore:
             return []
 
         target_timeframe = timeframe or dataset.timeframe
-        rows = session.exec(
-            select(Dataset.symbol)
-            .where(Dataset.provider == dataset.provider)
-            .where(Dataset.timeframe == target_timeframe)
-            .order_by(Dataset.symbol.asc())
-        ).all()
-        symbols = [str(row).upper() for row in rows if str(row).strip()]
+        if dataset.bundle_id is not None:
+            scoped = self.get_bundle_symbols(session, dataset.bundle_id, timeframe=target_timeframe)
+            if scoped:
+                return scoped
 
         source_symbols = dataset.symbols_json if isinstance(dataset.symbols_json, list) else None
         if source_symbols:
-            symbols.extend([str(item).upper() for item in source_symbols if str(item).strip()])
-        if symbols:
-            return list(dict.fromkeys(sorted(symbols)))
+            return self._normalize_symbols([str(item) for item in source_symbols])
         return [dataset.symbol.upper()]
 
     def _symbol_adv(self, frame: pd.DataFrame, lookback: int) -> float:
@@ -115,6 +295,50 @@ class DataStore:
             return 0.0
         adv = (frame["close"] * frame["volume"]).tail(lookback).mean()
         return float(np.nan_to_num(float(adv), nan=0.0))
+
+    def _rank_by_adv(
+        self,
+        symbols: list[str],
+        *,
+        timeframe: str,
+        lookback: int,
+    ) -> list[tuple[str, float]]:
+        rows: list[tuple[str, float]] = []
+        for symbol in symbols:
+            frame = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
+            rows.append((symbol, self._symbol_adv(frame, lookback)))
+        return sorted(rows, key=lambda item: (-item[1], item[0]))
+
+    def sample_bundle_symbols(
+        self,
+        session: Session,
+        *,
+        bundle_id: int,
+        timeframe: str,
+        symbol_scope: str,
+        max_symbols_scan: int,
+        adv_lookback: int = 20,
+        seed: int = 7,
+    ) -> list[str]:
+        symbols = self.get_bundle_symbols(session, bundle_id, timeframe=timeframe)
+        if not symbols:
+            return []
+        scope = str(symbol_scope or "liquid").lower()
+        limit = len(symbols) if max_symbols_scan <= 0 else min(len(symbols), max_symbols_scan)
+        if scope == "all":
+            ordered = sorted(symbols)
+            ordered = sorted(
+                ordered,
+                key=lambda value: hashlib.sha1(f"{int(seed)}::{value}".encode("utf-8")).hexdigest(),
+            )
+            return ordered[:limit]
+
+        cache_key = (bundle_id, timeframe, adv_lookback)
+        scored = self._bundle_adv_cache.get(cache_key)
+        if scored is None:
+            scored = self._rank_by_adv(symbols, timeframe=timeframe, lookback=adv_lookback)
+            self._bundle_adv_cache[cache_key] = scored
+        return [symbol for symbol, _ in scored[:limit]]
 
     def sample_dataset_symbols(
         self,
@@ -127,6 +351,20 @@ class DataStore:
         adv_lookback: int = 20,
         seed: int = 7,
     ) -> list[str]:
+        dataset = self.get_dataset(session, dataset_id)
+        if dataset is None:
+            return []
+        if dataset.bundle_id is not None:
+            return self.sample_bundle_symbols(
+                session,
+                bundle_id=int(dataset.bundle_id),
+                timeframe=timeframe,
+                symbol_scope=symbol_scope,
+                max_symbols_scan=max_symbols_scan,
+                adv_lookback=adv_lookback,
+                seed=seed,
+            )
+
         symbols = self.get_dataset_symbols(session, dataset_id, timeframe=timeframe)
         if not symbols:
             return []
@@ -135,24 +373,16 @@ class DataStore:
         limit = len(symbols) if max_symbols_scan <= 0 else min(len(symbols), max_symbols_scan)
         if scope == "all":
             ordered = sorted(symbols)
-            if seed is not None:
-                # Deterministic pseudo-shuffle to avoid always taking the same alphabetical prefix.
-                ordered = sorted(
-                    ordered,
-                    key=lambda value: hashlib.sha1(
-                        f"{int(seed)}::{value}".encode("utf-8")
-                    ).hexdigest(),
-                )
+            ordered = sorted(
+                ordered,
+                key=lambda value: hashlib.sha1(f"{int(seed)}::{value}".encode("utf-8")).hexdigest(),
+            )
             return ordered[:limit]
 
         cache_key = (dataset_id, timeframe, adv_lookback)
         scored = self._adv_cache.get(cache_key)
         if scored is None:
-            rows: list[tuple[str, float]] = []
-            for symbol in symbols:
-                frame = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
-                rows.append((symbol, self._symbol_adv(frame, adv_lookback)))
-            scored = sorted(rows, key=lambda item: (-item[1], item[0]))
+            scored = self._rank_by_adv(symbols, timeframe=timeframe, lookback=adv_lookback)
             self._adv_cache[cache_key] = scored
         return [symbol for symbol, _ in scored[:limit]]
 
@@ -186,3 +416,152 @@ class DataStore:
 
         frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
         return frame
+
+    def _compute_feature_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
+        base = frame.copy().sort_values("datetime")
+        base["datetime"] = pd.to_datetime(base["datetime"], utc=True)
+        close = base["close"]
+        bb = bollinger_bands(close, period=20, std_mult=2.0)
+        kc = keltner_channels(base, period=20, atr_mult=1.5)
+        atr_14 = atr(base, period=14)
+        out = pd.DataFrame(
+            {
+                "datetime": base["datetime"],
+                "close": close,
+                "volume": base["volume"],
+                "atr_14": atr_14,
+                "atr_pct": atr_14 / close.replace(0, np.nan),
+                "rsi_4": rsi(close, period=4),
+                "rsi_7": rsi(close, period=7),
+                "ema_20": ema(close, period=20),
+                "ema_50": ema(close, period=50),
+                "ema_100": ema(close, period=100),
+                "ema_200": ema(close, period=200),
+                "bb_mid": bb["mid"],
+                "bb_upper": bb["upper"],
+                "bb_lower": bb["lower"],
+                "bb_width": bb["width"],
+                "kc_mid": kc["mid"],
+                "kc_upper": kc["upper"],
+                "kc_lower": kc["lower"],
+                "adx_14": adx(base, period=14),
+            }
+        )
+        return out.sort_values("datetime").reset_index(drop=True)
+
+    def update_feature_cache(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        base = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
+        if base.empty:
+            return pd.DataFrame()
+        path = self._feature_path(symbol, timeframe)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not path.exists():
+            computed = self._compute_feature_frame(base)
+            computed.to_parquet(path, index=False)
+            return computed
+
+        cached = pd.read_parquet(path)
+        if cached.empty:
+            computed = self._compute_feature_frame(base)
+            computed.to_parquet(path, index=False)
+            return computed
+
+        cached["datetime"] = pd.to_datetime(cached["datetime"], utc=True)
+        cached = cached.sort_values("datetime")
+        base = base.sort_values("datetime").reset_index(drop=True)
+        latest_cached = cached["datetime"].max()
+        latest_base = base["datetime"].max()
+        if latest_cached >= latest_base and len(cached) >= len(base):
+            return cached.reset_index(drop=True)
+
+        indices = base.index[base["datetime"] >= latest_cached]
+        if len(indices) > 0:
+            start_idx = max(0, int(indices[0]) - 300)
+        else:
+            start_idx = max(0, len(base) - 500)
+        recomputed_tail = self._compute_feature_frame(base.iloc[start_idx:].reset_index(drop=True))
+        overlap_start = recomputed_tail["datetime"].min()
+        head = cached[cached["datetime"] < overlap_start]
+        merged = (
+            pd.concat([head, recomputed_tail], ignore_index=True)
+            .drop_duplicates(subset=["datetime"], keep="last")
+            .sort_values("datetime")
+            .reset_index(drop=True)
+        )
+        merged.to_parquet(path, index=False)
+        return merged
+
+    def load_features(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> pd.DataFrame:
+        self.update_feature_cache(symbol=symbol, timeframe=timeframe)
+        path = self._feature_path(symbol, timeframe)
+        if not path.exists():
+            return pd.DataFrame()
+
+        with duckdb.connect(self.duckdb_path) as conn:
+            query = f"SELECT * FROM read_parquet('{path.as_posix()}')"
+            clauses: list[str] = []
+            params: list[object] = []
+            if start is not None:
+                clauses.append("datetime >= ?")
+                params.append(start.astimezone(UTC).isoformat())
+            if end is not None:
+                clauses.append("datetime <= ?")
+                params.append(end.astimezone(UTC).isoformat())
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+            query += " ORDER BY datetime"
+            frame = conn.execute(query, params).df()
+        if frame.empty:
+            return frame
+        frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
+        return frame
+
+    def get_lot_size(
+        self,
+        session: Session,
+        *,
+        symbol: str,
+        instrument_kind: str = "EQUITY_CASH",
+    ) -> int:
+        row = session.exec(
+            select(Instrument)
+            .where(Instrument.symbol == symbol.upper())
+            .where(Instrument.kind == instrument_kind.upper())
+            .order_by(Instrument.id.desc())
+        ).first()
+        if row is None:
+            return 1
+        return max(1, int(row.lot_size))
+
+    def get_futures_chain(
+        self,
+        session: Session,
+        *,
+        underlying: str,
+        instrument_kind: str = "STOCK_FUT",
+    ) -> list[dict[str, object]]:
+        """Scaffold for derivatives support (phase 2)."""
+        rows = session.exec(
+            select(Instrument)
+            .where(Instrument.underlying == underlying.upper())
+            .where(Instrument.kind == instrument_kind.upper())
+            .order_by(Instrument.symbol.asc())
+        ).all()
+        return [
+            {
+                "symbol": row.symbol,
+                "kind": row.kind,
+                "underlying": row.underlying,
+                "lot_size": row.lot_size,
+                "tick_size": row.tick_size,
+            }
+            for row in rows
+        ]

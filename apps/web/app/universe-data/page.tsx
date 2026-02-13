@@ -15,6 +15,7 @@ export default function UniverseDataPage() {
   const queryClient = useQueryClient();
   const [symbol, setSymbol] = useState("NIFTY500");
   const [timeframe, setTimeframe] = useState("1d");
+  const [bundleId, setBundleId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
@@ -28,6 +29,20 @@ export default function UniverseDataPage() {
     queryFn: async () => (await atlasApi.dataStatus()).data,
     refetchInterval: 10_000,
   });
+  const bundlesQuery = useQuery({
+    queryKey: qk.universes,
+    queryFn: async () => (await atlasApi.universes()).data,
+  });
+
+  useEffect(() => {
+    if (bundleId !== null) {
+      return;
+    }
+    const firstBundle = Number((bundlesQuery.data ?? [])[0]?.id);
+    if (Number.isFinite(firstBundle) && firstBundle > 0) {
+      setBundleId(firstBundle);
+    }
+  }, [bundleId, bundlesQuery.data]);
 
   const importMutation = useMutation({
     mutationFn: async () => {
@@ -38,6 +53,9 @@ export default function UniverseDataPage() {
       formData.append("symbol", symbol);
       formData.append("timeframe", timeframe);
       formData.append("provider", "csv");
+      if (bundleId) {
+        formData.append("bundle_id", String(bundleId));
+      }
       formData.append("file", file);
       return (await atlasApi.importData(formData)).data;
     },
@@ -104,6 +122,7 @@ export default function UniverseDataPage() {
             <table className="w-full text-sm">
               <thead className="bg-surface text-left text-muted">
                 <tr>
+                  <th className="px-3 py-2 font-medium">Bundle</th>
                   <th className="px-3 py-2 font-medium">Symbol</th>
                   <th className="px-3 py-2 font-medium">Timeframe</th>
                   <th className="px-3 py-2 font-medium">Start</th>
@@ -114,6 +133,7 @@ export default function UniverseDataPage() {
               <tbody>
                 {pagedRows.map((row) => (
                   <tr key={String(row.id)} className="border-t border-border">
+                    <td className="px-3 py-2">{String(row.bundle_name ?? "-")}</td>
                     <td className="px-3 py-2">{String(row.symbol)}</td>
                     <td className="px-3 py-2">{String(row.timeframe)}</td>
                     <td className="px-3 py-2">{String(row.start_date)}</td>
@@ -148,6 +168,19 @@ export default function UniverseDataPage() {
               <option value="1d">1d</option>
               <option value="4h_ish">4h_ish</option>
               <option value="4h_ish_resampled">4h_ish_resampled</option>
+            </select>
+            <select
+              value={bundleId ?? ""}
+              onChange={(event) =>
+                setBundleId(event.target.value ? Number(event.target.value) : null)
+              }
+              className="focus-ring rounded-xl border border-border bg-panel px-3 py-2"
+            >
+              {(bundlesQuery.data ?? []).map((bundle) => (
+                <option key={bundle.id} value={bundle.id}>
+                  {bundle.name}
+                </option>
+              ))}
             </select>
             <input
               type="file"

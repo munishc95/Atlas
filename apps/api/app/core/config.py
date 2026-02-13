@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./apps/api/.atlas/atlas.db"
     duckdb_path: str = "apps/api/.atlas/ohlcv.duckdb"
     parquet_root: str = "data/parquet"
+    feature_cache_root: str = "data/features"
     sample_data_root: str = "data/sample"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "atlas"
@@ -43,8 +44,16 @@ class Settings(BaseSettings):
     stamp_delivery_buy_bps: float = 1.5
     stamp_intraday_buy_bps: float = 0.3
     gst_rate: float = 0.18
+    futures_brokerage_bps: float = 0.0
+    futures_stt_sell_bps: float = 1.0
+    futures_exchange_txn_bps: float = 0.19
+    futures_stamp_buy_bps: float = 0.0
     max_position_value_pct_adv: float = 0.01
     diversification_corr_threshold: float = 0.75
+    allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])
+    paper_short_squareoff_time: str = "15:20"
+    autopilot_max_symbols_scan: int = 200
+    autopilot_max_runtime_seconds: int = 20
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     optuna_storage_url: str | None = None
@@ -54,6 +63,7 @@ class Settings(BaseSettings):
     def ensure_local_paths(self) -> None:
         Path("apps/api/.atlas").mkdir(parents=True, exist_ok=True)
         Path(self.parquet_root).mkdir(parents=True, exist_ok=True)
+        Path(self.feature_cache_root).mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

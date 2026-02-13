@@ -21,7 +21,11 @@ from app.services.walkforward import execute_walkforward
 
 def _store() -> DataStore:
     settings = get_settings()
-    return DataStore(parquet_root=settings.parquet_root, duckdb_path=settings.duckdb_path)
+    return DataStore(
+        parquet_root=settings.parquet_root,
+        duckdb_path=settings.duckdb_path,
+        feature_cache_root=settings.feature_cache_root,
+    )
 
 
 def _set_progress(session: Session, job_id: str, progress: int, message: str | None = None) -> None:
@@ -183,6 +187,9 @@ def run_import_job(
                     mapping=payload.get("mapping"),
                     provider=str(payload.get("provider", "csv")),
                     bar_windows=settings.four_hour_bars,
+                    bundle_id=payload.get("bundle_id"),
+                    bundle_name=payload.get("bundle_name"),
+                    bundle_description=payload.get("bundle_description"),
                 ),
                 settings=settings,
                 session=session,

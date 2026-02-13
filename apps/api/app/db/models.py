@@ -17,8 +17,29 @@ class Symbol(SQLModel, table=True):
     metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
 
 
+class Instrument(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    symbol: str = Field(index=True, max_length=32)
+    kind: str = Field(index=True, max_length=16)  # EQUITY_CASH | STOCK_FUT | INDEX_FUT
+    underlying: str | None = Field(default=None, index=True, max_length=32)
+    lot_size: int = 1
+    tick_size: float = 0.05
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
+class DatasetBundle(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True, max_length=128)
+    provider: str = Field(max_length=64)
+    description: str | None = Field(default=None, max_length=512)
+    symbols_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    supported_timeframes_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Dataset(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
     provider: str = Field(max_length=64)
     symbol: str = Field(index=True, max_length=32)
     timeframe: str = Field(index=True, max_length=16)
@@ -87,6 +108,7 @@ class ResearchRun(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     created_at: datetime = Field(default_factory=utc_now)
     dataset_id: int | None = Field(default=None, foreign_key="dataset.id")
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
     timeframes_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     status: str = Field(default="QUEUED", index=True, max_length=16)
@@ -138,10 +160,15 @@ class PaperState(SQLModel, table=True):
 class PaperPosition(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     symbol: str = Field(index=True, max_length=32)
+    side: str = Field(default="BUY", max_length=8)
+    instrument_kind: str = Field(default="EQUITY_CASH", max_length=16)
+    lot_size: int = 1
+    must_exit_by_eod: bool = False
     qty: int
     avg_price: float
     stop_price: float | None = None
     target_price: float | None = None
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     opened_at: datetime = Field(default_factory=utc_now)
 
 
@@ -149,6 +176,8 @@ class PaperOrder(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     symbol: str = Field(index=True, max_length=32)
     side: str = Field(max_length=8)
+    instrument_kind: str = Field(default="EQUITY_CASH", max_length=16)
+    lot_size: int = 1
     qty: int
     limit_price: float | None = None
     fill_price: float | None = None
