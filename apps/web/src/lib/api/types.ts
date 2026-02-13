@@ -218,6 +218,51 @@ export type ApiDailyReport = {
   created_at: string;
 };
 
+export type ApiMonthlyReport = {
+  id: number;
+  month: string;
+  bundle_id?: number | null;
+  policy_id?: number | null;
+  content_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ApiPolicyEvaluation = {
+  id: number;
+  created_at: string;
+  bundle_id: number;
+  regime?: string | null;
+  window_start: string;
+  window_end: string;
+  champion_policy_id: number;
+  challenger_policy_ids_json: number[];
+  status: string;
+  summary_json: Record<string, unknown>;
+  notes?: string | null;
+};
+
+export type ApiPolicyShadowRun = {
+  id: number;
+  evaluation_id: number;
+  policy_id: number;
+  asof_date: string;
+  run_summary_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ApiReplayRun = {
+  id: number;
+  created_at: string;
+  bundle_id: number;
+  policy_id: number;
+  regime?: string | null;
+  start_date: string;
+  end_date: string;
+  seed: number;
+  status: string;
+  summary_json: Record<string, unknown>;
+};
+
 export type ApiOperateStatus = {
   active_policy_id?: number | null;
   active_policy_name?: string | null;

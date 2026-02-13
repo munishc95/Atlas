@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     drift_warning_risk_scale: float = 0.75
     drift_degraded_risk_scale: float = 0.25
     drift_degraded_action: str = "PAUSE"
+    evaluations_auto_promote_enabled: bool = False
+    evaluations_min_window_days: int = 20
+    evaluations_score_margin: float = 0.15
+    evaluations_max_dd_multiplier: float = 1.10
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     optuna_storage_url: str | None = None

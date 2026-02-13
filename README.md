@@ -176,6 +176,25 @@ Frontend additions:
 - New policy health view at `/policies/{id}` (20d/60d snapshots + baseline deltas)
 - Paper Trading shows inline health status and has a `Generate Daily Report` action
 
+## Champion-Challenger + Replay + PDF (v1.7)
+
+Atlas now includes reproducible policy governance and shareable tear sheets:
+
+- Champion-challenger evaluation in shadow mode:
+  - runs champion and challengers on the same bundle/window without mutating live paper state
+  - deterministic recommendation with explicit reasons and guardrails
+  - optional `auto_promote` remains disabled by default
+- Deterministic replay runs:
+  - replay summary persisted with `seed`, date range, engine version hash, and digest
+  - same input + seed yields identical ordering/summary outputs
+- Professional PDF exports:
+  - daily tear sheets include metrics, equity + drawdown chart, explainability reasons
+  - monthly tear sheets summarize period PnL/cost/DD and reason histograms
+- New UI pages:
+  - `Evaluations` for champion-challenger runs and explicit active-policy apply
+  - `Replay` for deterministic range replay + JSON export
+  - `Reports` now supports daily/monthly PDF download actions
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:
@@ -241,15 +260,30 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/policies`
 - `GET /api/policies/{id}`
 - `POST /api/policies/{id}/promote-to-paper`
+- `POST /api/policies/{id}/set-active`
 - `GET /api/policies/health`
 - `GET /api/policies/{id}/health?window_days=20|60`
+- `POST /api/evaluations/run`
+- `GET /api/evaluations`
+- `GET /api/evaluations/{id}`
+- `GET /api/evaluations/{id}/details`
 - `POST /api/paper/signals/preview`
 - `GET /api/operate/status`
+- `POST /api/replay/run`
+- `GET /api/replay/runs`
+- `GET /api/replay/runs/{id}`
+- `GET /api/replay/runs/{id}/export.json`
 - `POST /api/reports/daily/generate`
 - `GET /api/reports/daily?date=&bundle_id=&policy_id=`
 - `GET /api/reports/daily/{id}`
 - `GET /api/reports/daily/{id}/export.json`
 - `GET /api/reports/daily/{id}/export.csv`
+- `GET /api/reports/daily/{id}/export.pdf`
+- `POST /api/reports/monthly/generate`
+- `GET /api/reports/monthly?month=&bundle_id=&policy_id=`
+- `GET /api/reports/monthly/{id}`
+- `GET /api/reports/monthly/{id}/export.json`
+- `GET /api/reports/monthly/{id}/export.pdf`
 
 ## Testing
 

@@ -154,6 +154,36 @@ def _ensure_indexes_and_columns() -> None:
                 "ON policyhealthsnapshot (policy_id, window_days, asof_date)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyevaluation_status_created "
+                "ON policyevaluation (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyshadowrun_eval_policy_asof "
+                "ON policyshadowrun (evaluation_id, policy_id, asof_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_replayrun_policy_created "
+                "ON replayrun (policy_id, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_replayrun_bundle_created "
+                "ON replayrun (bundle_id, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_monthlyreport_month_bundle_policy "
+                "ON monthlyreport (month, bundle_id, policy_id)"
+            )
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

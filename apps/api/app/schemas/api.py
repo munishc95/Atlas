@@ -92,6 +92,33 @@ class DailyReportGenerateRequest(BaseModel):
     policy_id: int | None = None
 
 
+class MonthlyReportGenerateRequest(BaseModel):
+    month: str | None = None  # YYYY-MM
+    bundle_id: int | None = None
+    policy_id: int | None = None
+
+
+class PolicyEvaluationRunRequest(BaseModel):
+    bundle_id: int
+    champion_policy_id: int
+    challenger_policy_ids: list[int] | None = None
+    regime: str | None = None
+    window_days: int | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    seed: int | None = None
+
+
+class ReplayRunRequest(BaseModel):
+    bundle_id: int
+    policy_id: int
+    regime: str | None = None
+    start_date: str
+    end_date: str
+    seed: int | None = None
+    window_days: int | None = None
+
+
 class RuntimeSettingsRequest(BaseModel):
     risk_per_trade: float | None = None
     max_positions: int | None = None
@@ -116,6 +143,10 @@ class RuntimeSettingsRequest(BaseModel):
     drift_warning_risk_scale: float | None = None
     drift_degraded_risk_scale: float | None = None
     drift_degraded_action: str | None = None
+    evaluations_auto_promote_enabled: bool | None = None
+    evaluations_min_window_days: int | None = None
+    evaluations_score_margin: float | None = None
+    evaluations_max_dd_multiplier: float | None = None
     four_hour_bars: str | None = None
     paper_mode: str | None = None
     active_policy_id: int | None = None

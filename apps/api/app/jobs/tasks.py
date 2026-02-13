@@ -13,10 +13,12 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.services.backtests import execute_backtest
 from app.services.data_store import DataStore
+from app.services.evaluations import execute_policy_evaluation
 from app.services.importer import import_ohlcv_bytes
 from app.services.jobs import append_job_log, update_job
 from app.services.paper import run_paper_step
-from app.services.reports import generate_daily_report
+from app.services.replay import execute_replay_run
+from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
 
@@ -303,18 +305,11 @@ def run_daily_report_job(
             update_job(session, job_id, status="RUNNING", progress=10)
             append_job_log(session, job_id, "Daily report generation started")
             result = _execute_with_retry(
-                fn=lambda: generate_daily_report(
+                fn=lambda: _daily_report_result(
                     session=session,
                     settings=settings,
-                    report_date=(
-                        datetime.fromisoformat(str(payload["date"])).date()
-                        if payload.get("date")
-                        else None
-                    ),
-                    bundle_id=payload.get("bundle_id"),
-                    policy_id=payload.get("policy_id"),
-                    overwrite=True,
-                ).model_dump(mode="json"),
+                    payload=payload,
+                ),
                 settings=settings,
                 session=session,
                 job_id=job_id,
@@ -331,4 +326,182 @@ def run_daily_report_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "daily_report_failed", "message": str(exc)}},
+            )
+
+
+def run_monthly_report_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Monthly report generation started")
+            result = _execute_with_retry(
+                fn=lambda: _monthly_report_result(
+                    session=session,
+                    settings=settings,
+                    payload=payload,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="monthly_report",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Monthly report generation finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Monthly report failed: {exc}")
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "monthly_report_failed", "message": str(exc)}},
+            )
+
+
+def _daily_report_result(
+    *,
+    session: Session,
+    settings,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    row = generate_daily_report(
+        session=session,
+        settings=settings,
+        report_date=(
+            datetime.fromisoformat(str(payload["date"])).date() if payload.get("date") else None
+        ),
+        bundle_id=payload.get("bundle_id"),
+        policy_id=payload.get("policy_id"),
+        overwrite=True,
+    )
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "date": row.date.isoformat(),
+        "bundle_id": row.bundle_id,
+        "policy_id": row.policy_id,
+        "content_json": row.content_json,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _monthly_report_result(
+    *,
+    session: Session,
+    settings,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    row = generate_monthly_report(
+        session=session,
+        settings=settings,
+        month=str(payload["month"]) if payload.get("month") else None,
+        bundle_id=payload.get("bundle_id"),
+        policy_id=payload.get("policy_id"),
+        overwrite=True,
+    )
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "month": row.month,
+        "bundle_id": row.bundle_id,
+        "policy_id": row.policy_id,
+        "content_json": row.content_json,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def run_evaluation_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+
+    def progress_cb(progress: int, message: str | None = None) -> None:
+        try:
+            with Session(engine) as cb_session:
+                _set_progress(cb_session, job_id, progress, message)
+        except Exception:  # noqa: BLE001
+            return
+
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=5)
+            _set_progress(session, job_id, 10, "Policy evaluation started")
+            result = _execute_with_retry(
+                fn=lambda: execute_policy_evaluation(
+                    session=session,
+                    store=store,
+                    settings=settings,
+                    payload=payload,
+                    progress_cb=progress_cb,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="evaluation",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Policy evaluation finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Policy evaluation failed: {exc}")
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "evaluation_failed", "message": str(exc)}},
+            )
+
+
+def run_replay_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+
+    def progress_cb(progress: int, message: str | None = None) -> None:
+        try:
+            with Session(engine) as cb_session:
+                _set_progress(cb_session, job_id, progress, message)
+        except Exception:  # noqa: BLE001
+            return
+
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=5)
+            _set_progress(session, job_id, 10, "Replay run started")
+            result = _execute_with_retry(
+                fn=lambda: execute_replay_run(
+                    session=session,
+                    store=store,
+                    settings=settings,
+                    payload=payload,
+                    progress_cb=progress_cb,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="replay",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Replay run finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Replay run failed: {exc}")
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "replay_failed", "message": str(exc)}},
             )

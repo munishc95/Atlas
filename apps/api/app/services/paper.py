@@ -85,6 +85,10 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "drift_warning_risk_scale": settings.drift_warning_risk_scale,
             "drift_degraded_risk_scale": settings.drift_degraded_risk_scale,
             "drift_degraded_action": settings.drift_degraded_action,
+            "evaluations_auto_promote_enabled": settings.evaluations_auto_promote_enabled,
+            "evaluations_min_window_days": settings.evaluations_min_window_days,
+            "evaluations_score_margin": settings.evaluations_score_margin,
+            "evaluations_max_dd_multiplier": settings.evaluations_max_dd_multiplier,
             "cost_model_enabled": settings.cost_model_enabled,
             "cost_mode": settings.cost_mode,
             "brokerage_bps": settings.brokerage_bps,
@@ -1065,6 +1069,7 @@ def run_paper_step(
         for p in current_positions
     }
     max_positions = int(policy["max_positions"])
+    sector_limit = max(1, min(2, max_positions))
     correlation_threshold = float(
         state_settings.get(
             "diversification_corr_threshold", settings.diversification_corr_threshold
@@ -1118,6 +1123,7 @@ def run_paper_step(
                 allowed_set = {str(item).upper() for item in allowed_for_side}
         instrument_kind = requested_kind
         instrument_choice_reason = "provided"
+        sector = sectors.get(underlying_symbol, sectors.get(symbol, "UNKNOWN"))
         base_meta = {
             "symbol": symbol,
             "underlying_symbol": underlying_symbol,
@@ -1129,6 +1135,9 @@ def run_paper_step(
             "policy_name": policy.get("policy_name"),
         }
 
+        if sector_counts.get(sector, 0) >= sector_limit:
+            skipped_signals.append({**base_meta, "reason": "sector_concentration"})
+            continue
         if len(current_positions) + len(selected_signals) >= max_positions:
             skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
             continue
@@ -1271,10 +1280,6 @@ def run_paper_step(
         signal["instrument_kind"] = instrument_kind
         signal["instrument_choice_reason"] = instrument_choice_reason
 
-        sector = sectors.get(underlying_symbol, sectors.get(symbol, "UNKNOWN"))
-        if sector_counts.get(sector, 0) >= 2:
-            skipped_signals.append({**base_meta, "reason": "sector_concentration"})
-            continue
         if _correlation_reject(
             signal, selected_symbols=selected_symbols, threshold=correlation_threshold
         ):

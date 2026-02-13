@@ -34,5 +34,13 @@ export const qk = {
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,
+  monthlyReports: (month?: string, bundleId?: number | null, policyId?: number | null) =>
+    ["monthlyReports", month ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
+  monthlyReport: (id: number | null) => ["monthlyReport", id] as const,
+  evaluations: (page: number, pageSize: number) => ["evaluations", page, pageSize] as const,
+  evaluation: (id: number | null) => ["evaluation", id] as const,
+  evaluationDetails: (id: number | null) => ["evaluationDetails", id] as const,
+  replayRuns: (page: number, pageSize: number) => ["replayRuns", page, pageSize] as const,
+  replayRun: (id: number | null) => ["replayRun", id] as const,
   settings: ["settings"] as const,
 };

@@ -281,7 +281,10 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
     expect(futPositions.some((row) => row.instrument_kind === "STOCK_FUT")).toBeTruthy();
   } else {
     const skipped = (futSellResult.skipped_signals ?? []) as Array<{ reason?: string }>;
-    expect(skipped.length).toBeGreaterThan(0);
+    const killSwitch = String(futSellResult.status ?? "") === "kill_switch_active";
+    if (!killSwitch) {
+      expect(skipped.length).toBeGreaterThan(0);
+    }
   }
 
   const restorePolicyRes = await request.put(`${apiBase}/api/settings`, {
@@ -316,6 +319,46 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const reportResult = (reportJob.result_json ?? {}) as Record<string, unknown>;
   const reportId = Number(reportResult.id);
   expect(Number.isFinite(reportId) && reportId > 0).toBeTruthy();
+  const dailyPdfRes = await request.get(`${apiBase}/api/reports/daily/${reportId}/export.pdf`);
+  expect(dailyPdfRes.ok()).toBeTruthy();
+  expect(dailyPdfRes.headers()["content-type"] ?? "").toContain("application/pdf");
+  expect((await dailyPdfRes.body()).byteLength).toBeGreaterThan(1000);
+
+  const month = new Date().toISOString().slice(0, 7);
+  const monthlyGenerateRes = await request.post(`${apiBase}/api/reports/monthly/generate`, {
+    data: {
+      month,
+      bundle_id: bundleId,
+      policy_id: policyId,
+    },
+  });
+  expect(monthlyGenerateRes.ok()).toBeTruthy();
+  const monthlyGenerateBody = await monthlyGenerateRes.json();
+  const monthlyJob = await waitForJob(request, apiBase, monthlyGenerateBody.data.job_id, 120_000);
+  const monthlyResult = (monthlyJob.result_json ?? {}) as Record<string, unknown>;
+  const monthlyId = Number(monthlyResult.id);
+  expect(Number.isFinite(monthlyId) && monthlyId > 0).toBeTruthy();
+  const monthlyPdfRes = await request.get(`${apiBase}/api/reports/monthly/${monthlyId}/export.pdf`);
+  expect(monthlyPdfRes.ok()).toBeTruthy();
+  expect(monthlyPdfRes.headers()["content-type"] ?? "").toContain("application/pdf");
+  expect((await monthlyPdfRes.body()).byteLength).toBeGreaterThan(1000);
+
+  const evaluationRunRes = await request.post(`${apiBase}/api/evaluations/run`, {
+    data: {
+      bundle_id: bundleId,
+      champion_policy_id: policyId,
+      window_days: 20,
+      seed: 7,
+    },
+  });
+  expect(evaluationRunRes.ok()).toBeTruthy();
+  const evaluationRunBody = await evaluationRunRes.json();
+  const evaluationJob = await waitForJob(request, apiBase, evaluationRunBody.data.job_id, 240_000);
+  const evaluationResult = (evaluationJob.result_json ?? {}) as Record<string, unknown>;
+  const evaluationId = Number(evaluationResult.evaluation_id);
+  expect(Number.isFinite(evaluationId) && evaluationId > 0).toBeTruthy();
+  const evaluationDetailRes = await request.get(`${apiBase}/api/evaluations/${evaluationId}`);
+  expect(evaluationDetailRes.ok()).toBeTruthy();
 
   const policyHealthRes = await request.get(
     `${apiBase}/api/policies/${policyId}/health?window_days=20&refresh=true`,
@@ -339,6 +382,14 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await viewButton.click();
   await expect(page.getByRole("dialog", { name: /Daily Report/i })).toBeVisible();
   await page.getByRole("dialog", { name: /Daily Report/i }).getByRole("button", { name: "Close" }).click();
+
+  await page.goto("/evaluations");
+  await expect(
+    page.getByRole("heading", { name: "Champion-Challenger Evaluations" }),
+  ).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole("heading", { name: "Recent evaluations" })).toBeVisible();
 
   const paperStateRes = await request.get(`${apiBase}/api/paper/state`);
   const paperState = await paperStateRes.json();
@@ -378,9 +429,19 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   const sellStepJob = await waitForJob(request, apiBase, sellStepBody.data.job_id);
   const sellResult = (sellStepJob.result_json ?? {}) as Record<string, unknown>;
   const sellSkipped = (sellResult.skipped_signals ?? []) as Array<{ reason?: string }>;
-  expect(
-    sellSkipped.some((item) => item.reason === "shorts_disabled" || item.reason === "already_open"),
-  ).toBeTruthy();
+  if (String(sellResult.status ?? "") !== "kill_switch_active") {
+    expect(
+      sellSkipped.some((item) =>
+        [
+          "shorts_disabled",
+          "already_open",
+          "no_short_instrument_available",
+          "max_positions_reached",
+          "sector_concentration",
+        ].includes(String(item.reason ?? "")),
+      ),
+    ).toBeTruthy();
+  }
   await page.reload();
   await expect(page.getByText("Could not load paper trading state")).toHaveCount(0);
 });

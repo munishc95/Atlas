@@ -10,7 +10,6 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
-import type { ApiDailyReport } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 export default function ReportsPage() {
@@ -18,6 +17,7 @@ export default function ReportsPage() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [dateFilter, setDateFilter] = useState("");
+  const [monthFilter, setMonthFilter] = useState("");
 
   const reportsQuery = useQuery({
     queryKey: qk.dailyReports(dateFilter || undefined, null, null),
@@ -25,6 +25,15 @@ export default function ReportsPage() {
       (
         await atlasApi.dailyReports({
           date: dateFilter || undefined,
+        })
+      ).data,
+  });
+  const monthlyReportsQuery = useQuery({
+    queryKey: qk.monthlyReports(monthFilter || undefined, null, null),
+    queryFn: async () =>
+      (
+        await atlasApi.monthlyReports({
+          month: monthFilter || undefined,
         })
       ).data,
   });
@@ -39,6 +48,17 @@ export default function ReportsPage() {
       toast.error(error.message || "Could not queue report generation");
     },
   });
+  const generateMonthlyMutation = useMutation({
+    mutationFn: async () =>
+      (await atlasApi.generateMonthlyReport({ month: monthFilter || undefined })).data,
+    onSuccess: (payload) => {
+      setActiveJobId(payload.job_id);
+      toast.success("Monthly report job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue monthly report generation");
+    },
+  });
 
   const stream = useJobStream(activeJobId);
   useEffect(() => {
@@ -46,14 +66,17 @@ export default function ReportsPage() {
       return;
     }
     if (stream.status === "SUCCEEDED" || stream.status === "DONE") {
-      toast.success("Daily report generated");
+      toast.success("Report generated");
       queryClient.invalidateQueries({
         queryKey: qk.dailyReports(dateFilter || undefined, null, null),
       });
+      queryClient.invalidateQueries({
+        queryKey: qk.monthlyReports(monthFilter || undefined, null, null),
+      });
     } else if (stream.status === "FAILED") {
-      toast.error("Daily report generation failed");
+      toast.error("Report generation failed");
     }
-  }, [dateFilter, queryClient, stream.isTerminal, stream.status]);
+  }, [dateFilter, monthFilter, queryClient, stream.isTerminal, stream.status]);
 
   const reports = reportsQuery.data ?? [];
   const selectedReport =
@@ -91,6 +114,12 @@ export default function ReportsPage() {
               value={dateFilter}
               onChange={(event) => setDateFilter(event.target.value)}
             />
+            <input
+              type="month"
+              className="focus-ring rounded-xl border border-border px-3 py-2 text-sm"
+              value={monthFilter}
+              onChange={(event) => setMonthFilter(event.target.value)}
+            />
             <button
               type="button"
               className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
@@ -98,6 +127,14 @@ export default function ReportsPage() {
               disabled={generateMutation.isPending}
             >
               {generateMutation.isPending ? "Queuing..." : "Generate Daily Report"}
+            </button>
+            <button
+              type="button"
+              className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+              onClick={() => generateMonthlyMutation.mutate()}
+              disabled={generateMonthlyMutation.isPending}
+            >
+              {generateMonthlyMutation.isPending ? "Queuing..." : "Generate Monthly Report"}
             </button>
           </div>
         </div>
@@ -147,6 +184,67 @@ export default function ReportsPage() {
                         >
                           View
                         </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Monthly reports</h3>
+        {monthlyReportsQuery.isLoading ? (
+          <LoadingState label="Loading monthly reports" />
+        ) : monthlyReportsQuery.isError ? (
+          <ErrorState
+            title="Could not load monthly reports"
+            action="Retry after API connectivity is restored."
+            onRetry={() => void monthlyReportsQuery.refetch()}
+          />
+        ) : (monthlyReportsQuery.data ?? []).length === 0 ? (
+          <EmptyState
+            title="No monthly reports available"
+            action="Generate a monthly report after at least one day of paper runs."
+          />
+        ) : (
+          <div className="mt-3 overflow-hidden rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface text-left text-muted">
+                <tr>
+                  <th className="px-3 py-2">Month</th>
+                  <th className="px-3 py-2">Bundle</th>
+                  <th className="px-3 py-2">Policy</th>
+                  <th className="px-3 py-2">Net PnL</th>
+                  <th className="px-3 py-2">Exports</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(monthlyReportsQuery.data ?? []).map((report) => {
+                  const summary = (report.content_json?.summary ?? {}) as Record<string, unknown>;
+                  return (
+                    <tr key={report.id} className="border-t border-border">
+                      <td className="px-3 py-2">{report.month}</td>
+                      <td className="px-3 py-2">{report.bundle_id ?? "-"}</td>
+                      <td className="px-3 py-2">{report.policy_id ?? "-"}</td>
+                      <td className="px-3 py-2">{String(summary.net_pnl ?? "-")}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-2">
+                          <a
+                            href={atlasApi.monthlyReportExportJsonUrl(report.id)}
+                            className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                          >
+                            JSON
+                          </a>
+                          <a
+                            href={atlasApi.monthlyReportExportPdfUrl(report.id)}
+                            className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                          >
+                            PDF
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -212,6 +310,12 @@ export default function ReportsPage() {
                 className="focus-ring rounded-xl border border-border px-3 py-1.5 text-xs text-muted"
               >
                 Export JSON
+              </a>
+              <a
+                href={atlasApi.dailyReportExportPdfUrl(selectedReport.id)}
+                className="focus-ring rounded-xl border border-border px-3 py-1.5 text-xs text-muted"
+              >
+                Export PDF
               </a>
             </div>
           </div>

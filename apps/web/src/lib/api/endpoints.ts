@@ -11,8 +11,12 @@ import type {
   ApiPolicy,
   ApiDailyReport,
   ApiOperateStatus,
+  ApiMonthlyReport,
   ApiResearchCandidate,
   ApiResearchRun,
+  ApiPolicyEvaluation,
+  ApiPolicyShadowRun,
+  ApiReplayRun,
   ApiTrade,
   ApiUniverseBundle,
   ApiWalkForwardRun,
@@ -167,6 +171,73 @@ export const atlasApi = {
     apiFetch<Record<string, unknown>>(`/api/reports/daily/${id}/export.json`),
   dailyReportExportJsonUrl: (id: number) => buildApiUrl(`/api/reports/daily/${id}/export.json`),
   dailyReportExportCsvUrl: (id: number) => buildApiUrl(`/api/reports/daily/${id}/export.csv`),
+  dailyReportExportPdfUrl: (id: number) => buildApiUrl(`/api/reports/daily/${id}/export.pdf`),
+  generateMonthlyReport: (payload: { month?: string; bundle_id?: number; policy_id?: number }) =>
+    apiFetch<JobStart>("/api/reports/monthly/generate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  monthlyReports: (params?: { month?: string; bundle_id?: number; policy_id?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.month) search.set("month", params.month);
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (typeof params?.policy_id === "number") search.set("policy_id", String(params.policy_id));
+    return apiFetch<ApiMonthlyReport[]>(
+      `/api/reports/monthly${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  monthlyReportById: (id: number) => apiFetch<ApiMonthlyReport>(`/api/reports/monthly/${id}`),
+  monthlyReportExportJsonUrl: (id: number) =>
+    buildApiUrl(`/api/reports/monthly/${id}/export.json`),
+  monthlyReportExportPdfUrl: (id: number) =>
+    buildApiUrl(`/api/reports/monthly/${id}/export.pdf`),
+
+  runEvaluation: (payload: {
+    bundle_id: number;
+    champion_policy_id: number;
+    challenger_policy_ids?: number[];
+    regime?: string;
+    window_days?: number;
+    start_date?: string;
+    end_date?: string;
+    seed?: number;
+  }) =>
+    apiFetch<JobStart>("/api/evaluations/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  evaluations: (page = 1, pageSize = 20) =>
+    apiFetch<ApiPolicyEvaluation[]>(`/api/evaluations?page=${page}&page_size=${pageSize}`),
+  evaluationById: (id: number) => apiFetch<ApiPolicyEvaluation>(`/api/evaluations/${id}`),
+  evaluationDetails: (id: number) =>
+    apiFetch<ApiPolicyShadowRun[]>(`/api/evaluations/${id}/details`),
+  setActivePolicy: (id: number) =>
+    apiFetch<{ policy_id: number; status: string; paper_mode: string; active_policy_id: number }>(
+      `/api/policies/${id}/set-active`,
+      {
+        method: "POST",
+      },
+    ),
+
+  runReplay: (payload: {
+    bundle_id: number;
+    policy_id: number;
+    regime?: string;
+    start_date?: string;
+    end_date?: string;
+    seed?: number;
+    window_days?: number;
+  }) =>
+    apiFetch<JobStart>("/api/replay/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  replayRuns: (page = 1, pageSize = 20) =>
+    apiFetch<ApiReplayRun[]>(`/api/replay/runs?page=${page}&page_size=${pageSize}`),
+  replayRunById: (id: number) => apiFetch<ApiReplayRun>(`/api/replay/runs/${id}`),
+  replayExportJson: (id: number) =>
+    apiFetch<Record<string, unknown>>(`/api/replay/runs/${id}/export.json`),
+  replayExportJsonUrl: (id: number) => buildApiUrl(`/api/replay/runs/${id}/export.json`),
 
   settings: () => apiFetch<Record<string, unknown>>("/api/settings"),
   updateSettings: (payload: Record<string, unknown>) =>

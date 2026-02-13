@@ -17,9 +17,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import APIError
 from app.db.models import (
     Backtest,
-    DailyReport,
     Policy,
-    PolicyHealthSnapshot,
     PaperRun,
     ResearchRun,
     Strategy,
@@ -33,8 +31,11 @@ from app.jobs.queue import get_queue
 from app.jobs.tasks import (
     run_backtest_job,
     run_import_job,
+    run_evaluation_job,
     run_paper_step_job,
     run_daily_report_job,
+    run_monthly_report_job,
+    run_replay_job,
     run_research_job,
     run_walkforward_job,
 )
@@ -42,9 +43,12 @@ from app.schemas.api import (
     BacktestRunRequest,
     CreatePolicyRequest,
     DailyReportGenerateRequest,
+    MonthlyReportGenerateRequest,
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
+    PolicyEvaluationRunRequest,
     PromoteStrategyRequest,
+    ReplayRunRequest,
     ResearchRunRequest,
     RuntimeSettingsRequest,
     WalkForwardRunRequest,
@@ -61,11 +65,24 @@ from app.services.paper import (
     preview_policy_signals,
     update_runtime_settings,
 )
+from app.services.evaluations import (
+    get_policy_evaluation,
+    get_policy_evaluation_details,
+    list_policy_evaluations,
+)
 from app.services.policy_health import (
     get_policy_health_snapshot,
     latest_policy_health_snapshots,
 )
-from app.services.reports import generate_daily_report, get_daily_report, list_daily_reports
+from app.services.replay import get_replay_run, list_replay_runs
+from app.services.reports import (
+    get_daily_report,
+    get_monthly_report,
+    list_daily_reports,
+    list_monthly_reports,
+    render_daily_report_pdf,
+    render_monthly_report_pdf,
+)
 from app.services.research import (
     create_policy_from_research_run,
     list_research_candidates,
@@ -178,6 +195,14 @@ def _parse_report_date(value: str | None) -> date | None:
             code="invalid_date",
             message="Date must be in YYYY-MM-DD format.",
         ) from exc
+
+
+def _parse_report_month(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if len(value) == 7 and value[4] == "-":
+        return value
+    raise APIError(code="invalid_month", message="Month must be in YYYY-MM format.")
 
 
 @router.get("/health")
@@ -664,6 +689,63 @@ def get_research_run_candidates(
     )
 
 
+@router.post("/evaluations/run")
+def run_evaluation(
+    payload: PolicyEvaluationRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="evaluation",
+        task_path="app.jobs.tasks.run_evaluation_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_evaluation_job,
+    )
+
+
+@router.get("/evaluations")
+def get_evaluations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows, total = list_policy_evaluations(session, page=page, page_size=page_size)
+    end = page * page_size
+    return _data(
+        [row.model_dump() for row in rows],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_next": end < total,
+        },
+    )
+
+
+@router.get("/evaluations/{evaluation_id}")
+def get_evaluation_by_id(
+    evaluation_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_policy_evaluation(session, evaluation_id)
+    return _data(row.model_dump())
+
+
+@router.get("/evaluations/{evaluation_id}/details")
+def get_evaluation_details(
+    evaluation_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = get_policy_evaluation_details(session, evaluation_id=evaluation_id)
+    return _data([row.model_dump() for row in rows])
+
+
 @router.post("/policies")
 def create_policy(
     payload: CreatePolicyRequest, session: Session = Depends(get_session)
@@ -746,6 +828,19 @@ def promote_policy_to_paper(
         raise APIError(code="not_found", message="Policy not found", status_code=404)
     payload = activate_policy_mode(session=session, settings=settings, policy=policy)
     return _data({"policy_id": policy.id, "status": "promoted_to_paper", **payload})
+
+
+@router.post("/policies/{policy_id}/set-active")
+def set_active_policy(
+    policy_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    policy = session.get(Policy, policy_id)
+    if policy is None:
+        raise APIError(code="not_found", message="Policy not found", status_code=404)
+    payload = activate_policy_mode(session=session, settings=settings, policy=policy)
+    return _data({"policy_id": policy.id, "status": "active_policy_set", **payload})
 
 
 @router.post("/strategies/promote")
@@ -896,6 +991,63 @@ def paper_signals_preview(
     )
 
 
+@router.post("/replay/run")
+def replay_run(
+    payload: ReplayRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="replay",
+        task_path="app.jobs.tasks.run_replay_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_replay_job,
+    )
+
+
+@router.get("/replay/runs")
+def replay_runs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows, total = list_replay_runs(session, page=page, page_size=page_size)
+    end = page * page_size
+    return _data(
+        [row.model_dump() for row in rows],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_next": end < total,
+        },
+    )
+
+
+@router.get("/replay/runs/{replay_id}")
+def replay_run_by_id(
+    replay_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_replay_run(session, replay_id)
+    return _data(row.model_dump())
+
+
+@router.get("/replay/runs/{replay_id}/export.json")
+def replay_run_export_json(
+    replay_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_replay_run(session, replay_id)
+    return _data(row.summary_json if isinstance(row.summary_json, dict) else {})
+
+
 @router.post("/reports/daily/generate")
 def generate_daily_report_job(
     payload: DailyReportGenerateRequest,
@@ -969,6 +1121,82 @@ def export_daily_report_csv(report_id: int, session: Session = Depends(get_sessi
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="daily_report_{report_id}.csv"'},
+    )
+
+
+@router.get("/reports/daily/{report_id}/export.pdf")
+def export_daily_report_pdf(report_id: int, session: Session = Depends(get_session)):
+    row = get_daily_report(session, report_id)
+    content = render_daily_report_pdf(session, report=row)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="daily_report_{report_id}.pdf"'},
+    )
+
+
+@router.post("/reports/monthly/generate")
+def generate_monthly_report_job(
+    payload: MonthlyReportGenerateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="monthly_report",
+        task_path="app.jobs.tasks.run_monthly_report_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_monthly_report_job,
+    )
+
+
+@router.get("/reports/monthly")
+def get_monthly_reports(
+    month: str | None = Query(default=None),
+    bundle_id: int | None = Query(default=None),
+    policy_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_monthly_reports(
+        session,
+        month=_parse_report_month(month),
+        bundle_id=bundle_id,
+        policy_id=policy_id,
+    )
+    return _data([row.model_dump() for row in rows])
+
+
+@router.get("/reports/monthly/{report_id}")
+def get_monthly_report_by_id(
+    report_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_monthly_report(session, report_id)
+    return _data(row.model_dump())
+
+
+@router.get("/reports/monthly/{report_id}/export.json")
+def export_monthly_report_json(
+    report_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_monthly_report(session, report_id)
+    return _data(row.content_json)
+
+
+@router.get("/reports/monthly/{report_id}/export.pdf")
+def export_monthly_report_pdf(report_id: int, session: Session = Depends(get_session)):
+    row = get_monthly_report(session, report_id)
+    content = render_monthly_report_pdf(session, report=row)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="monthly_report_{report_id}.pdf"'},
     )
 
 

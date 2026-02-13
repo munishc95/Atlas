@@ -197,6 +197,69 @@ class DailyReport(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class MonthlyReport(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_monthlyreport_month_bundle_policy", "month", "bundle_id", "policy_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    month: str = Field(index=True, max_length=7)  # YYYY-MM
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    content_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PolicyEvaluation(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_policyevaluation_created_at", "created_at"),
+        Index("ix_policyevaluation_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    regime: str | None = Field(default=None, max_length=24)
+    window_start: dt_date = Field(index=True)
+    window_end: dt_date = Field(index=True)
+    champion_policy_id: int = Field(foreign_key="policy.id", index=True)
+    challenger_policy_ids_json: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    notes: str | None = Field(default=None, max_length=2048)
+
+
+class PolicyShadowRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_policyshadowrun_eval_policy_asof", "evaluation_id", "policy_id", "asof_date"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    evaluation_id: int = Field(foreign_key="policyevaluation.id", index=True)
+    policy_id: int = Field(foreign_key="policy.id", index=True)
+    asof_date: dt_date = Field(index=True)
+    run_summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ReplayRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_replayrun_policy_created", "policy_id", "created_at"),
+        Index("ix_replayrun_bundle_created", "bundle_id", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    policy_id: int = Field(foreign_key="policy.id", index=True)
+    regime: str | None = Field(default=None, max_length=24)
+    start_date: dt_date
+    end_date: dt_date
+    seed: int = 7
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
 class PaperState(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     equity: float = 1_000_000.0
