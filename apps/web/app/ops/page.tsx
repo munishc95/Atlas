@@ -148,6 +148,13 @@ export default function OpsPage() {
   const mode = String(healthQuery.data?.mode ?? statusQuery.data?.mode ?? "NORMAL");
   const latestQuality = healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
   const eventCounts = healthQuery.data?.recent_event_counts_24h ?? {};
+  const autoRunEnabled = Boolean(healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled);
+  const autoRunTimeIst = String(
+    healthQuery.data?.auto_run_time_ist ?? statusQuery.data?.auto_run_time_ist ?? "15:35",
+  );
+  const nextScheduledRun = String(
+    healthQuery.data?.next_scheduled_run_ist ?? statusQuery.data?.next_scheduled_run_ist ?? "-",
+  );
   const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
 
   return (
@@ -174,6 +181,14 @@ export default function OpsPage() {
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Last run-step: {healthQuery.data?.last_run_step_at ?? statusQuery.data?.last_run_step_at ?? "-"}
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Auto-run: {autoRunEnabled ? "Enabled" : "Disabled"} ({autoRunTimeIst} IST)
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
+            Next scheduled run: {nextScheduledRun}
           </p>
         </div>
       </section>

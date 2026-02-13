@@ -154,6 +154,7 @@ export default function PaperTradingPage() {
   const healthStatus = operateQuery.data?.health_short?.status ?? "HEALTHY";
   const healthReasons = operateQuery.data?.health_short?.reasons_json ?? [];
   const operateMode = String(operateQuery.data?.mode ?? "NORMAL");
+  const safeModeAction = String(operateQuery.data?.safe_mode_action ?? "none");
   const latestQuality = operateQuery.data?.latest_data_quality;
 
   useEffect(() => {
@@ -300,7 +301,11 @@ export default function PaperTradingPage() {
           Policy health: {healthStatus}
           {healthReasons.length > 0 ? ` - ${healthReasons[0]}` : ""}
         </p>
-        {operateMode === "SAFE MODE" ? (
+        {operateMode === "SAFE MODE" && safeModeAction === "shadow_only" ? (
+          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            SAFE MODE - SHADOW. Atlas simulates full run-steps without mutating live positions/cash.
+          </p>
+        ) : operateMode === "SAFE MODE" ? (
           <p className="mt-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
             SAFE MODE active. New entries are blocked until data quality recovers.
           </p>
@@ -330,6 +335,11 @@ export default function PaperTradingPage() {
         {riskScaled ? (
           <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
             Risk scaled due to regime and policy constraints.
+          </p>
+        ) : null}
+        {String(latestDecision?.execution_mode ?? "") === "SHADOW" ? (
+          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            SAFE MODE - SHADOW run completed. Live state was not modified.
           </p>
         ) : null}
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -664,6 +674,9 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Signals source:</span> {String(latestDecision.signals_source ?? "-")}
+            </p>
+            <p>
+              <span className="text-muted">Execution mode:</span> {String(latestDecision.execution_mode ?? "LIVE")}
             </p>
             <p>
               <span className="text-muted">Safe mode:</span>{" "}

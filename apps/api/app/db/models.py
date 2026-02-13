@@ -163,6 +163,7 @@ class PolicyHealthSnapshot(SQLModel, table=True):
 
 class PaperRun(SQLModel, table=True):
     __table_args__ = (
+        Index("ix_paperrun_mode_created", "mode", "created_at"),
         Index("ix_paperrun_policy_asof", "policy_id", "asof_ts"),
         Index("ix_paperrun_bundle_asof", "bundle_id", "asof_ts"),
     )
@@ -171,6 +172,7 @@ class PaperRun(SQLModel, table=True):
     bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
     policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
     asof_ts: datetime = Field(index=True)
+    mode: str = Field(default="LIVE", index=True, max_length=16)
     regime: str = Field(default="TREND_UP", max_length=24)
     signals_source: str = Field(default="provided", max_length=24)
     generated_signals_count: int = 0
@@ -182,6 +184,20 @@ class PaperRun(SQLModel, table=True):
     summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     cost_summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class ShadowPaperState(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_shadowpaperstate_bundle_policy", "bundle_id", "policy_id", unique=True),
+        Index("ix_shadowpaperstate_updated_at", "updated_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int = Field(default=0, index=True)
+    policy_id: int = Field(default=0, index=True)
+    updated_at: datetime = Field(default_factory=utc_now)
+    state_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    last_run_id: int | None = Field(default=None, foreign_key="paperrun.id", index=True)
 
 
 class DataQualityReport(SQLModel, table=True):

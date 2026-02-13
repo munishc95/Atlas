@@ -86,6 +86,9 @@ def _ensure_indexes_and_columns() -> None:
         column_type = "TEXT" if is_sqlite else "JSON"
         with engine.begin() as conn:
             conn.execute(text(f"ALTER TABLE paperposition ADD COLUMN metadata_json {column_type}"))
+    if not _has_column("paperrun", "mode"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE paperrun ADD COLUMN mode VARCHAR(16) DEFAULT 'LIVE'"))
     if not _has_column("paperorder", "instrument_kind"):
         with engine.begin() as conn:
             conn.execute(
@@ -132,6 +135,12 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_paperrun_mode_created "
+                "ON paperrun (mode, created_at)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_paperrun_policy_asof "
                 "ON paperrun (policy_id, asof_ts)"
             )
@@ -140,6 +149,18 @@ def _ensure_indexes_and_columns() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_paperrun_bundle_asof "
                 "ON paperrun (bundle_id, asof_ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_shadowpaperstate_bundle_policy "
+                "ON shadowpaperstate (bundle_id, policy_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_shadowpaperstate_updated_at "
+                "ON shadowpaperstate (updated_at)"
             )
         )
         conn.execute(

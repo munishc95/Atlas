@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     paper_use_simulator_engine: bool = True
     operate_safe_mode_on_fail: bool = True
     operate_safe_mode_action: str = "exits_only"
+    operate_mode: str = "offline"
+    data_quality_stale_severity: str = "WARN"
+    data_quality_max_stale_minutes_1d: int = 1_440
+    data_quality_max_stale_minutes_intraday: int = 60
+    operate_auto_run_enabled: bool = False
+    operate_auto_run_time_ist: str = "15:35"
     operate_max_stale_minutes_1d: int = 2880
     operate_max_stale_minutes_4h_ish: int = 720
     operate_max_gap_bars: int = 3

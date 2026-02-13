@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
@@ -11,6 +12,51 @@ from app.db.models import DataQualityReport, OperateEvent, PaperRun, PaperState
 
 ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
 ALLOWED_CATEGORIES = {"DATA", "EXECUTION", "POLICY", "SYSTEM"}
+IST_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _parse_auto_run_time(value: str | None, *, default: str = "15:35") -> time:
+    raw = value if isinstance(value, str) and value.strip() else default
+    try:
+        hour, minute = [int(part) for part in raw.split(":", maxsplit=1)]
+        return time(hour=max(0, min(23, hour)), minute=max(0, min(59, minute)))
+    except Exception:  # noqa: BLE001
+        return time(15, 35)
+
+
+def _is_trading_day_ist(day: date) -> bool:
+    return day.weekday() < 5
+
+
+def _next_trading_day_ist(day: date) -> date:
+    current = day
+    while True:
+        current += timedelta(days=1)
+        if _is_trading_day_ist(current):
+            return current
+
+
+def _next_scheduled_run_ist(
+    *,
+    auto_run_enabled: bool,
+    auto_run_time_ist: str,
+    last_run_date: str | None,
+    now_ist: datetime | None = None,
+) -> str | None:
+    if not auto_run_enabled:
+        return None
+    now = now_ist or datetime.now(IST_ZONE)
+    run_time = _parse_auto_run_time(auto_run_time_ist)
+    candidate = now.date()
+    if not _is_trading_day_ist(candidate):
+        candidate = _next_trading_day_ist(candidate)
+    else:
+        if now.time() >= run_time:
+            candidate = _next_trading_day_ist(candidate)
+        if isinstance(last_run_date, str) and last_run_date == candidate.isoformat():
+            candidate = _next_trading_day_ist(candidate)
+    scheduled = datetime.combine(candidate, run_time, tzinfo=IST_ZONE)
+    return scheduled.isoformat()
 
 
 def _safe_upper(value: str, *, allowed: set[str], fallback: str) -> str:
@@ -107,6 +153,19 @@ def get_operate_health_summary(
     safe_mode_action = str(
         state_settings.get("operate_safe_mode_action", settings.operate_safe_mode_action)
     )
+    operate_mode = str(state_settings.get("operate_mode", settings.operate_mode)).strip().lower()
+    auto_run_enabled = bool(
+        state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled)
+    )
+    auto_run_time_ist = str(
+        state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)
+    )
+    last_auto_run_date = state_settings.get("operate_last_auto_run_date")
+    next_scheduled_run_ist = _next_scheduled_run_ist(
+        auto_run_enabled=auto_run_enabled,
+        auto_run_time_ist=auto_run_time_ist,
+        last_run_date=(str(last_auto_run_date) if isinstance(last_auto_run_date, str) else None),
+    )
 
     mode = "NORMAL"
     mode_reason: str | None = None
@@ -126,6 +185,11 @@ def get_operate_health_summary(
         "mode_reason": mode_reason,
         "safe_mode_on_fail": safe_mode_on_fail,
         "safe_mode_action": safe_mode_action,
+        "operate_mode": operate_mode,
+        "auto_run_enabled": auto_run_enabled,
+        "auto_run_time_ist": auto_run_time_ist,
+        "last_auto_run_date": last_auto_run_date,
+        "next_scheduled_run_ist": next_scheduled_run_ist,
         "active_bundle_id": target_bundle_id,
         "active_timeframe": target_timeframe,
         "latest_data_quality": latest_quality.model_dump() if latest_quality is not None else None,
@@ -133,4 +197,3 @@ def get_operate_health_summary(
         "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
         "recent_event_counts_24h": severity_counts,
     }
-

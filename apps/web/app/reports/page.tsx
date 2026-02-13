@@ -282,6 +282,14 @@ export default function ReportsPage() {
             <p>
               <span className="text-muted">Drawdown:</span> {String(reportSummary.summary.drawdown ?? "-")}
             </p>
+            <p>
+              <span className="text-muted">Mode:</span> {String(reportSummary.summary.mode ?? "LIVE")}
+            </p>
+            {reportSummary.summary.shadow_note ? (
+              <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                {String(reportSummary.summary.shadow_note)}
+              </p>
+            ) : null}
             <div className="rounded-xl border border-border p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 Selected reasons

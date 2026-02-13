@@ -22,6 +22,7 @@ from app.db.models import (
     PaperPosition,
     PaperState,
     Policy,
+    ShadowPaperState,
     Symbol,
 )
 from app.engine.costs import (
@@ -119,6 +120,18 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "paper_use_simulator_engine": settings.paper_use_simulator_engine,
             "operate_safe_mode_on_fail": settings.operate_safe_mode_on_fail,
             "operate_safe_mode_action": settings.operate_safe_mode_action,
+            "operate_mode": settings.operate_mode,
+            "data_quality_stale_severity": (
+                "FAIL"
+                if str(settings.operate_mode).strip().lower() == "live"
+                else settings.data_quality_stale_severity
+            ),
+            "data_quality_stale_severity_override": False,
+            "data_quality_max_stale_minutes_1d": settings.data_quality_max_stale_minutes_1d,
+            "data_quality_max_stale_minutes_intraday": settings.data_quality_max_stale_minutes_intraday,
+            "operate_auto_run_enabled": settings.operate_auto_run_enabled,
+            "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
+            "operate_last_auto_run_date": None,
             "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
             "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
             "operate_max_gap_bars": settings.operate_max_gap_bars,
@@ -144,6 +157,98 @@ def get_positions(session: Session) -> list[PaperPosition]:
 
 def get_orders(session: Session) -> list[PaperOrder]:
     return list(session.exec(select(PaperOrder).order_by(PaperOrder.created_at.desc())).all())
+
+
+def _shadow_key(bundle_id: int | None, policy_id: Any) -> tuple[int, int]:
+    bundle_key = int(bundle_id) if isinstance(bundle_id, int) and bundle_id > 0 else 0
+    policy_key = 0
+    try:
+        if policy_id is not None:
+            policy_key = int(policy_id)
+    except (TypeError, ValueError):
+        policy_key = 0
+    return bundle_key, max(0, policy_key)
+
+
+def _default_shadow_state_payload(
+    *,
+    live_state: PaperState,
+    state_settings: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "equity": float(live_state.equity),
+        "cash": float(live_state.cash),
+        "peak_equity": float(live_state.peak_equity),
+        "drawdown": float(live_state.drawdown),
+        "kill_switch_active": bool(live_state.kill_switch_active),
+        "cooldown_days_left": int(live_state.cooldown_days_left),
+        "settings_json": dict(state_settings or {}),
+        "positions": [],
+        "orders": [],
+    }
+
+
+def _get_or_create_shadow_state(
+    *,
+    session: Session,
+    live_state: PaperState,
+    state_settings: dict[str, Any],
+    bundle_id: int | None,
+    policy_id: Any,
+) -> ShadowPaperState:
+    bundle_key, policy_key = _shadow_key(bundle_id, policy_id)
+    row = session.exec(
+        select(ShadowPaperState)
+        .where(ShadowPaperState.bundle_id == bundle_key)
+        .where(ShadowPaperState.policy_id == policy_key)
+        .order_by(ShadowPaperState.id.desc())
+    ).first()
+    if row is not None:
+        return row
+    row = ShadowPaperState(
+        bundle_id=bundle_key,
+        policy_id=policy_key,
+        state_json=_default_shadow_state_payload(live_state=live_state, state_settings=state_settings),
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def _shadow_state_snapshot(
+    *,
+    row: ShadowPaperState,
+    live_state: PaperState,
+    state_settings: dict[str, Any],
+) -> dict[str, Any]:
+    source = row.state_json if isinstance(row.state_json, dict) else {}
+    baseline = _default_shadow_state_payload(live_state=live_state, state_settings=state_settings)
+    merged = {**baseline, **source}
+    positions = source.get("positions", [])
+    if isinstance(positions, list):
+        merged["positions"] = [dict(item) for item in positions if isinstance(item, dict)]
+    else:
+        merged["positions"] = []
+    orders = source.get("orders", [])
+    if isinstance(orders, list):
+        merged["orders"] = [dict(item) for item in orders if isinstance(item, dict)]
+    else:
+        merged["orders"] = []
+    return merged
+
+
+def _save_shadow_state_snapshot(
+    *,
+    session: Session,
+    row: ShadowPaperState,
+    snapshot: dict[str, Any],
+    last_run_id: int | None,
+) -> None:
+    row.state_json = dict(snapshot)
+    row.last_run_id = int(last_run_id) if isinstance(last_run_id, int) and last_run_id > 0 else None
+    row.updated_at = _utc_now()
+    session.add(row)
 
 
 def _log(session: Session, event_type: str, payload: dict[str, Any]) -> None:
@@ -1290,6 +1395,9 @@ def _run_paper_step_with_simulator_engine(
     }
 
     run_summary = {
+        "execution_mode": "LIVE",
+        "shadow_only": False,
+        "live_state_mutated": True,
         "policy_mode": policy.get("mode"),
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
@@ -1364,6 +1472,7 @@ def _run_paper_step_with_simulator_engine(
         bundle_id=resolved_bundle_id,
         policy_id=policy_id_value,
         asof_ts=asof_dt,
+        mode="LIVE",
         regime=regime,
         signals_source=signals_source,
         generated_signals_count=generated_signals_count,
@@ -1582,6 +1691,354 @@ def _run_paper_step_with_simulator_engine(
     )
 
 
+def _run_paper_step_shadow_only(
+    *,
+    session: Session,
+    settings: Settings,
+    live_state: PaperState,
+    state_settings: dict[str, Any],
+    payload: dict[str, Any],
+    policy: dict[str, Any],
+    regime: str,
+    asof_dt: datetime,
+    base_risk_per_trade: float,
+    base_max_positions: int,
+    mark_prices: dict[str, Any],
+    selected_signals: list[dict[str, Any]],
+    skipped_signals: list[dict[str, Any]],
+    generated_meta: SignalGenerationResult,
+    generated_signals_count: int,
+    signals_source: str,
+    safe_mode_active: bool,
+    safe_mode_action: str,
+    safe_mode_reason: str | None,
+    quality_status: str | None,
+    quality_warn_summary: list[dict[str, Any]],
+    cost_spike_active: bool,
+    cost_spike_meta: dict[str, Any],
+    scan_guard_active: bool,
+    scan_guard_meta: dict[str, Any],
+    resolved_bundle_id: int | None,
+    resolved_dataset_id: int | None,
+    resolved_timeframes: list[str],
+    live_positions: list[PaperPosition],
+    live_orders: list[PaperOrder],
+) -> dict[str, Any]:
+    seed = _resolve_seed(payload, policy)
+    shadow_row = _get_or_create_shadow_state(
+        session=session,
+        live_state=live_state,
+        state_settings=state_settings,
+        bundle_id=resolved_bundle_id,
+        policy_id=policy.get("policy_id"),
+    )
+    shadow_before = _shadow_state_snapshot(
+        row=shadow_row,
+        live_state=live_state,
+        state_settings=state_settings,
+    )
+    shadow_positions_before = list(shadow_before.get("positions", []))
+    shadow_orders_before = list(shadow_before.get("orders", []))
+    shadow_cash_before = float(shadow_before.get("cash", float(live_state.cash)))
+    shadow_equity_before = float(shadow_before.get("equity", float(live_state.equity)))
+    shadow_drawdown_before = float(shadow_before.get("drawdown", float(live_state.drawdown)))
+
+    sim_execution = execute_paper_step_with_simulator(
+        session=session,
+        settings=settings,
+        state=shadow_before,
+        state_settings=state_settings,
+        policy=policy,
+        asof_dt=asof_dt,
+        selected_signals=selected_signals,
+        mark_prices={str(key): float(value) for key, value in mark_prices.items()},
+        open_positions=shadow_positions_before,
+        seed=seed,
+        persist_live_state=False,
+    )
+
+    executed_signals = list(sim_execution.executed_signals)
+    skipped_signals.extend(sim_execution.skipped_signals)
+    executed_count = len(executed_signals)
+
+    shadow_cash_after = float(sim_execution.cash)
+    shadow_equity_after = float(sim_execution.equity)
+    shadow_peak_before = float(shadow_before.get("peak_equity", shadow_equity_before))
+    shadow_peak_after = max(shadow_peak_before, shadow_equity_after)
+    shadow_drawdown_after = (
+        shadow_equity_after / shadow_peak_after - 1.0 if shadow_peak_after > 0 else 0.0
+    )
+
+    shadow_positions_after = [dict(item) for item in sim_execution.positions_after]
+    shadow_orders_after = (shadow_orders_before + [dict(item) for item in sim_execution.orders_generated])[
+        -500:
+    ]
+    shadow_after = {
+        **shadow_before,
+        "cash": shadow_cash_after,
+        "equity": shadow_equity_after,
+        "peak_equity": shadow_peak_after,
+        "drawdown": shadow_drawdown_after,
+        "positions": shadow_positions_after,
+        "orders": shadow_orders_after,
+    }
+
+    selected_reason_histogram = _selection_reason_histogram(executed_signals)
+    skipped_reason_histogram = _reason_histogram(skipped_signals)
+    entry_cost_total = float(sim_execution.entry_cost_total)
+    exit_cost_total = float(sim_execution.exit_cost_total)
+    total_cost = float(entry_cost_total + exit_cost_total)
+    realized_pnl = float(shadow_cash_after - shadow_cash_before)
+    net_pnl = float(shadow_equity_after - shadow_equity_before)
+    unrealized_pnl = float(net_pnl - realized_pnl)
+    gross_pnl = float(net_pnl + total_cost)
+    turnover = float(sim_execution.traded_notional_total / max(1e-9, shadow_equity_before))
+    positions_notional = float(
+        sum(float(item.get("qty", 0)) * float(item.get("avg_price", 0.0)) for item in shadow_positions_after)
+    )
+    exposure = float(positions_notional / max(1e-9, shadow_equity_after))
+    live_position_ids = {int(row.id) for row in live_positions if row.id is not None}
+    live_order_ids = {int(row.id) for row in live_orders if row.id is not None}
+
+    cost_summary = {
+        "entry_cost_total": entry_cost_total,
+        "exit_cost_total": exit_cost_total,
+        "total_cost": total_cost,
+        "entry_slippage_cost": float(sim_execution.entry_slippage_cost_total),
+        "exit_slippage_cost": float(sim_execution.exit_slippage_cost_total),
+        "cost_model_enabled": bool(
+            policy.get("cost_model", {}).get(
+                "enabled",
+                state_settings.get("cost_model_enabled", settings.cost_model_enabled),
+            )
+        ),
+        "cost_mode": str(
+            policy.get("cost_model", {}).get(
+                "mode",
+                state_settings.get("cost_mode", settings.cost_mode),
+            )
+        ),
+    }
+
+    run_summary = {
+        "execution_mode": "SHADOW",
+        "shadow_only": True,
+        "shadow_note": "Shadow-only: no live state mutation; simulated trades shown for monitoring.",
+        "live_state_mutated": False,
+        "policy_mode": policy.get("mode"),
+        "policy_selection_reason": policy.get("selection_reason"),
+        "policy_status": policy.get("policy_status"),
+        "health_status": policy.get("health_status"),
+        "safe_mode_active": bool(safe_mode_active),
+        "safe_mode_action": safe_mode_action,
+        "safe_mode_reason": safe_mode_reason,
+        "data_quality_status": quality_status,
+        "data_quality_warn_summary": quality_warn_summary,
+        "cost_ratio_spike_active": bool(cost_spike_active),
+        "cost_ratio_spike_meta": cost_spike_meta,
+        "scan_guard_active": bool(scan_guard_active),
+        "scan_guard_meta": scan_guard_meta,
+        "signals_source": signals_source,
+        "bundle_id": resolved_bundle_id,
+        "dataset_id": resolved_dataset_id,
+        "timeframes": resolved_timeframes,
+        "scan_truncated": bool(generated_meta.scan_truncated),
+        "scanned_symbols": int(generated_meta.scanned_symbols),
+        "evaluated_candidates": int(generated_meta.evaluated_candidates),
+        "total_symbols": int(generated_meta.total_symbols),
+        "generated_signals_count": int(generated_signals_count),
+        "selected_signals_count": int(executed_count),
+        "skipped_signals_count": int(len(skipped_signals)),
+        "positions_before": len(shadow_positions_before),
+        "positions_after": len(shadow_positions_after),
+        "positions_opened": max(0, len(shadow_positions_after) - len(shadow_positions_before)),
+        "positions_closed": max(0, len(shadow_positions_before) - len(shadow_positions_after)),
+        "new_order_ids": [],
+        "selected_signals": [
+            {
+                "symbol": str(item.get("symbol", "")),
+                "side": str(item.get("side", "")),
+                "instrument_kind": str(item.get("instrument_kind", "")),
+                "selection_reason": str(item.get("instrument_choice_reason", "provided")),
+            }
+            for item in executed_signals
+        ],
+        "selected_reason_histogram": selected_reason_histogram,
+        "skipped_reason_histogram": skipped_reason_histogram,
+        "equity_before": shadow_equity_before,
+        "equity_after": shadow_equity_after,
+        "cash_before": shadow_cash_before,
+        "cash_after": shadow_cash_after,
+        "drawdown_before": shadow_drawdown_before,
+        "drawdown": shadow_drawdown_after,
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "net_pnl": net_pnl,
+        "gross_pnl": gross_pnl,
+        "trade_count": int(
+            len(sim_execution.orders_generated) + len(sim_execution.trades_generated)
+        ),
+        "turnover": turnover,
+        "exposure": exposure,
+        "avg_holding_days": 0.0,
+        "kill_switch_active": bool(shadow_after.get("kill_switch_active", False)),
+        "engine_version": sim_execution.metadata.get("engine_version"),
+        "data_digest": sim_execution.metadata.get("data_digest"),
+        "seed": sim_execution.metadata.get("seed"),
+        "paper_engine": "simulator_shadow",
+    }
+    run_summary["result_digest"] = _result_digest(run_summary, cost_summary)
+
+    policy_id_value: int | None = None
+    try:
+        if policy.get("policy_id") is not None:
+            policy_id_value = int(policy["policy_id"])
+    except (TypeError, ValueError):
+        policy_id_value = None
+
+    run_row = PaperRun(
+        bundle_id=resolved_bundle_id,
+        policy_id=policy_id_value,
+        asof_ts=asof_dt,
+        mode="SHADOW",
+        regime=regime,
+        signals_source=signals_source,
+        generated_signals_count=generated_signals_count,
+        selected_signals_count=executed_count,
+        skipped_signals_count=len(skipped_signals),
+        scanned_symbols=int(generated_meta.scanned_symbols),
+        evaluated_candidates=int(generated_meta.evaluated_candidates),
+        scan_truncated=bool(generated_meta.scan_truncated),
+        summary_json=run_summary,
+        cost_summary_json=cost_summary,
+    )
+    session.add(run_row)
+    session.commit()
+    session.refresh(run_row)
+
+    _save_shadow_state_snapshot(
+        session=session,
+        row=shadow_row,
+        snapshot=shadow_after,
+        last_run_id=int(run_row.id) if run_row.id is not None else None,
+    )
+    _emit_digest_mismatch_if_any(session=session, run_row=run_row, run_summary=run_summary)
+    _log(
+        session,
+        "safe_mode_shadow_run_completed",
+        {
+            "paper_run_id": run_row.id,
+            "bundle_id": resolved_bundle_id,
+            "policy_id": policy_id_value,
+            "selected_signals_count": executed_count,
+            "generated_signals_count": generated_signals_count,
+            "safe_mode_reason": safe_mode_reason,
+        },
+    )
+    emit_operate_event(
+        session,
+        severity="WARN",
+        category="EXECUTION",
+        message="safe_mode_shadow_run_completed",
+        details={
+            "paper_run_id": run_row.id,
+            "bundle_id": resolved_bundle_id,
+            "policy_id": policy_id_value,
+            "selected_signals_count": executed_count,
+            "generated_signals_count": generated_signals_count,
+            "safe_mode_reason": safe_mode_reason,
+        },
+        correlation_id=str(run_row.id),
+    )
+    session.commit()
+    session.refresh(shadow_row)
+
+    generated_report_id: int | None = None
+    auto_report_enabled = bool(
+        state_settings.get("reports_auto_generate_daily", settings.reports_auto_generate_daily)
+    )
+    if auto_report_enabled:
+        report_row = generate_daily_report(
+            session=session,
+            settings=settings,
+            report_date=asof_dt.date(),
+            bundle_id=resolved_bundle_id,
+            policy_id=run_row.policy_id,
+            overwrite=True,
+        )
+        generated_report_id = int(report_row.id) if report_row.id is not None else None
+
+    live_positions_after = get_positions(session)
+    live_orders_after = get_orders(session)
+    live_state_after = session.get(PaperState, 1) or live_state
+    live_state_unchanged = (
+        float(live_state_after.cash) == float(live_state.cash)
+        and float(live_state_after.equity) == float(live_state.equity)
+        and {int(row.id) for row in live_positions_after if row.id is not None} == live_position_ids
+        and {int(row.id) for row in live_orders_after if row.id is not None} == live_order_ids
+    )
+
+    return jsonable_encoder(
+        {
+            "status": "ok",
+            "regime": regime,
+            "policy": policy,
+            "policy_mode": policy.get("mode"),
+            "policy_selection_reason": policy.get("selection_reason"),
+            "policy_status": policy.get("policy_status"),
+            "policy_health_status": policy.get("health_status"),
+            "policy_health_reasons": policy.get("health_reasons", []),
+            "risk_scaled": bool(
+                float(policy["risk_per_trade"]) < base_risk_per_trade
+                or int(policy["max_positions"]) < base_max_positions
+            ),
+            "paper_run_id": run_row.id,
+            "signals_source": signals_source,
+            "generated_signals_count": generated_signals_count,
+            "selected_signals_count": executed_count,
+            "selected_signals": executed_signals,
+            "skipped_signals": skipped_signals,
+            "safe_mode": {
+                "active": bool(safe_mode_active),
+                "action": safe_mode_action,
+                "reason": safe_mode_reason,
+                "status": quality_status,
+                "warnings": quality_warn_summary,
+            },
+            "guardrails": {
+                "cost_ratio_spike_active": bool(cost_spike_active),
+                "cost_ratio_spike_meta": cost_spike_meta,
+                "scan_guard_active": bool(scan_guard_active),
+                "scan_guard_meta": scan_guard_meta,
+            },
+            "scan_truncated": generated_meta.scan_truncated,
+            "scanned_symbols": generated_meta.scanned_symbols,
+            "evaluated_candidates": generated_meta.evaluated_candidates,
+            "total_symbols": generated_meta.total_symbols,
+            "bundle_id": resolved_bundle_id,
+            "dataset_id": resolved_dataset_id,
+            "timeframes": resolved_timeframes,
+            "cost_summary": cost_summary,
+            "engine_version": sim_execution.metadata.get("engine_version"),
+            "data_digest": sim_execution.metadata.get("data_digest"),
+            "seed": sim_execution.metadata.get("seed"),
+            "paper_engine": "simulator_shadow",
+            "execution_mode": "SHADOW",
+            "live_state_mutated": not live_state_unchanged,
+            "shadow_note": "Shadow-only: no live state mutation; simulated trades shown for monitoring.",
+            "result_digest": run_summary.get("result_digest"),
+            "report_id": generated_report_id,
+            "state": _dump_model(live_state_after),
+            "positions": [_dump_model(p) for p in live_positions_after],
+            "orders": [_dump_model(o) for o in live_orders_after],
+            "shadow_state": shadow_row.state_json,
+            "simulated_positions": shadow_positions_after,
+            "simulated_orders": sim_execution.orders_generated,
+            "simulated_trades": sim_execution.trades_generated,
+        }
+    )
+
+
 def run_paper_step(
     session: Session,
     settings: Settings,
@@ -1629,6 +2086,7 @@ def run_paper_step(
             bundle_id=None,
             policy_id=policy.get("policy_id"),
             asof_ts=asof_dt,
+            mode="LIVE",
             regime=regime,
             signals_source="provided",
             generated_signals_count=0,
@@ -1794,7 +2252,7 @@ def run_paper_step(
     should_generate = auto_generate or (
         policy.get("mode") == "policy" and len(provided_signals) == 0
     )
-    if safe_mode_active and safe_mode_action in {"exits_only", "shadow_only"}:
+    if safe_mode_active and safe_mode_action == "exits_only":
         should_generate = False
 
     if should_generate:
@@ -1885,7 +2343,7 @@ def run_paper_step(
         key=lambda item: float(item.get("signal_strength", 0.0)),
         reverse=True,
     )
-    if safe_mode_active and safe_mode_action in {"exits_only", "shadow_only"}:
+    if safe_mode_active and safe_mode_action == "exits_only":
         for signal in candidates:
             skipped_signals.append(
                 {
@@ -2108,6 +2566,39 @@ def run_paper_step(
     use_simulator_engine = bool(
         state_settings.get("paper_use_simulator_engine", settings.paper_use_simulator_engine)
     )
+    if safe_mode_active and safe_mode_action == "shadow_only":
+        return _run_paper_step_shadow_only(
+            session=session,
+            settings=settings,
+            live_state=state,
+            state_settings=state_settings,
+            payload=payload,
+            policy=policy,
+            regime=regime,
+            asof_dt=asof_dt,
+            base_risk_per_trade=base_risk_per_trade,
+            base_max_positions=base_max_positions,
+            mark_prices=mark_prices,
+            selected_signals=selected_signals,
+            skipped_signals=skipped_signals,
+            generated_meta=generated_meta,
+            generated_signals_count=generated_signals_count,
+            signals_source=signals_source,
+            safe_mode_active=safe_mode_active,
+            safe_mode_action=safe_mode_action,
+            safe_mode_reason=safe_mode_reason,
+            quality_status=quality_status,
+            quality_warn_summary=quality_warn_summary,
+            cost_spike_active=cost_spike_active,
+            cost_spike_meta=cost_spike_meta,
+            scan_guard_active=scan_guard_active,
+            scan_guard_meta=scan_guard_meta,
+            resolved_bundle_id=resolved_bundle_id,
+            resolved_dataset_id=resolved_dataset_id,
+            resolved_timeframes=resolved_timeframes,
+            live_positions=positions_before,
+            live_orders=orders_before,
+        )
     if use_simulator_engine:
         return _run_paper_step_with_simulator_engine(
             session=session,
@@ -2529,6 +3020,9 @@ def run_paper_step(
     }
 
     run_summary = {
+        "execution_mode": "LIVE",
+        "shadow_only": False,
+        "live_state_mutated": True,
         "policy_mode": policy.get("mode"),
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
@@ -2611,6 +3105,7 @@ def run_paper_step(
         bundle_id=resolved_bundle_id,
         policy_id=policy_id_value,
         asof_ts=asof_dt,
+        mode="LIVE",
         regime=regime,
         signals_source=signals_source,
         generated_signals_count=generated_signals_count,
@@ -2940,6 +3435,17 @@ def update_runtime_settings(
 ) -> dict[str, Any]:
     state = get_or_create_paper_state(session, settings)
     merged = dict(state.settings_json)
+    if "data_quality_stale_severity" in payload:
+        merged["data_quality_stale_severity_override"] = True
+    if "operate_mode" in payload and "data_quality_stale_severity" not in payload:
+        requested_mode = str(payload.get("operate_mode", settings.operate_mode)).strip().lower()
+        if requested_mode == "live":
+            merged["data_quality_stale_severity"] = "FAIL"
+            merged["data_quality_stale_severity_override"] = False
+    if "operate_mode" in payload and "data_quality_stale_severity" in payload:
+        requested_mode = str(payload.get("operate_mode", settings.operate_mode)).strip().lower()
+        if requested_mode == "live":
+            merged["data_quality_stale_severity_override"] = True
     merged.update(payload)
     state.settings_json = merged
     session.add(state)

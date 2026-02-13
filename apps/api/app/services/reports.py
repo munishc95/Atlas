@@ -174,6 +174,8 @@ def build_daily_report_content(
                 "safe_mode_active": False,
                 "safe_mode_runs": 0,
                 "data_quality_status": None,
+                "mode": "LIVE",
+                "shadow_note": None,
             },
             "explainability": {
                 "selected_reason_histogram": {},
@@ -255,6 +257,12 @@ def build_daily_report_content(
             "data_quality_status": last_summary.get("data_quality_status"),
             "signals_source": str(last.signals_source),
             "regime": str(last.regime),
+            "mode": str(last_summary.get("execution_mode", last.mode or "LIVE")),
+            "shadow_note": (
+                str(last_summary.get("shadow_note"))
+                if str(last_summary.get("execution_mode", "")).upper() == "SHADOW"
+                else None
+            ),
         },
         "explainability": {
             "selected_reason_histogram": selected_hist,

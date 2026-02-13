@@ -264,6 +264,33 @@ New frontend page:
 
 - `Ops` page (`/ops`) with current mode (`NORMAL` / `SAFE MODE`), latest quality report, recent operate events, and quick actions.
 
+## Shadow-Only Safe Mode + Local Scheduler (v2.1)
+
+Atlas v2.1 adds operator-safe automation while keeping live paper state protected:
+
+- True `shadow_only` safe mode:
+  - when data quality fails and `operate_safe_mode_action=shadow_only`, Atlas runs full candidate selection + simulator execution
+  - writes results to `PaperRun` with `mode=SHADOW`
+  - persists separate `ShadowPaperState` per `(bundle_id, policy_id)`
+  - does **not** mutate live `PaperState`/positions/orders/cash
+- Daily reports now carry execution context:
+  - `summary.mode` (`LIVE` or `SHADOW`)
+  - `summary.shadow_note` for simulated-only runs
+- Stale-data policy is configurable:
+  - `operate_mode`: `offline` or `live`
+  - `data_quality_stale_severity`: `WARN` or `FAIL`
+  - in `live` mode, stale defaults to `FAIL` unless explicitly overridden
+- Local scheduler in worker:
+  - reads runtime settings `operate_auto_run_enabled` and `operate_auto_run_time_ist`
+  - triggers on trading days (IST) once per day:
+    1) data quality run
+    2) paper run-step
+    3) daily report generation
+  - deduplicates with `operate_last_auto_run_date`
+- Ops page shows scheduler status:
+  - auto-run enabled/time
+  - next scheduled run (IST)
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:

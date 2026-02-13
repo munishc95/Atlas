@@ -176,6 +176,12 @@ class RuntimeSettingsRequest(BaseModel):
     paper_use_simulator_engine: bool | None = None
     operate_safe_mode_on_fail: bool | None = None
     operate_safe_mode_action: str | None = None
+    operate_mode: str | None = None
+    data_quality_stale_severity: str | None = None
+    data_quality_max_stale_minutes_1d: int | None = None
+    data_quality_max_stale_minutes_intraday: int | None = None
+    operate_auto_run_enabled: bool | None = None
+    operate_auto_run_time_ist: str | None = None
     operate_max_stale_minutes_1d: int | None = None
     operate_max_stale_minutes_4h_ish: int | None = None
     operate_max_gap_bars: int | None = None

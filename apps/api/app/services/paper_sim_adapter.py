@@ -16,6 +16,9 @@ from app.engine.simulator import SimulationConfig, simulate_portfolio_step
 class PaperSimulatorExecution:
     executed_signals: list[dict[str, Any]]
     skipped_signals: list[dict[str, Any]]
+    positions_after: list[dict[str, Any]]
+    orders_generated: list[dict[str, Any]]
+    trades_generated: list[dict[str, Any]]
     entry_cost_total: float
     exit_cost_total: float
     entry_slippage_cost_total: float
@@ -51,19 +54,38 @@ def _position_payload(position: PaperPosition) -> dict[str, Any]:
     }
 
 
-def execute_paper_step_with_simulator(
+def _position_payload_from_dict(position: dict[str, Any]) -> dict[str, Any]:
+    opened_at = position.get("opened_at")
+    return {
+        "id": position.get("id"),
+        "symbol": str(position.get("symbol", "")).upper(),
+        "side": str(position.get("side", "BUY")).upper(),
+        "instrument_kind": str(position.get("instrument_kind", "EQUITY_CASH")).upper(),
+        "lot_size": int(position.get("lot_size", 1) or 1),
+        "qty_lots": int(position.get("qty_lots", 1) or 1),
+        "margin_reserved": float(position.get("margin_reserved", 0.0) or 0.0),
+        "must_exit_by_eod": bool(position.get("must_exit_by_eod", False)),
+        "qty": int(position.get("qty", 0) or 0),
+        "avg_price": float(position.get("avg_price", 0.0) or 0.0),
+        "stop_price": (
+            float(position["stop_price"]) if position.get("stop_price") is not None else None
+        ),
+        "target_price": (
+            float(position["target_price"]) if position.get("target_price") is not None else None
+        ),
+        "metadata_json": dict(position.get("metadata_json") or {}),
+        "opened_at": str(opened_at) if opened_at else datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+
+def _build_simulation_config(
     *,
-    session: Session,
     settings: Settings,
-    state: PaperState,
     state_settings: dict[str, Any],
     policy: dict[str, Any],
-    asof_dt: datetime,
-    selected_signals: list[dict[str, Any]],
-    mark_prices: dict[str, float],
-    open_positions: list[PaperPosition],
+    equity: float,
     seed: int,
-) -> PaperSimulatorExecution:
+) -> SimulationConfig:
     cost_model = policy.get("cost_model", {}) if isinstance(policy.get("cost_model"), dict) else {}
     cost_enabled = bool(
         cost_model.get("enabled", state_settings.get("cost_model_enabled", settings.cost_model_enabled))
@@ -106,10 +128,10 @@ def execute_paper_step_with_simulator(
         ),
     }
 
-    config = SimulationConfig(
+    return SimulationConfig(
         risk_per_trade=float(policy.get("risk_per_trade", settings.risk_per_trade)),
         max_positions=int(policy.get("max_positions", settings.max_positions)),
-        initial_equity=float(state.equity),
+        initial_equity=float(equity),
         commission_bps=float(state_settings.get("commission_bps", settings.commission_bps)),
         slippage_base_bps=float(state_settings.get("slippage_base_bps", settings.slippage_base_bps)),
         slippage_vol_factor=float(
@@ -133,101 +155,145 @@ def execute_paper_step_with_simulator(
         seed=int(seed),
     )
 
+
+def execute_paper_step_with_simulator(
+    *,
+    session: Session,
+    settings: Settings,
+    state: PaperState | dict[str, Any],
+    state_settings: dict[str, Any],
+    policy: dict[str, Any],
+    asof_dt: datetime,
+    selected_signals: list[dict[str, Any]],
+    mark_prices: dict[str, float],
+    open_positions: list[PaperPosition] | list[dict[str, Any]],
+    seed: int,
+    persist_live_state: bool = True,
+) -> PaperSimulatorExecution:
+    state_cash = float(state.cash) if isinstance(state, PaperState) else float(state.get("cash", 0.0))
+    state_equity = (
+        float(state.equity) if isinstance(state, PaperState) else float(state.get("equity", state_cash))
+    )
+    config = _build_simulation_config(
+        settings=settings,
+        state_settings=state_settings,
+        policy=policy,
+        equity=state_equity,
+        seed=seed,
+    )
+    if open_positions and isinstance(open_positions[0], PaperPosition):
+        open_payload = [_position_payload(item) for item in open_positions if isinstance(item, PaperPosition)]
+    else:
+        open_payload = [
+            _position_payload_from_dict(item)
+            for item in open_positions
+            if isinstance(item, dict)
+        ]
+
     step = simulate_portfolio_step(
         signals=selected_signals,
-        open_positions=[_position_payload(item) for item in open_positions],
+        open_positions=open_payload,
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
         asof=_asof_timestamp(asof_dt),
-        cash=float(state.cash),
-        equity_reference=float(state.equity),
+        cash=state_cash,
+        equity_reference=state_equity,
         config=config,
     )
 
-    existing_by_id = {int(row.id): row for row in open_positions if row.id is not None}
-    surviving_ids = {
-        int(item["source_position_id"])
-        for item in step.positions
-        if item.get("source_position_id") is not None
-    }
-    for row_id, row in existing_by_id.items():
-        if row_id in surviving_ids:
-            continue
-        session.delete(row)
+    if persist_live_state:
+        existing_by_id = {
+            int(row.id): row
+            for row in open_positions
+            if isinstance(row, PaperPosition) and row.id is not None
+        }
+        surviving_ids = {
+            int(item["source_position_id"])
+            for item in step.positions
+            if item.get("source_position_id") is not None
+        }
+        for row_id, row in existing_by_id.items():
+            if row_id in surviving_ids:
+                continue
+            session.delete(row)
 
-    for item in step.positions:
-        source_id = item.get("source_position_id")
-        position: PaperPosition | None = None
-        if isinstance(source_id, int):
-            position = existing_by_id.get(source_id)
+        for item in step.positions:
+            source_id = item.get("source_position_id")
+            position: PaperPosition | None = None
+            if isinstance(source_id, int):
+                position = existing_by_id.get(source_id)
 
-        if position is None:
-            position = PaperPosition(
-                symbol=str(item["symbol"]),
-                side=str(item["side"]),
-                instrument_kind=str(item["instrument_kind"]),
-                lot_size=int(item["lot_size"]),
-                qty_lots=int(item["qty_lots"]),
-                margin_reserved=float(item["margin_reserved"]),
-                must_exit_by_eod=bool(item["must_exit_by_eod"]),
-                qty=int(item["qty"]),
-                avg_price=float(item["avg_price"]),
-                stop_price=(
+            if position is None:
+                position = PaperPosition(
+                    symbol=str(item["symbol"]),
+                    side=str(item["side"]),
+                    instrument_kind=str(item["instrument_kind"]),
+                    lot_size=int(item["lot_size"]),
+                    qty_lots=int(item["qty_lots"]),
+                    margin_reserved=float(item["margin_reserved"]),
+                    must_exit_by_eod=bool(item["must_exit_by_eod"]),
+                    qty=int(item["qty"]),
+                    avg_price=float(item["avg_price"]),
+                    stop_price=(
+                        float(item["stop_price"]) if item.get("stop_price") is not None else None
+                    ),
+                    target_price=(
+                        float(item["target_price"]) if item.get("target_price") is not None else None
+                    ),
+                    metadata_json=dict(item.get("metadata_json") or {}),
+                    opened_at=(
+                        datetime.fromisoformat(str(item.get("opened_at")))
+                        if item.get("opened_at")
+                        else asof_dt
+                    ),
+                )
+            else:
+                position.symbol = str(item["symbol"])
+                position.side = str(item["side"])
+                position.instrument_kind = str(item["instrument_kind"])
+                position.lot_size = int(item["lot_size"])
+                position.qty_lots = int(item["qty_lots"])
+                position.margin_reserved = float(item["margin_reserved"])
+                position.must_exit_by_eod = bool(item["must_exit_by_eod"])
+                position.qty = int(item["qty"])
+                position.avg_price = float(item["avg_price"])
+                position.stop_price = (
                     float(item["stop_price"]) if item.get("stop_price") is not None else None
-                ),
-                target_price=(
+                )
+                position.target_price = (
                     float(item["target_price"]) if item.get("target_price") is not None else None
-                ),
-                metadata_json=dict(item.get("metadata_json") or {}),
-                opened_at=(
-                    datetime.fromisoformat(str(item.get("opened_at")))
-                    if item.get("opened_at")
-                    else asof_dt
-                ),
-            )
-        else:
-            position.symbol = str(item["symbol"])
-            position.side = str(item["side"])
-            position.instrument_kind = str(item["instrument_kind"])
-            position.lot_size = int(item["lot_size"])
-            position.qty_lots = int(item["qty_lots"])
-            position.margin_reserved = float(item["margin_reserved"])
-            position.must_exit_by_eod = bool(item["must_exit_by_eod"])
-            position.qty = int(item["qty"])
-            position.avg_price = float(item["avg_price"])
-            position.stop_price = (
-                float(item["stop_price"]) if item.get("stop_price") is not None else None
-            )
-            position.target_price = (
-                float(item["target_price"]) if item.get("target_price") is not None else None
-            )
-            position.metadata_json = dict(item.get("metadata_json") or {})
-        session.add(position)
+                )
+                position.metadata_json = dict(item.get("metadata_json") or {})
+            session.add(position)
 
-    now = datetime.now(tz=timezone.utc)
-    for item in step.orders:
-        session.add(
-            PaperOrder(
-                symbol=str(item["symbol"]),
-                side=str(item["side"]),
-                instrument_kind=str(item["instrument_kind"]),
-                lot_size=int(item["lot_size"]),
-                qty_lots=int(item["qty_lots"]),
-                qty=int(item["qty"]),
-                fill_price=float(item["fill_price"]) if item.get("fill_price") is not None else None,
-                status=str(item["status"]),
-                reason=str(item.get("reason")) if item.get("reason") else None,
-                created_at=now,
-                updated_at=now,
+        now = datetime.now(tz=timezone.utc)
+        for item in step.orders:
+            session.add(
+                PaperOrder(
+                    symbol=str(item["symbol"]),
+                    side=str(item["side"]),
+                    instrument_kind=str(item["instrument_kind"]),
+                    lot_size=int(item["lot_size"]),
+                    qty_lots=int(item["qty_lots"]),
+                    qty=int(item["qty"]),
+                    fill_price=float(item["fill_price"]) if item.get("fill_price") is not None else None,
+                    status=str(item["status"]),
+                    reason=str(item.get("reason")) if item.get("reason") else None,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
 
-    state.cash = float(step.cash)
-    state.equity = float(step.equity)
-    session.add(state)
+        if isinstance(state, PaperState):
+            state.cash = float(step.cash)
+            state.equity = float(step.equity)
+            session.add(state)
 
     return PaperSimulatorExecution(
         executed_signals=list(step.executed_signals),
         skipped_signals=list(step.skipped_signals),
+        positions_after=list(step.positions),
+        orders_generated=list(step.orders),
+        trades_generated=list(step.trades),
         entry_cost_total=float(step.entry_cost_total),
         exit_cost_total=float(step.exit_cost_total),
         entry_slippage_cost_total=float(step.entry_slippage_cost),

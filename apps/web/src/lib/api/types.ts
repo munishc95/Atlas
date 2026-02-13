@@ -266,6 +266,13 @@ export type ApiReplayRun = {
 export type ApiOperateStatus = {
   mode?: "NORMAL" | "SAFE MODE";
   mode_reason?: string | null;
+  safe_mode_on_fail?: boolean;
+  safe_mode_action?: string;
+  operate_mode?: string;
+  auto_run_enabled?: boolean;
+  auto_run_time_ist?: string;
+  last_auto_run_date?: string | null;
+  next_scheduled_run_ist?: string | null;
   active_policy_id?: number | null;
   active_policy_name?: string | null;
   active_bundle_id?: number | null;
@@ -315,6 +322,11 @@ export type ApiOperateHealth = {
   mode_reason?: string | null;
   safe_mode_on_fail: boolean;
   safe_mode_action: string;
+  operate_mode?: string;
+  auto_run_enabled?: boolean;
+  auto_run_time_ist?: string;
+  last_auto_run_date?: string | null;
+  next_scheduled_run_ist?: string | null;
   active_bundle_id?: number | null;
   active_timeframe: string;
   latest_data_quality?: ApiDataQualityReport | null;

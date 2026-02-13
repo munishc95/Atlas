@@ -60,21 +60,48 @@ def _stale_limit_minutes(
 ) -> int:
     tf = str(timeframe).strip().lower()
     state = overrides or {}
-    if tf == "4h_ish":
+    if tf in {"4h_ish", "2h", "1h", "30m", "15m"}:
         return max(
-            30,
+            15,
             _safe_int(
-                state.get("operate_max_stale_minutes_4h_ish", settings.operate_max_stale_minutes_4h_ish),
-                settings.operate_max_stale_minutes_4h_ish,
+                state.get(
+                    "data_quality_max_stale_minutes_intraday",
+                    state.get(
+                        "operate_max_stale_minutes_4h_ish",
+                        settings.data_quality_max_stale_minutes_intraday,
+                    ),
+                ),
+                settings.data_quality_max_stale_minutes_intraday,
             ),
         )
     return max(
         60,
         _safe_int(
-            state.get("operate_max_stale_minutes_1d", settings.operate_max_stale_minutes_1d),
-            settings.operate_max_stale_minutes_1d,
+            state.get(
+                "data_quality_max_stale_minutes_1d",
+                state.get("operate_max_stale_minutes_1d", settings.data_quality_max_stale_minutes_1d),
+            ),
+            settings.data_quality_max_stale_minutes_1d,
         ),
     )
+
+
+def _stale_severity(
+    *,
+    settings: Settings,
+    overrides: dict[str, Any] | None = None,
+) -> str:
+    state = overrides or {}
+    mode = str(state.get("operate_mode", settings.operate_mode)).strip().lower()
+    explicit_token = str(state.get("data_quality_stale_severity", "")).strip().upper()
+    explicit_override = bool(state.get("data_quality_stale_severity_override", False))
+    default_token = str(settings.data_quality_stale_severity).strip().upper()
+
+    if mode == "live" and not explicit_override:
+        return STATUS_FAIL
+
+    token = explicit_token if explicit_token in {STATUS_WARN, STATUS_FAIL} else default_token
+    return STATUS_FAIL if token == STATUS_FAIL else STATUS_WARN
 
 
 def _coverage_pct(frame: pd.DataFrame) -> float:
@@ -251,6 +278,7 @@ def run_data_quality_report(
         _safe_float(state.get("operate_outlier_zscore", settings.operate_outlier_zscore), settings.operate_outlier_zscore),
     )
     stale_limit = _stale_limit_minutes(tf, settings=settings, overrides=state)
+    stale_severity = _stale_severity(settings=settings, overrides=state)
 
     symbols = store.get_bundle_symbols(session, bundle_id, timeframe=tf)
     issues: list[dict[str, Any]] = []
@@ -298,7 +326,7 @@ def run_data_quality_report(
         if age_minutes > stale_limit:
             issues.append(
                 _issue(
-                    severity=STATUS_WARN,
+                    severity=stale_severity,
                     code="stale_data",
                     message=(
                         f"Latest bar is stale by {age_minutes:.0f} minutes "

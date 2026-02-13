@@ -62,6 +62,18 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "paper_use_simulator_engine": settings.paper_use_simulator_engine,
                     "operate_safe_mode_on_fail": settings.operate_safe_mode_on_fail,
                     "operate_safe_mode_action": settings.operate_safe_mode_action,
+                    "operate_mode": settings.operate_mode,
+                    "data_quality_stale_severity": (
+                        "FAIL"
+                        if str(settings.operate_mode).strip().lower() == "live"
+                        else settings.data_quality_stale_severity
+                    ),
+                    "data_quality_stale_severity_override": False,
+                    "data_quality_max_stale_minutes_1d": settings.data_quality_max_stale_minutes_1d,
+                    "data_quality_max_stale_minutes_intraday": settings.data_quality_max_stale_minutes_intraday,
+                    "operate_auto_run_enabled": settings.operate_auto_run_enabled,
+                    "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
+                    "operate_last_auto_run_date": None,
                     "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
                     "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
                     "operate_max_gap_bars": settings.operate_max_gap_bars,
