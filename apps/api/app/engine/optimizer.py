@@ -73,7 +73,8 @@ def _backtest_for_params(
     settings: Settings,
     params: dict[str, float | int],
 ) -> BacktestResult:
-    signals = template.signal_fn(frame, params)
+    signals = template.signal_sides_fn(frame, params)
+    direction = str(params.get("direction", "long")).strip().lower()
     cost_params = {
         "brokerage_bps": settings.brokerage_bps,
         "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,
@@ -95,6 +96,8 @@ def _backtest_for_params(
         max_positions=settings.max_positions,
         atr_stop_mult=float(params.get("atr_stop_mult", 2.0)),
         atr_trail_mult=float(params.get("atr_trail_mult", 2.0)),
+        allow_long=direction in {"long", "both"},
+        allow_short=direction in {"short", "both"},
         commission_bps=settings.commission_bps,
         slippage_base_bps=settings.slippage_base_bps,
         slippage_vol_factor=settings.slippage_vol_factor,

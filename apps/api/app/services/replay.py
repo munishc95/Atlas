@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
-from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
@@ -12,6 +11,7 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.core.exceptions import APIError
 from app.db.models import Policy, ReplayRun
+from app.engine.simulator import ENGINE_VERSION
 from app.services.data_store import DataStore
 from app.services.policy_simulation import simulate_policy_on_bundle
 
@@ -47,23 +47,6 @@ def _utc_datetime(value: date, *, end: bool = False) -> datetime:
 def _stable_hash(value: dict[str, Any]) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
-
-
-def _engine_version_hash() -> str:
-    root = Path(__file__).resolve().parent.parent
-    candidates = [
-        root / "services" / "policy_simulation.py",
-        root / "services" / "paper.py",
-        root / "engine" / "signal_engine.py",
-        root / "engine" / "backtester.py",
-    ]
-    sha = hashlib.sha256()
-    for path in candidates:
-        if not path.exists():
-            continue
-        sha.update(path.name.encode("utf-8"))
-        sha.update(path.read_bytes())
-    return sha.hexdigest()[:16]
 
 
 def _resolve_window(payload: dict[str, Any]) -> tuple[date, date]:
@@ -217,7 +200,8 @@ def execute_replay_run(
         "end_date": end_date.isoformat(),
         "timeframe": timeframe,
         "seed": seed,
-        "engine_version": _engine_version_hash(),
+        "engine_version": str((final_summary.get("engine_version") or ENGINE_VERSION)),
+        "data_digest": str(final_summary.get("data_digest", "")),
         "trading_days": [day.isoformat() for day in trading_days],
         "daily": daily_rows,
         "final": final_summary,

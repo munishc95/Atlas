@@ -12,7 +12,7 @@ from app.db.models import Backtest, Trade
 from app.engine.backtester import BacktestConfig, run_backtest
 from app.services.jobs import append_job_log
 from app.services.data_store import DataStore
-from app.strategies.templates import generate_signals
+from app.strategies.templates import generate_signal_sides
 
 
 def _build_config(settings: Settings, payload_config: dict[str, Any]) -> BacktestConfig:
@@ -88,11 +88,22 @@ def _build_config(settings: Settings, payload_config: dict[str, Any]) -> Backtes
         ),
         adv_lookback=int(payload_config.get("adv_lookback", 20)),
         allow_long=bool(payload_config.get("allow_long", True)),
+        allow_short=bool(payload_config.get("allow_short", False)),
+        instrument_kind=str(payload_config.get("instrument_kind", "EQUITY_CASH")),
+        lot_size=int(payload_config.get("lot_size", 1)),
+        futures_initial_margin_pct=float(
+            payload_config.get("futures_initial_margin_pct", settings.futures_initial_margin_pct)
+        ),
+        equity_short_intraday_only=bool(
+            payload_config.get("equity_short_intraday_only", True)
+        ),
+        squareoff_time=str(payload_config.get("squareoff_time", "15:20")),
         cost_model_enabled=bool(
             payload_config.get("cost_model_enabled", settings.cost_model_enabled)
         ),
         cost_mode=str(payload_config.get("cost_mode", settings.cost_mode)),
         cost_params=cost_params,
+        seed=int(payload_config.get("seed", 7)),
     )
 
 
@@ -137,8 +148,18 @@ def execute_backtest(
     if job_id:
         append_job_log(session, job_id, f"Generating signals: {strategy_template}")
 
-    signals = generate_signals(strategy_template, frame, params=params)
-    bt_config = _build_config(settings, dict(payload.get("config", {}), **params))
+    signals = generate_signal_sides(strategy_template, frame, params=params)
+    config_input = dict(payload.get("config", {}), **params)
+    direction = str(params.get("direction", "long")).strip().lower()
+    if "allow_short" not in config_input:
+        config_input["allow_short"] = direction in {"short", "both"}
+    if "allow_long" not in config_input:
+        config_input["allow_long"] = direction in {"long", "both"}
+    instrument = store.find_instrument(session, symbol=symbol)
+    if instrument is not None:
+        config_input.setdefault("instrument_kind", instrument.kind)
+        config_input.setdefault("lot_size", instrument.lot_size)
+    bt_config = _build_config(settings, config_input)
 
     if job_id:
         append_job_log(session, job_id, "Running realistic backtest engine")
@@ -160,8 +181,14 @@ def execute_backtest(
             "config": bt_config.__dict__,
             "job_id": job_id,
             "equity_curve": _to_iso_records(result.equity_curve, "datetime"),
+            "simulation_meta": result.metadata,
         },
-        metrics_json=result.metrics,
+        metrics_json={
+            **result.metrics,
+            "engine_version": result.metadata.get("engine_version"),
+            "data_digest": result.metadata.get("data_digest"),
+            "seed": result.metadata.get("seed"),
+        },
     )
     session.add(backtest)
     session.commit()
@@ -193,4 +220,7 @@ def execute_backtest(
         "timeframe": timeframe,
         "metrics": result.metrics,
         "trade_count": int(len(result.trades)),
+        "engine_version": result.metadata.get("engine_version"),
+        "data_digest": result.metadata.get("data_digest"),
+        "seed": result.metadata.get("seed"),
     }

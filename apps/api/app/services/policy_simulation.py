@@ -14,7 +14,7 @@ from app.core.exceptions import APIError
 from app.db.models import Policy
 from app.engine.backtester import BacktestConfig, run_backtest
 from app.services.data_store import DataStore
-from app.strategies.templates import generate_signals
+from app.strategies.templates import generate_signal_sides
 
 
 def _utc_datetime(value: date, *, end: bool = False) -> datetime:
@@ -110,9 +110,13 @@ def _build_bt_config(
     params: dict[str, Any],
     regime_cfg: dict[str, Any],
     definition: dict[str, Any],
+    instrument_kind: str,
+    lot_size: int,
+    seed: int,
 ) -> BacktestConfig:
     risk_scale = _safe_float(regime_cfg.get("risk_scale"), 1.0)
     max_positions_scale = _safe_float(regime_cfg.get("max_positions_scale"), 1.0)
+    direction = str(params.get("direction", "long")).strip().lower()
     cost_model = definition.get("cost_model", {})
     cost_model = cost_model if isinstance(cost_model, dict) else {}
     cost_params = {
@@ -155,10 +159,17 @@ def _build_bt_config(
             settings.max_position_value_pct_adv,
         ),
         adv_lookback=int(params.get("adv_lookback", 20)),
-        allow_long=bool(params.get("allow_long", True)),
+        allow_long=direction in {"long", "both"},
+        allow_short=direction in {"short", "both"},
+        instrument_kind=instrument_kind,
+        lot_size=max(1, lot_size),
+        futures_initial_margin_pct=settings.futures_initial_margin_pct,
+        equity_short_intraday_only=True,
+        squareoff_time=settings.paper_short_squareoff_time,
         cost_model_enabled=bool(cost_model.get("enabled", settings.cost_model_enabled)),
         cost_mode=str(cost_model.get("mode", settings.cost_mode)),
         cost_params=cost_params,
+        seed=seed,
     )
 
 
@@ -224,22 +235,29 @@ def simulate_policy_on_bundle(
             message=f"No symbols available in bundle {bundle_id} for timeframe {timeframe}.",
         )
 
-    config = _build_bt_config(
-        settings,
-        params=params,
-        regime_cfg=regime_cfg,
-        definition=definition,
-    )
     start_dt = _utc_datetime(start_date, end=False)
     end_dt = _utc_datetime(end_date, end=True)
 
     symbol_rows: list[dict[str, Any]] = []
     normalized_curves: list[pd.Series] = []
+    metadata_rows: list[dict[str, Any]] = []
     for symbol in sorted(symbols):
         frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe, start=start_dt, end=end_dt)
         if len(frame) < 60:
             continue
-        signals = generate_signals(strategy_key, frame, params=params)
+        signals = generate_signal_sides(strategy_key, frame, params=params)
+        instrument = store.find_instrument(session, symbol=symbol)
+        instrument_kind = instrument.kind if instrument is not None else "EQUITY_CASH"
+        lot_size = int(instrument.lot_size) if instrument is not None else 1
+        config = _build_bt_config(
+            settings,
+            params=params,
+            regime_cfg=regime_cfg,
+            definition=definition,
+            instrument_kind=instrument_kind,
+            lot_size=lot_size,
+            seed=seed,
+        )
         result = run_backtest(price_df=frame, entries=signals, symbol=symbol, config=config)
         if result.equity_curve.empty:
             continue
@@ -266,6 +284,17 @@ def simulate_policy_on_bundle(
                 "profit_factor": _safe_float(metrics.get("profit_factor"), 0.0),
                 "turnover": _safe_float(metrics.get("turnover"), 0.0),
                 "exposure_pct": _safe_float(metrics.get("exposure_pct"), 0.0),
+                "engine_version": str(result.metadata.get("engine_version", "")),
+                "data_digest": str(result.metadata.get("data_digest", "")),
+                "seed": int(result.metadata.get("seed", seed)),
+            }
+        )
+        metadata_rows.append(
+            {
+                "symbol": symbol,
+                "engine_version": str(result.metadata.get("engine_version", "")),
+                "data_digest": str(result.metadata.get("data_digest", "")),
+                "seed": int(result.metadata.get("seed", seed)),
             }
         )
 
@@ -287,6 +316,9 @@ def simulate_policy_on_bundle(
                 "cost_ratio": 0.0,
                 "score": -1.0,
             },
+            "engine_version": "atlas-sim-v1.8",
+            "data_digest": "",
+            "seed": int(seed),
             "equity_curve": [],
             "reasons": ["No symbols produced valid shadow simulation output."],
         }
@@ -318,12 +350,24 @@ def simulate_policy_on_bundle(
     equity_frame = pd.DataFrame(
         {"datetime": portfolio_eq.index.to_pydatetime(), "equity": portfolio_eq.to_numpy()}
     )
+    engine_version = metadata_rows[0]["engine_version"] if metadata_rows else "atlas-sim-v1.8"
+    digest_payload = {
+        "seed": int(seed),
+        "symbols": sorted([str(row["symbol"]) for row in metadata_rows]),
+        "digests": sorted([str(row["data_digest"]) for row in metadata_rows]),
+    }
+    combined_data_digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     summary = {
         "policy_id": policy.id,
         "policy_name": policy.name,
         "strategy_key": strategy_key,
         "timeframe": timeframe,
         "regime": regime,
+        "engine_version": engine_version,
+        "data_digest": combined_data_digest,
+        "seed": int(seed),
         "symbol_count": len(symbol_rows),
         "symbols": [row["symbol"] for row in symbol_rows],
         "symbol_rows": symbol_rows,

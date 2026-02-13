@@ -166,7 +166,10 @@ def execute_walkforward(
         )
         best_params = optimization.params
 
-        signals_train = template.signal_fn(train_frame, best_params)
+        signals_train = template.signal_sides_fn(train_frame, best_params)
+        direction = str(best_params.get("direction", "long")).strip().lower()
+        allow_long = direction in {"long", "both"}
+        allow_short = direction in {"short", "both"}
         bt_train = run_backtest(
             price_df=train_frame,
             entries=signals_train,
@@ -176,6 +179,8 @@ def execute_walkforward(
                 max_positions=settings.max_positions,
                 atr_stop_mult=float(best_params.get("atr_stop_mult", 2.0)),
                 atr_trail_mult=float(best_params.get("atr_trail_mult", 2.0)),
+                allow_long=allow_long,
+                allow_short=allow_short,
                 commission_bps=settings.commission_bps,
                 slippage_base_bps=settings.slippage_base_bps,
                 slippage_vol_factor=settings.slippage_vol_factor,
@@ -185,7 +190,7 @@ def execute_walkforward(
             ),
         )
 
-        signals_test = template.signal_fn(test_frame, best_params)
+        signals_test = template.signal_sides_fn(test_frame, best_params)
         bt_test = run_backtest(
             price_df=test_frame,
             entries=signals_test,
@@ -195,6 +200,8 @@ def execute_walkforward(
                 max_positions=settings.max_positions,
                 atr_stop_mult=float(best_params.get("atr_stop_mult", 2.0)),
                 atr_trail_mult=float(best_params.get("atr_trail_mult", 2.0)),
+                allow_long=allow_long,
+                allow_short=allow_short,
                 commission_bps=settings.commission_bps,
                 slippage_base_bps=settings.slippage_base_bps,
                 slippage_vol_factor=settings.slippage_vol_factor,
@@ -209,6 +216,8 @@ def execute_walkforward(
             max_positions=settings.max_positions,
             atr_stop_mult=float(best_params.get("atr_stop_mult", 2.0)),
             atr_trail_mult=float(best_params.get("atr_trail_mult", 2.0)),
+            allow_long=allow_long,
+            allow_short=allow_short,
             commission_bps=settings.commission_bps * 2,
             slippage_base_bps=settings.slippage_base_bps * 2,
             slippage_vol_factor=settings.slippage_vol_factor,
@@ -216,12 +225,15 @@ def execute_walkforward(
             cost_mode=settings.cost_mode,
             cost_params=cost_params,
         )
-        delayed_entries = pd.Series(
-            signals_test.shift(1), index=test_frame.index, dtype="boolean"
-        ).fillna(False)
+        delayed_entries = {
+            side: pd.Series(series.shift(1), index=test_frame.index, dtype="boolean")
+            .fillna(False)
+            .astype(bool)
+            for side, series in signals_test.items()
+        }
         bt_stress = run_backtest(
             price_df=test_frame,
-            entries=delayed_entries.astype(bool),
+            entries=delayed_entries,
             symbol=symbol,
             config=stress_cfg,
         )
@@ -249,6 +261,11 @@ def execute_walkforward(
             "train_metrics": bt_train.metrics,
             "test_metrics": bt_test.metrics,
             "stress_metrics": bt_stress.metrics,
+            "simulation_meta": {
+                "train": bt_train.metadata,
+                "test": bt_test.metadata,
+                "stress": bt_stress.metadata,
+            },
             "oos_score": oos_score,
             "stress_pass": bt_stress.metrics.get("calmar", 0.0)
             >= bt_test.metrics.get("calmar", 0.0) * 0.25,
@@ -349,6 +366,17 @@ def execute_walkforward(
         "stress_failures": stress_failures,
         "eligible_for_promotion": promoted_ok,
         "rejection_reasons": reasons,
+        "engine_version": (
+            fold_rows[0].get("simulation_meta", {}).get("test", {}).get("engine_version")
+            if fold_rows
+            else None
+        ),
+        "data_digest": (
+            fold_rows[0].get("simulation_meta", {}).get("test", {}).get("data_digest")
+            if fold_rows
+            else None
+        ),
+        "seed": seed,
         "folds": fold_rows,
     }
 

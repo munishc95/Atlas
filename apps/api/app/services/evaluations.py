@@ -272,6 +272,8 @@ def execute_policy_evaluation(
         "bundle_id": bundle_id,
         "regime": regime,
         "seed": seed,
+        "engine_version": champion_summary.get("engine_version"),
+        "data_digest": champion_summary.get("data_digest"),
         "thresholds": thresholds,
         "champion": champion_summary,
         "challengers": challengers,

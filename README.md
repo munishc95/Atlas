@@ -185,7 +185,7 @@ Atlas now includes reproducible policy governance and shareable tear sheets:
   - deterministic recommendation with explicit reasons and guardrails
   - optional `auto_promote` remains disabled by default
 - Deterministic replay runs:
-  - replay summary persisted with `seed`, date range, engine version hash, and digest
+  - replay summary persisted with `seed`, date range, `engine_version`, and `data_digest`
   - same input + seed yields identical ordering/summary outputs
 - Professional PDF exports:
   - daily tear sheets include metrics, equity + drawdown chart, explainability reasons
@@ -194,6 +194,26 @@ Atlas now includes reproducible policy governance and shareable tear sheets:
   - `Evaluations` for champion-challenger runs and explicit active-policy apply
   - `Replay` for deterministic range replay + JSON export
   - `Reports` now supports daily/monthly PDF download actions
+
+## Single Truth Simulator (v1.8)
+
+Research, walk-forward, replay, and champion-challenger shadow evaluation now run through the same deterministic side/instrument-aware simulator core:
+
+- One execution model for LONG + SHORT across:
+  - backtests
+  - walk-forward OOS folds + stress runs
+  - auto-research candidate scoring
+  - replay and shadow evaluations
+- Instrument-aware execution:
+  - `EQUITY_CASH`, `STOCK_FUT`, `INDEX_FUT`
+  - next-bar fills, mirrored long/short stop logic, gap-through-stop handling
+  - futures lot sizing + margin reserve/release
+- Reproducibility metadata included in outputs:
+  - `engine_version`
+  - `data_digest`
+  - `seed`
+
+This removes execution-assumption drift between research recommendations and paper shadow results.
 
 ## Universe Bundles (first-class scope)
 
