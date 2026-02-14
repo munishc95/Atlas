@@ -284,6 +284,7 @@ export type ApiOperateStatus = {
   calendar_previous_trading_day?: string | null;
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
+  auto_run_include_data_updates?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
   active_policy_id?: number | null;
@@ -293,6 +294,7 @@ export type ApiOperateStatus = {
   last_run_step_at?: string | null;
   latest_run?: Record<string, unknown> | null;
   latest_data_quality?: ApiDataQualityReport | null;
+  latest_data_update?: ApiDataUpdateRun | null;
   recent_event_counts_24h?: Record<string, number>;
   health_short?: ApiPolicyHealthSnapshot | null;
   health_long?: ApiPolicyHealthSnapshot | null;
@@ -318,6 +320,52 @@ export type ApiDataQualityReport = {
   checked_symbols: number;
   total_symbols: number;
   created_at: string;
+};
+
+export type ApiDataUpdateRun = {
+  id: number;
+  bundle_id?: number | null;
+  timeframe: string;
+  status: string;
+  inbox_path: string;
+  scanned_files: number;
+  processed_files: number;
+  skipped_files: number;
+  rows_ingested: number;
+  symbols_affected_json: string[];
+  warnings_json: Array<Record<string, unknown>>;
+  errors_json: Array<Record<string, unknown>>;
+  created_at: string;
+  ended_at?: string | null;
+};
+
+export type ApiDataCoverage = {
+  bundle_id: number;
+  timeframe: string;
+  coverage_pct: number;
+  missing_pct: number;
+  status: "OK" | "WARN" | "FAIL";
+  expected_latest_trading_day: string;
+  missing_symbols: string[];
+  stale_symbols: Array<{
+    symbol: string;
+    missing_trading_days: number;
+    last_bar_day_ist?: string | null;
+  }>;
+  inactive_symbols: string[];
+  last_bar_by_symbol: Array<{
+    symbol: string;
+    last_bar_ts?: string | null;
+    missing_trading_days: number;
+  }>;
+  checked_symbols: number;
+  total_symbols: number;
+  last_bar_ts?: string | null;
+  thresholds: {
+    warn_pct: number;
+    fail_pct: number;
+    inactive_after_missing_days: number;
+  };
 };
 
 export type ApiOperateEvent = {
@@ -351,11 +399,13 @@ export type ApiOperateHealth = {
   calendar_previous_trading_day?: string | null;
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
+  auto_run_include_data_updates?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
   active_bundle_id?: number | null;
   active_timeframe: string;
   latest_data_quality?: ApiDataQualityReport | null;
+  latest_data_update?: ApiDataUpdateRun | null;
   latest_paper_run_id?: number | null;
   last_run_step_at?: string | null;
   recent_event_counts_24h: Record<string, number>;

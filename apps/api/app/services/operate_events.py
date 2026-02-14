@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, select
 
 from app.core.config import Settings
-from app.db.models import DataQualityReport, OperateEvent, PaperRun, PaperState
+from app.db.models import DataQualityReport, DataUpdateRun, OperateEvent, PaperRun, PaperState
 from app.services.trading_calendar import (
     compute_next_scheduled_run_ist,
     get_session as calendar_get_session,
@@ -87,6 +87,21 @@ def _latest_data_quality_report(
     return session.exec(stmt).first()
 
 
+def _latest_data_update_run(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> DataUpdateRun | None:
+    stmt = select(DataUpdateRun)
+    if bundle_id is not None:
+        stmt = stmt.where(DataUpdateRun.bundle_id == bundle_id)
+    if timeframe:
+        stmt = stmt.where(DataUpdateRun.timeframe == timeframe)
+    stmt = stmt.order_by(DataUpdateRun.created_at.desc(), DataUpdateRun.id.desc()).limit(1)
+    return session.exec(stmt).first()
+
+
 def get_operate_health_summary(
     session: Session,
     settings: Settings,
@@ -110,6 +125,11 @@ def get_operate_health_summary(
         bundle_id=target_bundle_id,
         timeframe=target_timeframe,
     )
+    latest_update = _latest_data_update_run(
+        session,
+        bundle_id=target_bundle_id,
+        timeframe=target_timeframe,
+    )
     state = session.get(PaperState, 1)
     state_settings = dict(state.settings_json or {}) if state is not None else {}
     safe_mode_on_fail = bool(state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail))
@@ -122,6 +142,12 @@ def get_operate_health_summary(
     )
     auto_run_time_ist = str(
         state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)
+    )
+    auto_run_include_data_updates = bool(
+        state_settings.get(
+            "operate_auto_run_include_data_updates",
+            settings.operate_auto_run_include_data_updates,
+        )
     )
     calendar_segment = str(
         state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)
@@ -167,11 +193,13 @@ def get_operate_health_summary(
         "calendar_previous_trading_day": prev_day.isoformat(),
         "auto_run_enabled": auto_run_enabled,
         "auto_run_time_ist": auto_run_time_ist,
+        "auto_run_include_data_updates": auto_run_include_data_updates,
         "last_auto_run_date": last_auto_run_date,
         "next_scheduled_run_ist": next_scheduled_run_ist,
         "active_bundle_id": target_bundle_id,
         "active_timeframe": target_timeframe,
         "latest_data_quality": latest_quality.model_dump() if latest_quality is not None else None,
+        "latest_data_update": latest_update.model_dump() if latest_update is not None else None,
         "latest_paper_run_id": int(latest_run.id) if latest_run is not None and latest_run.id is not None else None,
         "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
         "recent_event_counts_24h": severity_counts,

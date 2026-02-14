@@ -30,6 +30,7 @@ from app.db.session import engine, get_session
 from app.jobs.queue import get_queue
 from app.jobs.tasks import (
     run_backtest_job,
+    run_data_updates_job,
     run_data_quality_job,
     run_import_job,
     run_evaluation_job,
@@ -44,6 +45,7 @@ from app.schemas.api import (
     BacktestRunRequest,
     CreatePolicyRequest,
     DataQualityRunRequest,
+    DataUpdatesRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
     PaperSignalsPreviewRequest,
@@ -56,6 +58,11 @@ from app.schemas.api import (
     WalkForwardRunRequest,
 )
 from app.services.data_store import DataStore
+from app.services.data_updates import (
+    compute_data_coverage,
+    get_latest_data_update_run,
+    list_data_update_history,
+)
 from app.services.data_quality import (
     get_latest_data_quality_report,
     list_data_quality_history,
@@ -316,6 +323,82 @@ def data_status(
     store: DataStore = Depends(get_store),
 ) -> dict[str, Any]:
     return _data(store.data_status(session))
+
+
+@router.post("/data/updates/run")
+def run_data_updates(
+    payload: DataUpdatesRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="data_updates",
+        task_path="app.jobs.tasks.run_data_updates_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_data_updates_job,
+    )
+
+
+@router.get("/data/updates/latest")
+def latest_data_update(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_latest_data_update_run(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if row is None:
+        raise APIError(code="not_found", message="No data update run found", status_code=404)
+    return _data(row.model_dump())
+
+
+@router.get("/data/updates/history")
+def data_updates_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    days: int = Query(default=7, ge=1, le=365),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_data_update_history(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        days=days,
+    )
+    return _data([row.model_dump() for row in rows])
+
+
+@router.get("/data/coverage")
+def data_coverage(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    top_n: int = Query(default=50, ge=1, le=500),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    state = get_or_create_paper_state(session, settings)
+    overrides = dict(state.settings_json or {})
+    return _data(
+        compute_data_coverage(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+            overrides=overrides,
+            top_n=top_n,
+        )
+    )
 
 
 @router.post("/data/quality/run")
@@ -1014,6 +1097,7 @@ def operate_status(
             "calendar_previous_trading_day": health_summary.get("calendar_previous_trading_day"),
             "auto_run_enabled": health_summary.get("auto_run_enabled"),
             "auto_run_time_ist": health_summary.get("auto_run_time_ist"),
+            "auto_run_include_data_updates": health_summary.get("auto_run_include_data_updates"),
             "last_auto_run_date": health_summary.get("last_auto_run_date"),
             "next_scheduled_run_ist": health_summary.get("next_scheduled_run_ist"),
             "active_policy_id": policy.id if policy is not None else None,
@@ -1023,6 +1107,7 @@ def operate_status(
             "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
             "latest_data_quality": health_summary.get("latest_data_quality"),
+            "latest_data_update": health_summary.get("latest_data_update"),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "health_short": health_short,
             "health_long": health_long,
@@ -1363,6 +1448,7 @@ def get_settings_payload(
         "data_quality_max_stale_minutes_intraday": settings.data_quality_max_stale_minutes_intraday,
         "operate_auto_run_enabled": settings.operate_auto_run_enabled,
         "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
+        "operate_auto_run_include_data_updates": settings.operate_auto_run_include_data_updates,
         "operate_last_auto_run_date": None,
         "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
         "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
@@ -1373,6 +1459,11 @@ def get_settings_payload(
         "operate_cost_spike_risk_scale": settings.operate_cost_spike_risk_scale,
         "operate_scan_truncated_warn_days": settings.operate_scan_truncated_warn_days,
         "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
+        "data_updates_inbox_enabled": settings.data_updates_inbox_enabled,
+        "data_updates_max_files_per_run": settings.data_updates_max_files_per_run,
+        "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
+        "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
+        "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

@@ -112,6 +112,12 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     auto_run_enabled = bool(state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled))
     if not auto_run_enabled:
         return False
+    include_data_updates = bool(
+        state_settings.get(
+            "operate_auto_run_include_data_updates",
+            settings.operate_auto_run_include_data_updates,
+        )
+    )
 
     run_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)),
@@ -133,6 +139,15 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     policy_id = context["policy_id"]
 
     queued_jobs: dict[str, str] = {}
+    if isinstance(bundle_id, int) and bundle_id > 0 and include_data_updates:
+        queued_jobs["data_updates"] = _enqueue_job(
+            session=session,
+            queue=queue,
+            settings=settings,
+            job_type="data_updates",
+            task_path="app.jobs.tasks.run_data_updates_job",
+            payload={"bundle_id": bundle_id, "timeframe": timeframe},
+        )
     if isinstance(bundle_id, int) and bundle_id > 0:
         queued_jobs["data_quality"] = _enqueue_job(
             session=session,
@@ -186,6 +201,7 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
             "bundle_id": bundle_id,
             "timeframe": timeframe,
             "policy_id": policy_id,
+            "include_data_updates": include_data_updates,
             "calendar_segment": segment,
             "session": calendar_get_session(today, segment=segment, settings=settings),
             "queued_jobs": queued_jobs,

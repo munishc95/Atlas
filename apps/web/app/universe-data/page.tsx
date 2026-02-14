@@ -5,10 +5,12 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { DetailsDrawer } from "@/components/details-drawer";
 import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import { useJobStream } from "@/src/hooks/useJobStream";
+import { ApiClientError } from "@/src/lib/api/client";
 import { qk } from "@/src/lib/query/keys";
 
 export default function UniverseDataPage() {
@@ -21,6 +23,8 @@ export default function UniverseDataPage() {
   const [bundleId, setBundleId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | null>(null);
+  const [showCoverageDrawer, setShowCoverageDrawer] = useState(false);
 
   const universeQuery = useQuery({
     queryKey: qk.universe,
@@ -35,6 +39,36 @@ export default function UniverseDataPage() {
   const bundlesQuery = useQuery({
     queryKey: qk.universes,
     queryFn: async () => (await atlasApi.universes()).data,
+  });
+  const coverageTimeframe = timeframe === "4h_ish_resampled" ? "4h_ish" : timeframe;
+  const dataUpdatesLatestQuery = useQuery({
+    queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      if (!bundleId) {
+        return null;
+      }
+      try {
+        return (await atlasApi.dataUpdatesLatest(bundleId, coverageTimeframe)).data;
+      } catch (error) {
+        if (error instanceof ApiClientError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    refetchInterval: 10_000,
+  });
+  const dataCoverageQuery = useQuery({
+    queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      if (!bundleId) {
+        return null;
+      }
+      return (await atlasApi.dataCoverage(bundleId, coverageTimeframe, 100)).data;
+    },
+    refetchInterval: 15_000,
   });
 
   useEffect(() => {
@@ -71,10 +105,32 @@ export default function UniverseDataPage() {
     },
     onSuccess: (result) => {
       setActiveJobId(result.job_id);
+      setActiveJobKind("import");
       toast.success("Import job queued");
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not queue import");
+    },
+  });
+  const updatesMutation = useMutation({
+    mutationFn: async () => {
+      if (!bundleId) {
+        throw new Error("Choose a bundle before running updates.");
+      }
+      return (
+        await atlasApi.runDataUpdates({
+          bundle_id: bundleId,
+          timeframe: coverageTimeframe,
+        })
+      ).data;
+    },
+    onSuccess: (result) => {
+      setActiveJobId(result.job_id);
+      setActiveJobKind("updates");
+      toast.success("Data update job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue data update job");
     },
   });
 
@@ -89,12 +145,16 @@ export default function UniverseDataPage() {
       queryClient.invalidateQueries({ queryKey: qk.universe });
       queryClient.invalidateQueries({ queryKey: qk.dataStatus });
       queryClient.invalidateQueries({ queryKey: qk.jobs(20) });
-      toast.success("Import completed");
+      if (bundleId) {
+        queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
+        queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
+      }
+      toast.success(activeJobKind === "updates" ? "Data updates completed" : "Import completed");
     }
     if (stream.status === "FAILED") {
-      toast.error("Import failed");
+      toast.error(activeJobKind === "updates" ? "Data updates failed" : "Import failed");
     }
-  }, [activeJobId, queryClient, stream.isTerminal, stream.status]);
+  }, [activeJobId, activeJobKind, bundleId, coverageTimeframe, queryClient, stream.isTerminal, stream.status]);
 
   const symbols = universeQuery.data?.symbols ?? [];
   const pagedRows = useMemo(
@@ -104,7 +164,14 @@ export default function UniverseDataPage() {
 
   return (
     <div className="space-y-5">
-      <JobDrawer jobId={activeJobId} onClose={() => setActiveJobId(null)} title="Import Job" />
+      <JobDrawer
+        jobId={activeJobId}
+        onClose={() => {
+          setActiveJobId(null);
+          setActiveJobKind(null);
+        }}
+        title={activeJobKind === "updates" ? "Data Updates Job" : "Import Job"}
+      />
 
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Universe & Data</h2>
@@ -245,8 +312,13 @@ export default function UniverseDataPage() {
           </div>
         </article>
 
-        <article className="card p-4">
-          <h3 className="text-base font-semibold">Universe coverage</h3>
+        <article className="card p-4 space-y-4">
+          <div>
+            <h3 className="text-base font-semibold">Universe coverage</h3>
+            <p className="mt-1 text-xs text-muted">
+              Drop updates into <code className="rounded bg-surface px-1 py-0.5">data/inbox/&lt;bundle&gt;/&lt;timeframe&gt;/</code>
+            </p>
+          </div>
           {universeQuery.isLoading ? (
             <LoadingState label="Loading symbols" />
           ) : universeQuery.isError ? (
@@ -258,12 +330,92 @@ export default function UniverseDataPage() {
           ) : symbols.length === 0 ? (
             <EmptyState title="No symbols" action="Import at least one symbol." />
           ) : (
-            <div className="mt-3 rounded-xl border border-border px-3 py-2 text-sm">
-              Loaded symbols: <span className="font-semibold">{symbols.length}</span>
+            <div className="space-y-2 rounded-xl border border-border px-3 py-2 text-sm">
+              <p>
+                Loaded symbols: <span className="font-semibold">{symbols.length}</span>
+              </p>
+              <p>
+                Coverage:{" "}
+                <span className="font-semibold">
+                  {Number(dataCoverageQuery.data?.coverage_pct ?? 0).toFixed(2)}%
+                </span>
+              </p>
+              <p>
+                Missing latest: <span className="font-semibold">{dataCoverageQuery.data?.missing_symbols.length ?? 0}</span>
+              </p>
+              <button
+                type="button"
+                className="focus-ring rounded-lg border border-border px-2 py-1 text-xs text-muted"
+                onClick={() => setShowCoverageDrawer(true)}
+              >
+                View missing/stale symbols
+              </button>
             </div>
           )}
+          <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p>
+              Last update run:{" "}
+              <span className="font-semibold text-foreground">
+                {dataUpdatesLatestQuery.data?.status ?? "Not run yet"}
+              </span>
+            </p>
+            <p>Rows ingested: {dataUpdatesLatestQuery.data?.rows_ingested ?? 0}</p>
+            <p>Processed files: {dataUpdatesLatestQuery.data?.processed_files ?? 0}</p>
+            <button
+              type="button"
+              onClick={() => updatesMutation.mutate()}
+              disabled={updatesMutation.isPending || !bundleId}
+              className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
+            >
+              {updatesMutation.isPending ? "Queuing..." : "Run Data Updates"}
+            </button>
+          </div>
         </article>
       </section>
+
+      <DetailsDrawer
+        open={showCoverageDrawer}
+        onClose={() => setShowCoverageDrawer(false)}
+        title="Coverage Details"
+      >
+        {dataCoverageQuery.isLoading ? (
+          <LoadingState label="Loading coverage details" />
+        ) : dataCoverageQuery.isError ? (
+          <ErrorState
+            title="Could not load coverage details"
+            action="Retry coverage query."
+            onRetry={() => void dataCoverageQuery.refetch()}
+          />
+        ) : !dataCoverageQuery.data ? (
+          <EmptyState title="No coverage data" action="Run data updates or quality checks." />
+        ) : (
+          <div className="space-y-3 text-sm">
+            <p>
+              Expected latest trading day:{" "}
+              <span className="font-semibold">{dataCoverageQuery.data.expected_latest_trading_day}</span>
+            </p>
+            <p>
+              Inactive symbols: <span className="font-semibold">{dataCoverageQuery.data.inactive_symbols.length}</span>
+            </p>
+            <div>
+              <p className="mb-1 font-medium">Missing symbols</p>
+              <div className="max-h-40 overflow-auto rounded-lg border border-border p-2 text-xs text-muted">
+                {(dataCoverageQuery.data.missing_symbols ?? []).slice(0, 120).join(", ") || "None"}
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 font-medium">Top stale symbols</p>
+              <div className="max-h-48 overflow-auto rounded-lg border border-border p-2 text-xs text-muted">
+                {(dataCoverageQuery.data.stale_symbols ?? []).slice(0, 40).map((row) => (
+                  <p key={String(row.symbol)}>
+                    {String(row.symbol)} - {Number(row.missing_trading_days)} missing day(s)
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </DetailsDrawer>
     </div>
   );
 }

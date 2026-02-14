@@ -194,7 +194,13 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   expect(bundlesRes.ok()).toBeTruthy();
   const bundlesBody = await bundlesRes.json();
   const bundles = (bundlesBody?.data ?? []) as Array<{ id?: number; symbols?: string[] }>;
-  const targetBundle = bundles.find((bundle) => (bundle.symbols ?? []).includes("NIFTY500")) ?? bundles[0];
+  const targetBundle =
+    bundles.find((bundle) => {
+      const symbols = bundle.symbols ?? [];
+      return symbols.includes("NIFTY500") && symbols.includes("NIFTY500_FUT");
+    }) ??
+    bundles.find((bundle) => (bundle.symbols ?? []).includes("NIFTY500")) ??
+    bundles[0];
   const bundleId = Number(targetBundle?.id ?? 0);
   expect(bundleId > 0).toBeTruthy();
   const qualityRunRes = await request.post(`${apiBase}/api/data/quality/run`, {

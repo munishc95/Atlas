@@ -37,6 +37,7 @@ from app.services.data_quality import (
     run_data_quality_report,
 )
 from app.services.data_store import DataStore
+from app.services.data_updates import inactive_symbols_for_selection
 from app.services.operate_events import emit_operate_event
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
 from app.services.policy_health import (
@@ -132,6 +133,7 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "data_quality_max_stale_minutes_intraday": settings.data_quality_max_stale_minutes_intraday,
             "operate_auto_run_enabled": settings.operate_auto_run_enabled,
             "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
+            "operate_auto_run_include_data_updates": settings.operate_auto_run_include_data_updates,
             "operate_last_auto_run_date": None,
             "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
             "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
@@ -142,6 +144,11 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "operate_cost_spike_risk_scale": settings.operate_cost_spike_risk_scale,
             "operate_scan_truncated_warn_days": settings.operate_scan_truncated_warn_days,
             "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
+            "data_updates_inbox_enabled": settings.data_updates_inbox_enabled,
+            "data_updates_max_files_per_run": settings.data_updates_max_files_per_run,
+            "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
+            "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
+            "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
             "paper_mode": "strategy",
             "active_policy_id": None,
         },
@@ -2382,6 +2389,24 @@ def run_paper_step(
 
     selected_symbols = set(open_symbols)
     selected_underlyings = set(open_underlyings)
+    inactive_symbols: set[str] = set()
+    operate_mode = str(state_settings.get("operate_mode", settings.operate_mode)).strip().lower()
+    enforce_inactive_filter = operate_mode == "live" and not (
+        safe_mode_active and safe_mode_action == "shadow_only"
+    )
+    if resolved_bundle_id is not None and enforce_inactive_filter:
+        try:
+            inactive_symbols = inactive_symbols_for_selection(
+                session=session,
+                settings=settings,
+                store=store,
+                bundle_id=int(resolved_bundle_id),
+                timeframe=primary_timeframe,
+                overrides=state_settings,
+                reference_ts=asof_dt,
+            )
+        except Exception:  # noqa: BLE001
+            inactive_symbols = set()
 
     for signal in candidates:
         symbol = str(signal.get("symbol", "")).upper()
@@ -2407,6 +2432,9 @@ def run_paper_step(
             "policy_id": policy.get("policy_id"),
             "policy_name": policy.get("policy_name"),
         }
+        if symbol in inactive_symbols or underlying_symbol in inactive_symbols:
+            skipped_signals.append({**base_meta, "reason": "inactive_symbol_data_gap"})
+            continue
 
         if sector_counts.get(sector, 0) >= sector_limit:
             skipped_signals.append({**base_meta, "reason": "sector_concentration"})

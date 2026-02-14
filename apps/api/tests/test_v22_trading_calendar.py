@@ -99,7 +99,13 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
             now_ist=now_ist,
         )
         assert fired is True
-        assert len(queue.calls) == 3
+        assert len(queue.calls) == 4
+        assert [call[0] for call in queue.calls] == [
+            "app.jobs.tasks.run_data_updates_job",
+            "app.jobs.tasks.run_data_quality_job",
+            "app.jobs.tasks.run_paper_step_job",
+            "app.jobs.tasks.run_daily_report_job",
+        ]
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
@@ -113,7 +119,7 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
             now_ist=now_ist.replace(hour=11, minute=0),
         )
         assert fired_again is False
-        assert len(queue.calls) == 3
+        assert len(queue.calls) == 4
 
         assert bundle_id > 0
 

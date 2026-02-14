@@ -10,7 +10,9 @@ import type {
   ApiPolicyHealthSnapshot,
   ApiPolicy,
   ApiDailyReport,
+  ApiDataCoverage,
   ApiDataQualityReport,
+  ApiDataUpdateRun,
   ApiOperateEvent,
   ApiOperateHealth,
   ApiOperateStatus,
@@ -40,6 +42,28 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  runDataUpdates: (payload: { bundle_id: number; timeframe?: string; max_files_per_run?: number }) =>
+    apiFetch<JobStart>("/api/data/updates/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  dataUpdatesLatest: (bundleId: number, timeframe = "1d") =>
+    apiFetch<ApiDataUpdateRun>(
+      `/api/data/updates/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,
+    ),
+  dataUpdatesHistory: (params?: { bundle_id?: number; timeframe?: string; days?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (params?.days) search.set("days", String(params.days));
+    return apiFetch<ApiDataUpdateRun[]>(
+      `/api/data/updates/history${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  dataCoverage: (bundleId: number, timeframe = "1d", topN = 50) =>
+    apiFetch<ApiDataCoverage>(
+      `/api/data/coverage?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&top_n=${topN}`,
+    ),
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
       `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,

@@ -97,6 +97,12 @@ class DataQualityRunRequest(BaseModel):
     timeframe: str = "1d"
 
 
+class DataUpdatesRunRequest(BaseModel):
+    bundle_id: int
+    timeframe: str = "1d"
+    max_files_per_run: int | None = None
+
+
 class MonthlyReportGenerateRequest(BaseModel):
     month: str | None = None  # YYYY-MM
     bundle_id: int | None = None
@@ -183,6 +189,7 @@ class RuntimeSettingsRequest(BaseModel):
     data_quality_max_stale_minutes_intraday: int | None = None
     operate_auto_run_enabled: bool | None = None
     operate_auto_run_time_ist: str | None = None
+    operate_auto_run_include_data_updates: bool | None = None
     operate_max_stale_minutes_1d: int | None = None
     operate_max_stale_minutes_4h_ish: int | None = None
     operate_max_gap_bars: int | None = None
@@ -192,3 +199,8 @@ class RuntimeSettingsRequest(BaseModel):
     operate_cost_spike_risk_scale: float | None = None
     operate_scan_truncated_warn_days: int | None = None
     operate_scan_truncated_reduce_to: int | None = None
+    data_updates_inbox_enabled: bool | None = None
+    data_updates_max_files_per_run: int | None = None
+    coverage_missing_latest_warn_pct: float | None = None
+    coverage_missing_latest_fail_pct: float | None = None
+    coverage_inactive_after_missing_days: int | None = None

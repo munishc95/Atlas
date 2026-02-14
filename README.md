@@ -324,6 +324,48 @@ python -m app.tools.refresh_calendar --year 2026 --segment EQUITIES --from-file 
 
 If NSE fetch fails, Atlas keeps the existing local file intact.
 
+## Automated Data Updates + Universe Drift Control (v2.3)
+
+Atlas now supports local-first automated data refresh from a drop-folder inbox:
+
+- Inbox convention:
+  - `data/inbox/<bundle>/<timeframe>/*.csv|*.parquet`
+  - example: `data/inbox/NIFTY500/1d/2026-02-14_bhavcopy.csv`
+- Incremental + idempotent ingestion:
+  - file hash dedupe (`same file twice -> skipped`)
+  - per-file validation and per-run summary records
+  - append/merge into existing Parquet without duplicate bars
+- Persisted update records:
+  - `DataUpdateRun`
+  - `DataUpdateFile`
+
+Scheduler auto-run order is now:
+
+1. data updates (if enabled)
+2. data quality
+3. paper run-step
+4. daily report
+
+New runtime settings:
+
+- `operate_auto_run_include_data_updates` (default `true`)
+- `data_updates_inbox_enabled` (default `true`)
+- `data_updates_max_files_per_run` (default `50`)
+- `coverage_missing_latest_warn_pct`
+- `coverage_missing_latest_fail_pct`
+- `coverage_inactive_after_missing_days`
+
+Universe drift controls:
+
+- Coverage uses the NSE trading calendar to determine expected latest trading day.
+- Missing latest bars trigger WARN/FAIL by configured thresholds.
+- Symbols missing bars for configured trading-day window are marked inactive for live selection.
+
+Frontend additions:
+
+- `Universe & Data` page includes `Data Updates` controls and a coverage details drawer.
+- `Ops` page shows latest data update status and quick action to run updates.
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:
@@ -373,6 +415,10 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/jobs`
 - `GET /api/strategies`
 - `GET /api/universes`
+- `POST /api/data/updates/run`
+- `GET /api/data/updates/latest?bundle_id=&timeframe=`
+- `GET /api/data/updates/history?bundle_id=&timeframe=&days=`
+- `GET /api/data/coverage?bundle_id=&timeframe=&top_n=`
 - `GET /api/paper/state`
 - `GET /api/settings`
 - `PUT /api/settings`

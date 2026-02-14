@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.services.backtests import execute_backtest
 from app.services.data_store import DataStore
+from app.services.data_updates import run_data_updates
 from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
 from app.services.importer import import_ohlcv_bytes
@@ -278,6 +279,88 @@ def run_data_quality_job(
                 progress=100,
                 result={"error": {"code": "data_quality_failed", "message": str(exc)}},
             )
+
+
+def run_data_updates_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Data updates run started")
+            result = _execute_with_retry(
+                fn=lambda: _data_updates_result(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    payload=payload,
+                    job_id=job_id,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="data_updates",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Data updates run finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Data updates run failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="data_updates", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "data_updates_failed", "message": str(exc)}},
+            )
+
+
+def _data_updates_result(
+    *,
+    session: Session,
+    settings,
+    store: DataStore,
+    payload: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    bundle_id = int(payload.get("bundle_id") or 0)
+    if bundle_id <= 0:
+        raise ValueError("bundle_id is required for data updates run")
+    timeframe = str(payload.get("timeframe") or "1d")
+    max_files_per_run = payload.get("max_files_per_run")
+    state = session.get(PaperState, 1)
+    overrides = dict(state.settings_json or {}) if state is not None else {}
+    row = run_data_updates(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        overrides=overrides,
+        max_files_per_run=(int(max_files_per_run) if max_files_per_run is not None else None),
+        correlation_id=job_id,
+    )
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "bundle_id": row.bundle_id,
+        "timeframe": row.timeframe,
+        "status": row.status,
+        "inbox_path": row.inbox_path,
+        "scanned_files": row.scanned_files,
+        "processed_files": row.processed_files,
+        "skipped_files": row.skipped_files,
+        "rows_ingested": row.rows_ingested,
+        "symbols_affected_json": row.symbols_affected_json,
+        "warnings_json": row.warnings_json,
+        "errors_json": row.errors_json,
+        "created_at": row.created_at.isoformat(),
+        "ended_at": row.ended_at.isoformat() if row.ended_at is not None else None,
+    }
 
 
 def _data_quality_result(

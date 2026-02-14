@@ -86,6 +86,12 @@ export default function SettingsPage() {
         data_quality_max_stale_minutes_intraday: Number(form.data_quality_max_stale_minutes_intraday),
         operate_auto_run_enabled: form.operate_auto_run_enabled === "true",
         operate_auto_run_time_ist: form.operate_auto_run_time_ist,
+        operate_auto_run_include_data_updates: form.operate_auto_run_include_data_updates === "true",
+        data_updates_inbox_enabled: form.data_updates_inbox_enabled === "true",
+        data_updates_max_files_per_run: Number(form.data_updates_max_files_per_run),
+        coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
+        coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
+        coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -157,6 +163,18 @@ export default function SettingsPage() {
       { key: "data_quality_max_stale_minutes_intraday", label: "Stale limit intraday (minutes)" },
       { key: "operate_auto_run_enabled", label: "Auto-run scheduler enabled (true/false)" },
       { key: "operate_auto_run_time_ist", label: "Auto-run time IST (HH:mm)" },
+      {
+        key: "operate_auto_run_include_data_updates",
+        label: "Auto-run includes data updates (true/false)",
+      },
+      { key: "data_updates_inbox_enabled", label: "Data inbox updates enabled (true/false)" },
+      { key: "data_updates_max_files_per_run", label: "Data updates max files per run" },
+      { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
+      { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },
+      {
+        key: "coverage_inactive_after_missing_days",
+        label: "Mark symbol inactive after missing trading days",
+      },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],

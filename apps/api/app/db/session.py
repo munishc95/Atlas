@@ -218,6 +218,36 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataupdaterun_bundle_timeframe_created "
+                "ON dataupdaterun (bundle_id, timeframe, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataupdaterun_status_created "
+                "ON dataupdaterun (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataupdatefile_run_id "
+                "ON dataupdatefile (run_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataupdatefile_bundle_timeframe_hash "
+                "ON dataupdatefile (bundle_id, timeframe, file_hash)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataupdatefile_status_created "
+                "ON dataupdatefile (status, created_at)"
+            )
+        )
+        conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)")
         )
         conn.execute(

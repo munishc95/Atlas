@@ -256,7 +256,16 @@ class DataStore:
         return session.get(DatasetBundle, bundle_id)
 
     def data_status(self, session: Session) -> list[dict[str, object]]:
-        rows = session.exec(select(Dataset).order_by(Dataset.symbol, Dataset.timeframe)).all()
+        raw_rows = session.exec(select(Dataset).order_by(Dataset.created_at.desc())).all()
+        rows: list[Dataset] = []
+        seen: set[tuple[int | None, str, str]] = set()
+        for row in raw_rows:
+            key = (row.bundle_id, row.symbol, row.timeframe)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+        rows.sort(key=lambda item: (str(item.symbol), str(item.timeframe), str(item.provider)))
         bundle_ids = {row.bundle_id for row in rows if row.bundle_id is not None}
         bundle_lookup: dict[int, str] = {}
         if bundle_ids:

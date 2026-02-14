@@ -72,6 +72,26 @@ export default function OpsPage() {
       toast.error(error.message || "Could not queue data quality job");
     },
   });
+  const runUpdatesMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeBundleId) {
+        throw new Error("Active bundle is required before running data updates.");
+      }
+      return (
+        await atlasApi.runDataUpdates({
+          bundle_id: activeBundleId,
+          timeframe: activeTimeframe,
+        })
+      ).data;
+    },
+    onSuccess: (payload) => {
+      setJobId(payload.job_id);
+      toast.success("Data update job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue data update job");
+    },
+  });
 
   const dailyReportMutation = useMutation({
     mutationFn: async () =>
@@ -130,6 +150,8 @@ export default function OpsPage() {
       if (activeBundleId) {
         queryClient.invalidateQueries({ queryKey: qk.dataQualityLatest(activeBundleId, activeTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
+        queryClient.invalidateQueries({ queryKey: ["dataUpdatesLatest"] });
+        queryClient.invalidateQueries({ queryKey: ["dataCoverage"] });
       }
       toast.success("Ops action complete");
       return;
@@ -147,10 +169,15 @@ export default function OpsPage() {
 
   const mode = String(healthQuery.data?.mode ?? statusQuery.data?.mode ?? "NORMAL");
   const latestQuality = healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
+  const latestUpdate = healthQuery.data?.latest_data_update ?? statusQuery.data?.latest_data_update ?? null;
   const eventCounts = healthQuery.data?.recent_event_counts_24h ?? {};
   const autoRunEnabled = Boolean(healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled);
   const autoRunTimeIst = String(
     healthQuery.data?.auto_run_time_ist ?? statusQuery.data?.auto_run_time_ist ?? "15:35",
+  );
+  const autoRunIncludesUpdates = Boolean(
+    healthQuery.data?.auto_run_include_data_updates ??
+      statusQuery.data?.auto_run_include_data_updates,
   );
   const nextScheduledRun = String(
     healthQuery.data?.next_scheduled_run_ist ?? statusQuery.data?.next_scheduled_run_ist ?? "-",
@@ -197,6 +224,7 @@ export default function OpsPage() {
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Auto-run: {autoRunEnabled ? "Enabled" : "Disabled"} ({autoRunTimeIst} IST)
+            {autoRunEnabled ? ` - updates ${autoRunIncludesUpdates ? "on" : "off"}` : ""}
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
             Next scheduled run: {nextScheduledRun}
@@ -252,6 +280,21 @@ export default function OpsPage() {
               <p>
                 <span className="text-muted">Last bar:</span> {latestQuality.last_bar_ts ?? "-"}
               </p>
+              <p>
+                <span className="text-muted">Last update run:</span>{" "}
+                {latestUpdate ? (
+                  <span className={`badge ${badgeTone(String(latestUpdate.status))}`}>
+                    {latestUpdate.status}
+                  </span>
+                ) : (
+                  "-"
+                )}
+              </p>
+              {latestUpdate ? (
+                <p>
+                  <span className="text-muted">Rows ingested:</span> {latestUpdate.rows_ingested}
+                </p>
+              ) : null}
             </div>
           )}
         </article>
@@ -260,6 +303,14 @@ export default function OpsPage() {
           <h3 className="text-base font-semibold">Quick actions</h3>
           <p className="mt-1 text-xs text-muted">Run quality checks, generate reports, and replay policy deterministically.</p>
           <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runUpdatesMutation.mutate()}
+              disabled={runUpdatesMutation.isPending || !activeBundleId}
+              className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+            >
+              {runUpdatesMutation.isPending ? "Queuing..." : "Run Data Updates"}
+            </button>
             <button
               type="button"
               onClick={() => runQualityMutation.mutate()}

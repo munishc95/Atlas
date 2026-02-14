@@ -11,6 +11,9 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.db.models import DataQualityReport
 from app.services.data_store import DataStore
+from app.services.data_updates import STATUS_FAIL as COVERAGE_FAIL
+from app.services.data_updates import STATUS_WARN as COVERAGE_WARN
+from app.services.data_updates import compute_data_coverage
 from app.services.operate_events import emit_operate_event
 from app.services.trading_calendar import (
     get_session as calendar_get_session,
@@ -416,10 +419,76 @@ def run_data_quality_report(
                 )
             )
 
+    coverage_summary = compute_data_coverage(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=tf,
+        overrides=state,
+        reference_ts=now,
+        top_n=25,
+    )
+    coverage_pct = float(coverage_summary.get("coverage_pct", 0.0))
+    missing_pct = float(coverage_summary.get("missing_pct", 0.0))
+    coverage_status = str(coverage_summary.get("status", STATUS_OK)).upper()
+    missing_symbols = [str(item) for item in coverage_summary.get("missing_symbols", [])]
+    inactive_symbols = [str(item) for item in coverage_summary.get("inactive_symbols", [])]
+    if coverage_status == COVERAGE_FAIL:
+        issues.append(
+            _issue(
+                severity=STATUS_FAIL,
+                code="coverage_below_fail_threshold",
+                message=(
+                    f"{missing_pct:.2f}% symbols missing latest trading bar, exceeding fail threshold."
+                ),
+                details={
+                    "coverage_pct": coverage_pct,
+                    "missing_pct": missing_pct,
+                    "missing_symbols_count": len(missing_symbols),
+                    "missing_symbols_sample": missing_symbols[:20],
+                    "expected_latest_trading_day": coverage_summary.get("expected_latest_trading_day"),
+                },
+            )
+        )
+    elif coverage_status == COVERAGE_WARN:
+        issues.append(
+            _issue(
+                severity=STATUS_WARN,
+                code="coverage_below_warn_threshold",
+                message=(
+                    f"{missing_pct:.2f}% symbols missing latest trading bar, exceeding warning threshold."
+                ),
+                details={
+                    "coverage_pct": coverage_pct,
+                    "missing_pct": missing_pct,
+                    "missing_symbols_count": len(missing_symbols),
+                    "missing_symbols_sample": missing_symbols[:20],
+                    "expected_latest_trading_day": coverage_summary.get("expected_latest_trading_day"),
+                },
+            )
+        )
+    if inactive_symbols:
+        issues.append(
+            _issue(
+                severity=STATUS_WARN,
+                code="inactive_symbols_detected",
+                message=f"{len(inactive_symbols)} symbols marked inactive for selection due to stale data.",
+                details={
+                    "inactive_symbols_count": len(inactive_symbols),
+                    "inactive_symbols_sample": inactive_symbols[:20],
+                    "inactive_after_missing_days": coverage_summary.get("thresholds", {}).get(
+                        "inactive_after_missing_days"
+                    ),
+                },
+            )
+        )
+
     has_fail = any(str(item.get("severity", "")).upper() == STATUS_FAIL for item in issues)
     has_warn = any(str(item.get("severity", "")).upper() == STATUS_WARN for item in issues)
     status = STATUS_FAIL if has_fail else (STATUS_WARN if has_warn else STATUS_OK)
-    coverage_pct = float(np.mean(coverage_values)) if coverage_values else 0.0
+    if coverage_values and coverage_pct <= 0.0:
+        coverage_pct = float(np.mean(coverage_values))
 
     report = DataQualityReport(
         bundle_id=bundle_id,

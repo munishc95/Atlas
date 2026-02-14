@@ -218,6 +218,50 @@ class DataQualityReport(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class DataUpdateRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_dataupdaterun_bundle_timeframe_created", "bundle_id", "timeframe", "created_at"),
+        Index("ix_dataupdaterun_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    inbox_path: str = Field(default="", max_length=512)
+    scanned_files: int = 0
+    processed_files: int = 0
+    skipped_files: int = 0
+    rows_ingested: int = 0
+    symbols_affected_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    ended_at: datetime | None = Field(default=None)
+
+
+class DataUpdateFile(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_dataupdatefile_bundle_timeframe_hash", "bundle_id", "timeframe", "file_hash"),
+        Index("ix_dataupdatefile_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(foreign_key="dataupdaterun.id", index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    file_path: str = Field(default="", max_length=1024)
+    file_name: str = Field(default="", max_length=256)
+    file_hash: str = Field(default="", max_length=128)
+    status: str = Field(default="PENDING", index=True, max_length=16)
+    reason: str | None = Field(default=None, max_length=128)
+    rows_ingested: int = 0
+    symbols_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class OperateEvent(SQLModel, table=True):
     __table_args__ = (
         Index("ix_operateevent_ts", "ts"),

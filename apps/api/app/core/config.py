@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     parquet_root: str = "data/parquet"
     feature_cache_root: str = "data/features"
     calendar_data_root: str = "data/calendars"
+    data_inbox_root: str = "data/inbox"
     sample_data_root: str = "data/sample"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "atlas"
@@ -63,6 +64,7 @@ class Settings(BaseSettings):
     data_quality_max_stale_minutes_intraday: int = 60
     operate_auto_run_enabled: bool = False
     operate_auto_run_time_ist: str = "15:35"
+    operate_auto_run_include_data_updates: bool = True
     operate_max_stale_minutes_1d: int = 2880
     operate_max_stale_minutes_4h_ish: int = 720
     operate_max_gap_bars: int = 3
@@ -72,6 +74,11 @@ class Settings(BaseSettings):
     operate_cost_spike_risk_scale: float = 0.5
     operate_scan_truncated_warn_days: int = 3
     operate_scan_truncated_reduce_to: int = 80
+    data_updates_inbox_enabled: bool = True
+    data_updates_max_files_per_run: int = 50
+    coverage_missing_latest_warn_pct: float = 10.0
+    coverage_missing_latest_fail_pct: float = 25.0
+    coverage_inactive_after_missing_days: int = 3
     max_position_value_pct_adv: float = 0.01
     diversification_corr_threshold: float = 0.75
     allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])
@@ -103,6 +110,7 @@ class Settings(BaseSettings):
         Path(self.parquet_root).mkdir(parents=True, exist_ok=True)
         Path(self.feature_cache_root).mkdir(parents=True, exist_ok=True)
         Path(self.calendar_data_root).mkdir(parents=True, exist_ok=True)
+        Path(self.data_inbox_root).mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

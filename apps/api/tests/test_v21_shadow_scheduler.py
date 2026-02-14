@@ -184,7 +184,7 @@ def test_shadow_only_safe_mode_keeps_live_state_and_persists_shadow_state() -> N
 def test_shadow_daily_report_includes_shadow_note() -> None:
     init_db()
     settings = get_settings()
-    report_day = date.today()
+    report_day = date(2030, 1, 15)
 
     with Session(engine) as session:
         session.add(
@@ -339,8 +339,15 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
             now_ist=now_ist,
         )
         assert triggered is True
-        assert len(queue.calls) == 3
+        assert len(queue.calls) == 4
+        assert [call[0] for call in queue.calls] == [
+            "app.jobs.tasks.run_data_updates_job",
+            "app.jobs.tasks.run_data_quality_job",
+            "app.jobs.tasks.run_paper_step_job",
+            "app.jobs.tasks.run_daily_report_job",
+        ]
         assert {call[0] for call in queue.calls} == {
+            "app.jobs.tasks.run_data_updates_job",
             "app.jobs.tasks.run_data_quality_job",
             "app.jobs.tasks.run_paper_step_job",
             "app.jobs.tasks.run_daily_report_job",
@@ -357,7 +364,7 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
             now_ist=now_ist + timedelta(minutes=10),
         )
         assert second is False
-        assert len(queue.calls) == 3
+        assert len(queue.calls) == 4
 
     monday_next = compute_next_scheduled_run_ist(
         auto_run_enabled=True,
