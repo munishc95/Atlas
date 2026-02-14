@@ -186,6 +186,17 @@ class PaperRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class PortfolioRiskSnapshot(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utc_now, index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    realized_vol: float = 0.0
+    target_vol: float = 0.0
+    scale: float = 1.0
+    notes_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
 class ShadowPaperState(SQLModel, table=True):
     __table_args__ = (
         Index("ix_shadowpaperstate_bundle_policy", "bundle_id", "policy_id", unique=True),

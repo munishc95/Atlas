@@ -10,7 +10,7 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
-import type { ApiOperateEvent } from "@/src/lib/api/types";
+import type { ApiOperateEvent, ApiOperateRunSummary } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 function badgeTone(status: string): string {
@@ -28,6 +28,7 @@ export default function OpsPage() {
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ApiOperateEvent | null>(null);
+  const [lastOperateSummary, setLastOperateSummary] = useState<ApiOperateRunSummary | null>(null);
 
   const statusQuery = useQuery({
     queryKey: qk.operateStatus,
@@ -70,6 +71,25 @@ export default function OpsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not queue data quality job");
+    },
+  });
+  const operateRunMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.operateRun({
+          bundle_id: activeBundleId ?? undefined,
+          timeframe: activeTimeframe,
+          policy_id: activePolicyId ?? undefined,
+          date: new Date().toISOString().slice(0, 10),
+        })
+      ).data,
+    onSuccess: (payload) => {
+      setJobId(payload.job_id);
+      setLastOperateSummary(null);
+      toast.success("Operate run queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue operate run");
     },
   });
   const runUpdatesMutation = useMutation({
@@ -139,11 +159,16 @@ export default function OpsPage() {
   });
 
   const stream = useJobStream(jobId);
+  const streamSummary = stream.result?.summary as ApiOperateRunSummary | undefined;
   useEffect(() => {
     if (!stream.isTerminal) {
       return;
     }
     if (stream.status === "SUCCEEDED" || stream.status === "DONE") {
+      const maybeSummary = streamSummary;
+      if (maybeSummary && typeof maybeSummary === "object") {
+        setLastOperateSummary(maybeSummary);
+      }
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
@@ -164,6 +189,7 @@ export default function OpsPage() {
     activeTimeframe,
     queryClient,
     stream.isTerminal,
+    streamSummary,
     stream.status,
   ]);
 
@@ -305,6 +331,16 @@ export default function OpsPage() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
+              onClick={() => operateRunMutation.mutate()}
+              disabled={operateRunMutation.isPending}
+              className="focus-ring rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white"
+            >
+              {operateRunMutation.isPending
+                ? "Queuing..."
+                : "Run Today (Updates -> Quality -> Step -> Report)"}
+            </button>
+            <button
+              type="button"
               onClick={() => runUpdatesMutation.mutate()}
               disabled={runUpdatesMutation.isPending || !activeBundleId}
               className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
@@ -342,6 +378,50 @@ export default function OpsPage() {
             <p className="rounded-lg border border-border px-2 py-2">ERROR: {eventCounts.ERROR ?? 0}</p>
           </div>
         </article>
+      </section>
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Latest operate run</h3>
+        {!lastOperateSummary ? (
+          <EmptyState title="No operate run summary yet" action="Run the one-button operate flow above." />
+        ) : (
+          <div className="mt-3 space-y-2 text-sm">
+            <p>
+              <span className="text-muted">Mode:</span>{" "}
+              <span className={`badge ${badgeTone(String(lastOperateSummary.mode ?? "NORMAL"))}`}>
+                {String(lastOperateSummary.mode ?? "NORMAL")}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Data updates:</span> {String(lastOperateSummary.update_status ?? "-")}
+            </p>
+            <p>
+              <span className="text-muted">Data quality:</span> {String(lastOperateSummary.quality_status ?? "-")}
+            </p>
+            <p>
+              <span className="text-muted">Paper:</span>{" "}
+              {String((lastOperateSummary.paper?.status as string | undefined) ?? "-")} / selected{" "}
+              {Number(lastOperateSummary.paper?.selected_signals_count ?? 0)}
+            </p>
+            <p>
+              <span className="text-muted">Report:</span>{" "}
+              {lastOperateSummary.daily_report?.id ? (
+                <>
+                  #{lastOperateSummary.daily_report.id}{" "}
+                  <a
+                    href={atlasApi.dailyReportExportPdfUrl(Number(lastOperateSummary.daily_report.id))}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-accent underline underline-offset-2"
+                  >
+                    Download PDF
+                  </a>
+                </>
+              ) : (
+                "-"
+              )}
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="card p-4">

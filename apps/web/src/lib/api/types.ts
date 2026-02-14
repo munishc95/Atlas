@@ -411,6 +411,26 @@ export type ApiOperateHealth = {
   recent_event_counts_24h: Record<string, number>;
 };
 
+export type ApiOperateRunSummary = {
+  bundle_id?: number | null;
+  timeframe?: string;
+  policy_id?: number | null;
+  regime?: string;
+  mode?: "NORMAL" | "SAFE" | "SHADOW";
+  quality_status?: string;
+  update_status?: string;
+  step_order?: string[];
+  data_updates?: Record<string, unknown>;
+  data_quality?: Record<string, unknown>;
+  paper?: Record<string, unknown>;
+  daily_report?: {
+    status?: string;
+    id?: number;
+    date?: string;
+  };
+  steps?: Array<Record<string, unknown>>;
+};
+
 export type ApiUniverseBundle = {
   id: number;
   name: string;

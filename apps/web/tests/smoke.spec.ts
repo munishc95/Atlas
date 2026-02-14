@@ -391,9 +391,28 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   await expect(page.getByRole("heading", { name: "Recent operate events" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByRole("button", { name: "Run Data Quality" })).toBeVisible({
+  const runTodayButton = page.getByRole("button", {
+    name: "Run Today (Updates -> Quality -> Step -> Report)",
+  });
+  await expect(runTodayButton).toBeVisible({
     timeout: 20_000,
   });
+  const operateRunRes = page.waitForResponse(
+    (res) => res.url().includes("/api/operate/run") && res.request().method() === "POST",
+  );
+  await runTodayButton.click();
+  const operateRunBody = await (await operateRunRes).json();
+  const operateRunJob = await waitForJob(request, apiBase, operateRunBody.data.job_id, 240_000);
+  const operateResult = (operateRunJob.result_json ?? {}) as Record<string, unknown>;
+  const operateSummary = (operateResult.summary ?? {}) as Record<string, unknown>;
+  const operateReport = (operateSummary.daily_report ?? {}) as Record<string, unknown>;
+  const operateReportId = Number(operateReport.id);
+  expect(Number.isFinite(operateReportId) && operateReportId > 0).toBeTruthy();
+  const operatePdfRes = await request.get(
+    `${apiBase}/api/reports/daily/${operateReportId}/export.pdf`,
+  );
+  expect(operatePdfRes.ok()).toBeTruthy();
+  expect(operatePdfRes.headers()["content-type"] ?? "").toContain("application/pdf");
 
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible({

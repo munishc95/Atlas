@@ -8,8 +8,9 @@ from typing import Any
 from redis.exceptions import RedisError
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session
+from sqlmodel import select
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.db.session import engine
 from app.services.backtests import execute_backtest
 from app.services.data_store import DataStore
@@ -24,7 +25,7 @@ from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
-from app.db.models import PaperState
+from app.db.models import DatasetBundle, PaperRun, PaperState
 
 
 def _store() -> DataStore:
@@ -430,6 +431,285 @@ def run_paper_step_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "paper_step_failed", "message": str(exc)}},
+            )
+
+
+def _parse_iso_date(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
+def _resolve_operate_context(
+    *,
+    session: Session,
+    payload: dict[str, Any],
+    settings: Settings,
+) -> dict[str, Any]:
+    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    state = session.get(PaperState, 1)
+    state_settings = dict(state.settings_json or {}) if state is not None else {}
+
+    bundle_id: int | None = None
+    raw_bundle = payload.get("bundle_id")
+    if isinstance(raw_bundle, int) and raw_bundle > 0:
+        bundle_id = int(raw_bundle)
+    elif latest_run is not None and latest_run.bundle_id is not None:
+        bundle_id = int(latest_run.bundle_id)
+    else:
+        latest_bundle = session.exec(select(DatasetBundle).order_by(DatasetBundle.created_at.desc())).first()
+        if latest_bundle is not None and latest_bundle.id is not None:
+            bundle_id = int(latest_bundle.id)
+
+    timeframe = str(payload.get("timeframe") or "").strip()
+    if not timeframe and latest_run is not None:
+        summary = latest_run.summary_json if isinstance(latest_run.summary_json, dict) else {}
+        tfs = summary.get("timeframes", [])
+        if isinstance(tfs, list) and tfs:
+            timeframe = str(tfs[0] or "").strip()
+    if not timeframe:
+        timeframe = "1d"
+
+    regime = str(payload.get("regime") or "").strip()
+    if not regime:
+        regime = str(latest_run.regime) if latest_run is not None else "TREND_UP"
+
+    policy_id: int | None = None
+    raw_policy = payload.get("policy_id")
+    if isinstance(raw_policy, int) and raw_policy > 0:
+        policy_id = int(raw_policy)
+    else:
+        try:
+            active = state_settings.get("active_policy_id")
+            if active is not None:
+                policy_id = int(active)
+        except (TypeError, ValueError):
+            policy_id = None
+
+    include_updates_raw = payload.get("include_data_updates")
+    if isinstance(include_updates_raw, bool):
+        include_updates = include_updates_raw
+    else:
+        include_updates = bool(
+            state_settings.get(
+                "operate_auto_run_include_data_updates",
+                settings.operate_auto_run_include_data_updates,
+            )
+        )
+
+    asof_dt = _parse_iso_date(payload.get("asof")) or datetime.now(timezone.utc)
+    return {
+        "bundle_id": bundle_id,
+        "timeframe": timeframe,
+        "regime": regime,
+        "policy_id": policy_id,
+        "state_settings": state_settings,
+        "include_data_updates": include_updates,
+        "asof_dt": asof_dt,
+    }
+
+
+def _operate_run_result(
+    *,
+    session: Session,
+    settings: Settings,
+    store: DataStore,
+    payload: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    context = _resolve_operate_context(session=session, payload=payload, settings=settings)
+    bundle_id = context["bundle_id"]
+    timeframe = context["timeframe"]
+    regime = context["regime"]
+    policy_id = context["policy_id"]
+    include_data_updates = context["include_data_updates"]
+    asof_dt: datetime = context["asof_dt"]
+    state_settings: dict[str, Any] = context["state_settings"]
+
+    summary: dict[str, Any] = {
+        "bundle_id": bundle_id,
+        "timeframe": timeframe,
+        "policy_id": policy_id,
+        "regime": regime,
+        "step_order": ["data_updates", "data_quality", "paper_step", "daily_report"],
+        "steps": [],
+    }
+
+    update_job(session, job_id, progress=15)
+    if include_data_updates and isinstance(bundle_id, int) and bundle_id > 0:
+        append_job_log(session, job_id, "Operate run: data updates started")
+        update_row = run_data_updates(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+            overrides=state_settings,
+            max_files_per_run=(
+                int(payload["max_files_per_run"]) if payload.get("max_files_per_run") is not None else None
+            ),
+            correlation_id=job_id,
+        )
+        step_payload = {
+            "status": str(update_row.status),
+            "run_id": int(update_row.id) if update_row.id is not None else None,
+            "rows_ingested": int(update_row.rows_ingested),
+            "processed_files": int(update_row.processed_files),
+            "skipped_files": int(update_row.skipped_files),
+        }
+        summary["data_updates"] = step_payload
+    else:
+        step_payload = {"status": "SKIPPED", "reason": "disabled_or_no_bundle"}
+        summary["data_updates"] = step_payload
+    summary["steps"].append({"name": "data_updates", **step_payload})
+
+    update_job(session, job_id, progress=40)
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        append_job_log(session, job_id, "Operate run: data quality started")
+        quality = run_data_quality_report(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+            overrides=state_settings,
+            reference_ts=asof_dt,
+            correlation_id=job_id,
+        )
+        quality_payload = {
+            "status": str(quality.status),
+            "report_id": int(quality.id) if quality.id is not None else None,
+            "coverage_pct": float(quality.coverage_pct),
+            "issues_count": len(quality.issues_json or []),
+        }
+    else:
+        quality_payload = {"status": "SKIPPED", "reason": "no_bundle"}
+    summary["data_quality"] = quality_payload
+    summary["steps"].append({"name": "data_quality", **quality_payload})
+
+    update_job(session, job_id, progress=65)
+    append_job_log(session, job_id, "Operate run: paper step started")
+    paper_payload = {
+        "regime": regime,
+        "bundle_id": bundle_id,
+        "auto_generate_signals": True,
+        "signals": [],
+        "mark_prices": {},
+        "timeframes": [timeframe],
+        "asof": asof_dt.isoformat(),
+    }
+    if isinstance(policy_id, int) and policy_id > 0:
+        paper_payload["policy_id"] = int(policy_id)
+    paper_result = run_paper_step(
+        session=session,
+        settings=settings,
+        payload=paper_payload,
+        store=store,
+    )
+    paper_summary = {
+        "status": str(paper_result.get("status", "ok")),
+        "paper_run_id": paper_result.get("paper_run_id"),
+        "mode": (
+            "SHADOW"
+            if str(paper_result.get("execution_mode", "")).upper() == "SHADOW"
+            else (
+                "SAFE"
+                if bool((paper_result.get("safe_mode") or {}).get("active"))
+                else "NORMAL"
+            )
+        ),
+        "selected_signals_count": int(paper_result.get("selected_signals_count", 0)),
+        "generated_signals_count": int(paper_result.get("generated_signals_count", 0)),
+        "safe_mode": paper_result.get("safe_mode", {}),
+        "scan_truncated": bool(paper_result.get("scan_truncated", False)),
+        "risk_overlay": paper_result.get("risk_overlay", {}),
+    }
+    summary["paper"] = paper_summary
+    summary["steps"].append({"name": "paper_step", **paper_summary})
+
+    update_job(session, job_id, progress=85)
+    append_job_log(session, job_id, "Operate run: daily report generation started")
+    report_date = payload.get("date")
+    if isinstance(report_date, str) and report_date.strip():
+        try:
+            report_day = datetime.fromisoformat(report_date).date()
+        except ValueError:
+            report_day = asof_dt.date()
+    else:
+        report_day = asof_dt.date()
+    report_row = generate_daily_report(
+        session=session,
+        settings=settings,
+        report_date=report_day,
+        bundle_id=bundle_id if isinstance(bundle_id, int) and bundle_id > 0 else None,
+        policy_id=(int(policy_id) if isinstance(policy_id, int) and policy_id > 0 else None),
+        overwrite=True,
+    )
+    report_payload = {
+        "status": "SUCCEEDED",
+        "id": int(report_row.id) if report_row.id is not None else None,
+        "date": report_row.date.isoformat(),
+    }
+    summary["daily_report"] = report_payload
+    summary["steps"].append({"name": "daily_report", **report_payload})
+
+    summary["mode"] = paper_summary["mode"]
+    summary["quality_status"] = quality_payload.get("status")
+    summary["update_status"] = step_payload.get("status")
+    return {
+        "status": "ok",
+        "summary": summary,
+    }
+
+
+def run_operate_run_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=5)
+            append_job_log(session, job_id, "Operate run started")
+            result = _execute_with_retry(
+                fn=lambda: _operate_run_result(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    payload=payload,
+                    job_id=job_id,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="operate_run",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Operate run finished")
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Operate run failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="operate_run", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "operate_run_failed", "message": str(exc)}},
             )
 
 

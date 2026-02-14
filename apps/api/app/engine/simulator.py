@@ -45,6 +45,16 @@ class SimulationConfig:
     cost_model_enabled: bool = False
     cost_mode: str = "delivery"
     cost_params: dict[str, float] = field(default_factory=dict)
+    risk_overlay_enabled: bool = False
+    risk_overlay_scale: float = 1.0
+    risk_overlay_realized_vol: float = 0.0
+    risk_overlay_target_vol: float = 0.0
+    risk_overlay_max_gross_exposure_pct: float = 1.0
+    risk_overlay_max_single_name_exposure_pct: float = 0.12
+    risk_overlay_max_sector_exposure_pct: float = 0.30
+    risk_overlay_corr_clamp_enabled: bool = False
+    risk_overlay_corr_threshold: float = 0.65
+    risk_overlay_corr_reduce_factor: float = 0.5
     seed: int = 7
 
 
@@ -190,6 +200,18 @@ def _config_hash(config: SimulationConfig) -> str:
         "cost_model_enabled": bool(config.cost_model_enabled),
         "cost_mode": str(config.cost_mode),
         "cost_params": dict(config.cost_params),
+        "risk_overlay_enabled": bool(config.risk_overlay_enabled),
+        "risk_overlay_scale": float(config.risk_overlay_scale),
+        "risk_overlay_realized_vol": float(config.risk_overlay_realized_vol),
+        "risk_overlay_target_vol": float(config.risk_overlay_target_vol),
+        "risk_overlay_max_gross_exposure_pct": float(config.risk_overlay_max_gross_exposure_pct),
+        "risk_overlay_max_single_name_exposure_pct": float(
+            config.risk_overlay_max_single_name_exposure_pct
+        ),
+        "risk_overlay_max_sector_exposure_pct": float(config.risk_overlay_max_sector_exposure_pct),
+        "risk_overlay_corr_clamp_enabled": bool(config.risk_overlay_corr_clamp_enabled),
+        "risk_overlay_corr_threshold": float(config.risk_overlay_corr_threshold),
+        "risk_overlay_corr_reduce_factor": float(config.risk_overlay_corr_reduce_factor),
         "seed": int(config.seed),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
@@ -796,6 +818,41 @@ def _step_data_digest(
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
+def _signal_underlying(signal: dict[str, Any], symbol: str) -> str:
+    token = str(signal.get("underlying_symbol", symbol)).strip().upper()
+    return token or symbol
+
+
+def _signal_sector(signal: dict[str, Any]) -> str:
+    raw = signal.get("sector", "UNKNOWN")
+    token = str(raw).strip().upper()
+    return token or "UNKNOWN"
+
+
+def _position_underlying(position: SimulationPosition) -> str:
+    if isinstance(position.metadata_json, dict):
+        token = str(position.metadata_json.get("underlying_symbol", position.symbol)).strip().upper()
+        if token:
+            return token
+    return position.symbol
+
+
+def _position_sector(position: SimulationPosition) -> str:
+    if isinstance(position.metadata_json, dict):
+        token = str(position.metadata_json.get("sector", "UNKNOWN")).strip().upper()
+        if token:
+            return token
+    return "UNKNOWN"
+
+
+def _position_exposure_notional(
+    position: SimulationPosition,
+    mark_prices: dict[str, float],
+) -> float:
+    mark = float(mark_prices.get(position.symbol, position.entry_price))
+    return abs(mark * float(position.qty))
+
+
 def simulate_portfolio_step(
     *,
     signals: list[dict[str, Any]],
@@ -838,10 +895,39 @@ def simulate_portfolio_step(
     executed_signals: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
+    overlay_enabled = bool(config.risk_overlay_enabled)
+    overlay_scale = (
+        max(0.0, float(config.risk_overlay_scale)) if overlay_enabled else 1.0
+    )
+    gross_cap_notional = max(0.0, float(config.risk_overlay_max_gross_exposure_pct)) * max(
+        0.0, float(equity_reference)
+    )
+    single_name_cap_notional = max(
+        0.0, float(config.risk_overlay_max_single_name_exposure_pct)
+    ) * max(0.0, float(equity_reference))
+    sector_cap_notional = max(0.0, float(config.risk_overlay_max_sector_exposure_pct)) * max(
+        0.0, float(equity_reference)
+    )
+    gross_exposure_notional = 0.0
+    single_name_exposure_notional: dict[str, float] = {}
+    sector_exposure_notional: dict[str, float] = {}
+    for position in positions:
+        position_notional = _position_exposure_notional(position, mark_prices)
+        gross_exposure_notional += position_notional
+        underlying = _position_underlying(position)
+        sector = _position_sector(position)
+        single_name_exposure_notional[underlying] = (
+            single_name_exposure_notional.get(underlying, 0.0) + position_notional
+        )
+        sector_exposure_notional[sector] = (
+            sector_exposure_notional.get(sector, 0.0) + position_notional
+        )
 
     for signal in ordered_signals:
         side = str(signal.get("side", "BUY")).upper()
         symbol = str(signal.get("symbol", "")).upper()
+        underlying_symbol = _signal_underlying(signal, symbol)
+        sector = _signal_sector(signal)
         instrument_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
         lot_size = max(1, int(signal.get("lot_size", 1)))
         stop_distance = float(signal.get("stop_distance", 0.0))
@@ -857,7 +943,10 @@ def simulate_portfolio_step(
             skipped.append({**signal, "reason": "max_positions_reached"})
             continue
 
-        risk_amount = max(0.0, float(equity_reference) * float(config.risk_per_trade))
+        risk_amount = max(
+            0.0,
+            float(equity_reference) * float(config.risk_per_trade) * overlay_scale,
+        )
         qty_risk = int(np.floor(risk_amount / stop_distance))
         if _is_futures(instrument_kind):
             qty_lots = qty_risk // lot_size
@@ -884,6 +973,43 @@ def simulate_portfolio_step(
                 skipped.append({**signal, "reason": "adv_cap_zero_qty"})
                 continue
 
+        if overlay_enabled and config.risk_overlay_corr_clamp_enabled and positions:
+            correlations = signal.get("correlations")
+            max_corr = 0.0
+            if isinstance(correlations, dict):
+                for position in positions:
+                    raw = correlations.get(position.symbol)
+                    if raw is None:
+                        raw = correlations.get(_position_underlying(position))
+                    if raw is None:
+                        continue
+                    try:
+                        max_corr = max(max_corr, abs(float(raw)))
+                    except (TypeError, ValueError):
+                        continue
+            if max_corr >= float(config.risk_overlay_corr_threshold):
+                reduced_qty = int(np.floor(qty * max(0.0, float(config.risk_overlay_corr_reduce_factor))))
+                if _is_futures(instrument_kind):
+                    qty_lots = reduced_qty // lot_size
+                    qty = qty_lots * lot_size
+                else:
+                    qty = reduced_qty
+                    qty_lots = (
+                        max(1, int(np.floor(qty / max(1, lot_size)))) if qty > 0 else 0
+                    )
+                if qty <= 0 or qty_lots <= 0:
+                    skipped.append(
+                        {
+                            **signal,
+                            "underlying_symbol": underlying_symbol,
+                            "sector": sector,
+                            "reason": "risk_overlay_corr_clamp",
+                            "correlation": max_corr,
+                            "threshold": float(config.risk_overlay_corr_threshold),
+                        }
+                    )
+                    continue
+
         slippage_bps = _step_slippage_bps(vol_scale, config) / 10_000
         fill_price = base_price * (1 + slippage_bps) if side == "BUY" else base_price * (1 - slippage_bps)
         if fill_price <= 0:
@@ -892,9 +1018,6 @@ def simulate_portfolio_step(
 
         side_label = _side_label(side)
         notional = qty * fill_price
-        traded_notional_total += float(notional)
-        entry_slippage_cost = ((fill_price - base_price) * qty) if side == "BUY" else ((base_price - fill_price) * qty)
-        entry_slippage_cost_total += max(0.0, float(entry_slippage_cost))
 
         intraday_cash_short = side == "SELL" and instrument_kind == "EQUITY_CASH" and config.equity_short_intraday_only
         entry_cfg = _step_cost_config(config, intraday=intraday_cash_short)
@@ -921,7 +1044,59 @@ def simulate_portfolio_step(
             )
             continue
 
+        if overlay_enabled:
+            projected_gross = gross_exposure_notional + notional
+            if gross_cap_notional > 0 and projected_gross > gross_cap_notional + 1e-9:
+                skipped.append(
+                    {
+                        **signal,
+                        "underlying_symbol": underlying_symbol,
+                        "sector": sector,
+                        "reason": "risk_overlay_gross_exposure_cap",
+                        "projected_gross_notional": projected_gross,
+                        "cap_notional": gross_cap_notional,
+                    }
+                )
+                continue
+            projected_single = single_name_exposure_notional.get(underlying_symbol, 0.0) + notional
+            if single_name_cap_notional > 0 and projected_single > single_name_cap_notional + 1e-9:
+                skipped.append(
+                    {
+                        **signal,
+                        "underlying_symbol": underlying_symbol,
+                        "sector": sector,
+                        "reason": "risk_overlay_single_name_cap",
+                        "projected_notional": projected_single,
+                        "cap_notional": single_name_cap_notional,
+                    }
+                )
+                continue
+            projected_sector = sector_exposure_notional.get(sector, 0.0) + notional
+            if sector_cap_notional > 0 and projected_sector > sector_cap_notional + 1e-9:
+                skipped.append(
+                    {
+                        **signal,
+                        "underlying_symbol": underlying_symbol,
+                        "sector": sector,
+                        "reason": "risk_overlay_sector_cap",
+                        "projected_notional": projected_sector,
+                        "cap_notional": sector_cap_notional,
+                    }
+                )
+                continue
+
         cash -= required_cash
+        traded_notional_total += float(notional)
+        entry_slippage_cost = ((fill_price - base_price) * qty) if side == "BUY" else ((base_price - fill_price) * qty)
+        entry_slippage_cost_total += max(0.0, float(entry_slippage_cost))
+        if overlay_enabled:
+            gross_exposure_notional += notional
+            single_name_exposure_notional[underlying_symbol] = (
+                single_name_exposure_notional.get(underlying_symbol, 0.0) + notional
+            )
+            sector_exposure_notional[sector] = (
+                sector_exposure_notional.get(sector, 0.0) + notional
+            )
         entry_cost_total += float(entry_cost)
         target_raw = signal.get("target_price")
         target_price = float(target_raw) if isinstance(target_raw, (int, float)) else None
@@ -946,7 +1121,8 @@ def simulate_portfolio_step(
             force_eod=intraday_cash_short,
             metadata_json={
                 "template": str(signal.get("template", "")),
-                "underlying_symbol": str(signal.get("underlying_symbol", symbol)).upper(),
+                "underlying_symbol": underlying_symbol,
+                "sector": sector,
                 "instrument_choice_reason": str(signal.get("instrument_choice_reason", "provided")),
                 "vol_scale": float(vol_scale),
             },
@@ -971,6 +1147,8 @@ def simulate_portfolio_step(
             {
                 **signal,
                 "symbol": symbol,
+                "underlying_symbol": underlying_symbol,
+                "sector": sector,
                 "instrument_kind": instrument_kind,
                 "lot_size": lot_size,
                 "qty_lots": qty_lots,
@@ -1098,6 +1276,22 @@ def simulate_portfolio_step(
             asof=asof,
             config=config,
         ),
+        "risk_overlay": {
+            "enabled": bool(overlay_enabled),
+            "risk_scale": float(overlay_scale),
+            "realized_vol": float(config.risk_overlay_realized_vol),
+            "target_vol": float(config.risk_overlay_target_vol),
+            "caps": {
+                "max_gross_exposure_pct": float(config.risk_overlay_max_gross_exposure_pct),
+                "max_single_name_exposure_pct": float(config.risk_overlay_max_single_name_exposure_pct),
+                "max_sector_exposure_pct": float(config.risk_overlay_max_sector_exposure_pct),
+            },
+            "corr_clamp": {
+                "enabled": bool(config.risk_overlay_corr_clamp_enabled),
+                "threshold": float(config.risk_overlay_corr_threshold),
+                "reduce_factor": float(config.risk_overlay_corr_reduce_factor),
+            },
+        },
     }
 
     return PortfolioStepResult(

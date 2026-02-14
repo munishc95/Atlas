@@ -99,6 +99,17 @@ class Settings(BaseSettings):
     evaluations_min_window_days: int = 20
     evaluations_score_margin: float = 0.15
     evaluations_max_dd_multiplier: float = 1.10
+    risk_overlay_enabled: bool = True
+    risk_overlay_target_vol_annual: float = 0.18
+    risk_overlay_lookback_days: int = 20
+    risk_overlay_min_scale: float = 0.25
+    risk_overlay_max_scale: float = 1.25
+    risk_overlay_max_gross_exposure_pct: float = 1.0
+    risk_overlay_max_single_name_exposure_pct: float = 0.12
+    risk_overlay_max_sector_exposure_pct: float = 0.30
+    risk_overlay_corr_clamp_enabled: bool = False
+    risk_overlay_corr_threshold: float = 0.65
+    risk_overlay_corr_reduce_factor: float = 0.5
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     optuna_storage_url: str | None = None

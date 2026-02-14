@@ -40,6 +40,7 @@ from app.services.data_store import DataStore
 from app.services.data_updates import inactive_symbols_for_selection
 from app.services.operate_events import emit_operate_event
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
+from app.services.portfolio_risk import create_portfolio_risk_snapshot
 from app.services.policy_health import (
     DEGRADED,
     HEALTHY,
@@ -149,6 +150,19 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
             "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
             "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
+            "risk_overlay_enabled": (
+                True if str(settings.operate_mode).strip().lower() == "live" else False
+            ),
+            "risk_overlay_target_vol_annual": settings.risk_overlay_target_vol_annual,
+            "risk_overlay_lookback_days": settings.risk_overlay_lookback_days,
+            "risk_overlay_min_scale": settings.risk_overlay_min_scale,
+            "risk_overlay_max_scale": settings.risk_overlay_max_scale,
+            "risk_overlay_max_gross_exposure_pct": settings.risk_overlay_max_gross_exposure_pct,
+            "risk_overlay_max_single_name_exposure_pct": settings.risk_overlay_max_single_name_exposure_pct,
+            "risk_overlay_max_sector_exposure_pct": settings.risk_overlay_max_sector_exposure_pct,
+            "risk_overlay_corr_clamp_enabled": settings.risk_overlay_corr_clamp_enabled,
+            "risk_overlay_corr_threshold": settings.risk_overlay_corr_threshold,
+            "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
             "paper_mode": "strategy",
             "active_policy_id": None,
         },
@@ -284,6 +298,10 @@ def _result_digest(summary: dict[str, Any], cost_summary: dict[str, Any]) -> str
         "skipped_signals_count": summary.get("skipped_signals_count"),
         "selected_reason_histogram": summary.get("selected_reason_histogram", {}),
         "skipped_reason_histogram": summary.get("skipped_reason_histogram", {}),
+        "risk_scale": summary.get("risk_scale"),
+        "realized_vol": summary.get("realized_vol"),
+        "target_vol": summary.get("target_vol"),
+        "caps_applied": summary.get("caps_applied", {}),
         "equity_after": summary.get("equity_after"),
         "cash_after": summary.get("cash_after"),
         "net_pnl": summary.get("net_pnl"),
@@ -1272,6 +1290,7 @@ def _run_paper_step_with_simulator_engine(
     safe_mode_reason: str | None,
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
+    risk_overlay: dict[str, Any],
     cost_spike_active: bool,
     cost_spike_meta: dict[str, Any],
     scan_guard_active: bool,
@@ -1300,6 +1319,7 @@ def _run_paper_step_with_simulator_engine(
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
         open_positions=positions_before,
         seed=seed,
+        risk_overlay=risk_overlay,
     )
 
     executed_signals = list(sim_execution.executed_signals)
@@ -1449,6 +1469,10 @@ def _run_paper_step_with_simulator_engine(
         ],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
+        "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
+        "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
+        "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
+        "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
         "equity_before": equity_before,
         "equity_after": float(state.equity),
         "cash_before": cash_before,
@@ -1655,6 +1679,13 @@ def _run_paper_step_with_simulator_engine(
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
+                or float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "risk_scale",
+                        risk_overlay.get("risk_scale", 1.0),
+                    )
+                )
+                < 0.999
             ),
             "paper_run_id": run_row.id,
             "signals_source": signals_source,
@@ -1683,6 +1714,12 @@ def _run_paper_step_with_simulator_engine(
             "dataset_id": resolved_dataset_id,
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
+            "risk_overlay": {
+                "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
+                "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
+                "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
+                "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+            },
             "engine_version": sim_execution.metadata.get("engine_version"),
             "data_digest": sim_execution.metadata.get("data_digest"),
             "seed": sim_execution.metadata.get("seed"),
@@ -1722,6 +1759,7 @@ def _run_paper_step_shadow_only(
     safe_mode_reason: str | None,
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
+    risk_overlay: dict[str, Any],
     cost_spike_active: bool,
     cost_spike_meta: dict[str, Any],
     scan_guard_active: bool,
@@ -1762,6 +1800,7 @@ def _run_paper_step_shadow_only(
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
         open_positions=shadow_positions_before,
         seed=seed,
+        risk_overlay=risk_overlay,
         persist_live_state=False,
     )
 
@@ -1873,6 +1912,10 @@ def _run_paper_step_shadow_only(
         ],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
+        "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
+        "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
+        "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
+        "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
         "equity_before": shadow_equity_before,
         "equity_after": shadow_equity_after,
         "cash_before": shadow_cash_before,
@@ -1999,6 +2042,13 @@ def _run_paper_step_shadow_only(
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
+                or float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "risk_scale",
+                        risk_overlay.get("risk_scale", 1.0),
+                    )
+                )
+                < 0.999
             ),
             "paper_run_id": run_row.id,
             "signals_source": signals_source,
@@ -2027,6 +2077,12 @@ def _run_paper_step_shadow_only(
             "dataset_id": resolved_dataset_id,
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
+            "risk_overlay": {
+                "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
+                "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
+                "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
+                "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+            },
             "engine_version": sim_execution.metadata.get("engine_version"),
             "data_digest": sim_execution.metadata.get("data_digest"),
             "seed": sim_execution.metadata.get("seed"),
@@ -2227,6 +2283,27 @@ def run_paper_step(
             correlation_id=str(seed),
         )
 
+    policy_id_value: int | None = None
+    try:
+        if policy.get("policy_id") is not None:
+            policy_id_value = int(policy["policy_id"])
+    except (TypeError, ValueError):
+        policy_id_value = None
+    risk_overlay = create_portfolio_risk_snapshot(
+        session=session,
+        settings=settings,
+        bundle_id=resolved_bundle_id,
+        policy_id=policy_id_value,
+        overrides=state_settings,
+        asof=asof_dt,
+    )
+    if bool(risk_overlay.get("enabled")):
+        policy["selection_reason"] = (
+            f"{policy.get('selection_reason', '')} Risk overlay scale "
+            f"{float(risk_overlay.get('risk_scale', 1.0)):.2f} "
+            f"(realized vol {float(risk_overlay.get('realized_vol', 0.0)):.2%})."
+        ).strip()
+
     quality_guard = _data_quality_guard(
         session=session,
         settings=settings,
@@ -2425,6 +2502,7 @@ def run_paper_step(
         base_meta = {
             "symbol": symbol,
             "underlying_symbol": underlying_symbol,
+            "sector": sector,
             "template": template,
             "side": side,
             "instrument_kind": instrument_kind,
@@ -2580,6 +2658,7 @@ def run_paper_step(
 
         signal["instrument_kind"] = instrument_kind
         signal["instrument_choice_reason"] = instrument_choice_reason
+        signal["sector"] = sector
 
         if _correlation_reject(
             signal, selected_symbols=selected_symbols, threshold=correlation_threshold
@@ -2618,6 +2697,7 @@ def run_paper_step(
             safe_mode_reason=safe_mode_reason,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
+            risk_overlay=risk_overlay,
             cost_spike_active=cost_spike_active,
             cost_spike_meta=cost_spike_meta,
             scan_guard_active=scan_guard_active,
@@ -2651,6 +2731,7 @@ def run_paper_step(
             safe_mode_reason=safe_mode_reason,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
+            risk_overlay=risk_overlay,
             cost_spike_active=cost_spike_active,
             cost_spike_meta=cost_spike_meta,
             scan_guard_active=scan_guard_active,

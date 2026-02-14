@@ -153,6 +153,18 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_portfoliorisksnapshot_ts "
+                "ON portfoliorisksnapshot (ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_portfoliorisksnapshot_bundle_policy_ts "
+                "ON portfoliorisksnapshot (bundle_id, policy_id, ts)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_shadowpaperstate_bundle_policy "
                 "ON shadowpaperstate (bundle_id, policy_id)"
             )

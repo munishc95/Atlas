@@ -15,6 +15,7 @@ import type {
   ApiDataUpdateRun,
   ApiOperateEvent,
   ApiOperateHealth,
+  ApiOperateRunSummary,
   ApiOperateStatus,
   ApiMonthlyReport,
   ApiResearchCandidate,
@@ -220,6 +221,20 @@ export const atlasApi = {
       `/api/operate/health${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
+  operateRun: (payload?: {
+    bundle_id?: number;
+    timeframe?: string;
+    regime?: string;
+    policy_id?: number;
+    include_data_updates?: boolean;
+    date?: string;
+    asof?: string;
+    seed?: number;
+  }) =>
+    apiFetch<JobStart & { summary?: ApiOperateRunSummary }>("/api/operate/run", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
   generateDailyReport: (payload: { date?: string; bundle_id?: number; policy_id?: number }) =>
     apiFetch<JobStart>("/api/reports/daily/generate", {
       method: "POST",

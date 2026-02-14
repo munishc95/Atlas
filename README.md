@@ -366,6 +366,43 @@ Frontend additions:
 - `Universe & Data` page includes `Data Updates` controls and a coverage details drawer.
 - `Ops` page shows latest data update status and quick action to run updates.
 
+## Portfolio Risk Overlay + One-Button Operate (v2.4)
+
+Atlas now supports a portfolio-level risk overlay on top of per-trade sizing:
+
+- Realized portfolio vol targeting:
+  - computes rolling realized vol from recent `PaperRun` returns
+  - applies deterministic risk scale: `scale = clamp(target_vol / realized_vol, min_scale, max_scale)`
+  - persists `PortfolioRiskSnapshot` for each run-step
+- Exposure caps enforced in the simulator before accepting entries:
+  - gross exposure cap
+  - single-name exposure cap
+  - sector exposure cap
+  - optional correlation clamp with configurable reduction factor
+- Explicit skip reasons for explainability:
+  - `risk_overlay_gross_exposure_cap`
+  - `risk_overlay_single_name_cap`
+  - `risk_overlay_sector_cap`
+  - `risk_overlay_corr_clamp`
+- Paper run-step outputs now include:
+  - `risk_overlay.risk_scale`
+  - `risk_overlay.realized_vol`
+  - `risk_overlay.target_vol`
+  - `risk_overlay.caps_applied`
+
+One-button Ops orchestration:
+
+- New endpoint: `POST /api/operate/run`
+- Runs in order:
+  1. data updates (optional, settings-driven)
+  2. data quality
+  3. paper run-step
+  4. daily report generation
+- Returns a job with compact summary including step order, statuses, and generated report id.
+- Ops page now has primary action:
+  - `Run Today (Updates -> Quality -> Step -> Report)`
+  - completion summary includes report id and direct PDF download.
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:
@@ -444,6 +481,7 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/evaluations/{id}/details`
 - `POST /api/paper/signals/preview`
 - `GET /api/operate/status`
+- `POST /api/operate/run`
 - `POST /api/replay/run`
 - `GET /api/replay/runs`
 - `GET /api/replay/runs/{id}`

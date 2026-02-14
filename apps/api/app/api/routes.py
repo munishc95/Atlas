@@ -37,6 +37,7 @@ from app.jobs.tasks import (
     run_paper_step_job,
     run_daily_report_job,
     run_monthly_report_job,
+    run_operate_run_job,
     run_replay_job,
     run_research_job,
     run_walkforward_job,
@@ -48,6 +49,7 @@ from app.schemas.api import (
     DataUpdatesRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
+    OperateRunRequest,
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
     PolicyEvaluationRunRequest,
@@ -1157,6 +1159,26 @@ def operate_health(
     )
 
 
+@router.post("/operate/run")
+def operate_run(
+    payload: OperateRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="operate_run",
+        task_path="app.jobs.tasks.run_operate_run_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_operate_run_job,
+    )
+
+
 @router.post("/paper/run-step")
 def paper_run_step(
     payload: PaperRunStepRequest,
@@ -1464,6 +1486,19 @@ def get_settings_payload(
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
         "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
+        "risk_overlay_enabled": (
+            True if str(settings.operate_mode).strip().lower() == "live" else False
+        ),
+        "risk_overlay_target_vol_annual": settings.risk_overlay_target_vol_annual,
+        "risk_overlay_lookback_days": settings.risk_overlay_lookback_days,
+        "risk_overlay_min_scale": settings.risk_overlay_min_scale,
+        "risk_overlay_max_scale": settings.risk_overlay_max_scale,
+        "risk_overlay_max_gross_exposure_pct": settings.risk_overlay_max_gross_exposure_pct,
+        "risk_overlay_max_single_name_exposure_pct": settings.risk_overlay_max_single_name_exposure_pct,
+        "risk_overlay_max_sector_exposure_pct": settings.risk_overlay_max_sector_exposure_pct,
+        "risk_overlay_corr_clamp_enabled": settings.risk_overlay_corr_clamp_enabled,
+        "risk_overlay_corr_threshold": settings.risk_overlay_corr_threshold,
+        "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

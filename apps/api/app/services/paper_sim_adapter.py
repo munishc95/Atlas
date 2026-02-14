@@ -84,6 +84,7 @@ def _build_simulation_config(
     state_settings: dict[str, Any],
     policy: dict[str, Any],
     equity: float,
+    risk_overlay: dict[str, Any] | None,
     seed: int,
 ) -> SimulationConfig:
     cost_model = policy.get("cost_model", {}) if isinstance(policy.get("cost_model"), dict) else {}
@@ -152,6 +153,46 @@ def _build_simulation_config(
         cost_model_enabled=cost_enabled,
         cost_mode=cost_mode,
         cost_params=cost_params,
+        risk_overlay_enabled=bool((risk_overlay or {}).get("enabled", False)),
+        risk_overlay_scale=float((risk_overlay or {}).get("risk_scale", 1.0) or 1.0),
+        risk_overlay_realized_vol=float((risk_overlay or {}).get("realized_vol", 0.0) or 0.0),
+        risk_overlay_target_vol=float((risk_overlay or {}).get("target_vol", 0.0) or 0.0),
+        risk_overlay_max_gross_exposure_pct=float(
+            state_settings.get(
+                "risk_overlay_max_gross_exposure_pct",
+                settings.risk_overlay_max_gross_exposure_pct,
+            )
+        ),
+        risk_overlay_max_single_name_exposure_pct=float(
+            state_settings.get(
+                "risk_overlay_max_single_name_exposure_pct",
+                settings.risk_overlay_max_single_name_exposure_pct,
+            )
+        ),
+        risk_overlay_max_sector_exposure_pct=float(
+            state_settings.get(
+                "risk_overlay_max_sector_exposure_pct",
+                settings.risk_overlay_max_sector_exposure_pct,
+            )
+        ),
+        risk_overlay_corr_clamp_enabled=bool(
+            state_settings.get(
+                "risk_overlay_corr_clamp_enabled",
+                settings.risk_overlay_corr_clamp_enabled,
+            )
+        ),
+        risk_overlay_corr_threshold=float(
+            state_settings.get(
+                "risk_overlay_corr_threshold",
+                settings.risk_overlay_corr_threshold,
+            )
+        ),
+        risk_overlay_corr_reduce_factor=float(
+            state_settings.get(
+                "risk_overlay_corr_reduce_factor",
+                settings.risk_overlay_corr_reduce_factor,
+            )
+        ),
         seed=int(seed),
     )
 
@@ -168,6 +209,7 @@ def execute_paper_step_with_simulator(
     mark_prices: dict[str, float],
     open_positions: list[PaperPosition] | list[dict[str, Any]],
     seed: int,
+    risk_overlay: dict[str, Any] | None = None,
     persist_live_state: bool = True,
 ) -> PaperSimulatorExecution:
     state_cash = float(state.cash) if isinstance(state, PaperState) else float(state.get("cash", 0.0))
@@ -179,6 +221,7 @@ def execute_paper_step_with_simulator(
         state_settings=state_settings,
         policy=policy,
         equity=state_equity,
+        risk_overlay=risk_overlay,
         seed=seed,
     )
     if open_positions and isinstance(open_positions[0], PaperPosition):

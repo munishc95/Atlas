@@ -103,6 +103,17 @@ class DataUpdatesRunRequest(BaseModel):
     max_files_per_run: int | None = None
 
 
+class OperateRunRequest(BaseModel):
+    bundle_id: int | None = None
+    timeframe: str | None = None
+    regime: str | None = None
+    policy_id: int | None = None
+    include_data_updates: bool | None = None
+    date: str | None = None
+    asof: str | None = None
+    seed: int | None = None
+
+
 class MonthlyReportGenerateRequest(BaseModel):
     month: str | None = None  # YYYY-MM
     bundle_id: int | None = None
@@ -204,3 +215,14 @@ class RuntimeSettingsRequest(BaseModel):
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None
+    risk_overlay_enabled: bool | None = None
+    risk_overlay_target_vol_annual: float | None = None
+    risk_overlay_lookback_days: int | None = None
+    risk_overlay_min_scale: float | None = None
+    risk_overlay_max_scale: float | None = None
+    risk_overlay_max_gross_exposure_pct: float | None = None
+    risk_overlay_max_single_name_exposure_pct: float | None = None
+    risk_overlay_max_sector_exposure_pct: float | None = None
+    risk_overlay_corr_clamp_enabled: bool | None = None
+    risk_overlay_corr_threshold: float | None = None
+    risk_overlay_corr_reduce_factor: float | None = None
