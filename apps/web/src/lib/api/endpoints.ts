@@ -261,6 +261,14 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  putEnsembleRegimeWeights: (
+    id: number,
+    payload: Record<string, Record<string, number>>,
+  ) =>
+    apiFetch<ApiPolicyEnsemble>(`/api/ensembles/${id}/regime-weights`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   setActiveEnsemble: (id: number) =>
     apiFetch<{ status: string; ensemble_id: number; ensemble_name: string }>(
       `/api/ensembles/${id}/set-active`,

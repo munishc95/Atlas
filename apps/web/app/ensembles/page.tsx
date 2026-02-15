@@ -34,6 +34,7 @@ export default function EnsemblesPage() {
   const [ensembleName, setEnsembleName] = useState("Balanced Ensemble");
   const [selectedEnsemble, setSelectedEnsemble] = useState<ApiPolicyEnsemble | null>(null);
   const [draft, setDraft] = useState<Record<number, MemberDraft>>({});
+  const [regimeWeightsText, setRegimeWeightsText] = useState("{}");
 
   const bundlesQuery = useQuery({
     queryKey: qk.universes,
@@ -92,6 +93,14 @@ export default function EnsemblesPage() {
     setDraft(nextDraft);
   }, [policiesQuery.data, selectedEnsemble]);
 
+  useEffect(() => {
+    if (!selectedEnsemble) {
+      setRegimeWeightsText("{}");
+      return;
+    }
+    setRegimeWeightsText(JSON.stringify(selectedEnsemble.regime_weights ?? {}, null, 2));
+  }, [selectedEnsemble]);
+
   const createEnsembleMutation = useMutation({
     mutationFn: async () => {
       if (!bundleId) {
@@ -148,6 +157,30 @@ export default function EnsemblesPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not update members");
+    },
+  });
+  const saveRegimeWeightsMutation = useMutation({
+    mutationFn: async (ensembleId: number) => {
+      let parsed: Record<string, Record<string, number>> = {};
+      try {
+        const candidate = JSON.parse(regimeWeightsText);
+        if (candidate && typeof candidate === "object") {
+          parsed = candidate as Record<string, Record<string, number>>;
+        }
+      } catch (error) {
+        throw new Error("Regime weights must be valid JSON.");
+      }
+      return (await atlasApi.putEnsembleRegimeWeights(ensembleId, parsed)).data;
+    },
+    onSuccess: async (payload) => {
+      toast.success("Regime weights updated");
+      const refreshed = await atlasApi.ensembleById(Number(payload.id));
+      setSelectedEnsemble(refreshed.data);
+      queryClient.invalidateQueries({ queryKey: qk.ensembles(1, 100, bundleId) });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not update regime weights");
     },
   });
 
@@ -419,6 +452,16 @@ export default function EnsemblesPage() {
               </button>
               <button
                 type="button"
+                className="focus-ring rounded-xl border border-border px-3 py-2 text-sm"
+                onClick={() => saveRegimeWeightsMutation.mutate(selectedEnsemble.id)}
+                disabled={saveRegimeWeightsMutation.isPending}
+              >
+                {saveRegimeWeightsMutation.isPending
+                  ? "Saving..."
+                  : "Save Regime Weights"}
+              </button>
+              <button
+                type="button"
                 className="focus-ring rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white"
                 onClick={() => setActiveMutation.mutate(selectedEnsemble.id)}
                 disabled={setActiveMutation.isPending}
@@ -426,6 +469,14 @@ export default function EnsemblesPage() {
                 Set Active
               </button>
             </div>
+            <label className="text-sm text-muted">
+              Regime weights JSON
+              <textarea
+                className="focus-ring mt-1 min-h-[160px] w-full rounded-xl border border-border px-3 py-2 font-mono text-xs"
+                value={regimeWeightsText}
+                onChange={(event) => setRegimeWeightsText(event.target.value)}
+              />
+            </label>
           </div>
         )}
       </DetailsDrawer>

@@ -4,8 +4,11 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 from app.core.config import get_settings
+from app.db.models import PaperOrder, PaperPosition, PaperState
+from app.db.session import engine
 from app.main import app
 from app.services.research import evaluate_candidate_robustness
 
@@ -67,6 +70,35 @@ def _run_small_research(client: TestClient, idempotency_key: str | None = None) 
     )
     assert response.status_code == 200
     return response.json()["data"]
+
+
+def _reset_paper_runtime() -> None:
+    with Session(engine) as session:
+        for row in session.exec(select(PaperPosition)).all():
+            session.delete(row)
+        for row in session.exec(select(PaperOrder)).all():
+            session.delete(row)
+        state = session.get(PaperState, 1)
+        if state is not None:
+            state.equity = 1_000_000.0
+            state.cash = 1_000_000.0
+            state.peak_equity = 1_000_000.0
+            state.drawdown = 0.0
+            state.kill_switch_active = False
+            state.cooldown_days_left = 0
+            state.settings_json = {
+                **(state.settings_json or {}),
+                "paper_mode": "strategy",
+                "active_policy_id": None,
+                "active_ensemble_id": None,
+                "allowed_sides": ["BUY"],
+                "operate_mode": "offline",
+                "data_quality_stale_severity": "WARN",
+                "data_quality_stale_severity_override": True,
+                "no_trade_enabled": False,
+            }
+            session.add(state)
+        session.commit()
 
 
 def test_research_score_is_deterministic() -> None:
@@ -145,6 +177,7 @@ def test_research_idempotency_key_returns_same_job() -> None:
 
 def test_policy_generation_and_paper_mode_reasons() -> None:
     with _client_inline_jobs() as client:
+        _reset_paper_runtime()
         _import_sample(client)
         queued = _run_small_research(client)
         research_job = _wait_job(client, queued["job_id"], timeout=240.0)

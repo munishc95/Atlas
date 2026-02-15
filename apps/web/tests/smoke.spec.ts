@@ -95,6 +95,12 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       data_updates_provider_timeframes: ["1d"],
       data_updates_provider_repair_last_n_trading_days: 2,
       data_updates_provider_backfill_max_days: 5,
+      no_trade_enabled: true,
+      no_trade_regimes: ["TREND_UP", "RANGE", "HIGH_VOL", "RISK_OFF"],
+      no_trade_max_realized_vol_annual: 10,
+      no_trade_min_breadth_pct: 0,
+      no_trade_min_trend_strength: 0,
+      no_trade_cooldown_trading_days: 0,
     },
   });
   expect(settingsRes.ok()).toBeTruthy();
@@ -252,9 +258,14 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       "ensemble_selected_counts_by_policy",
     ),
   ).toBeTruthy();
+  expect(reportSummary?.no_trade_triggered).toBeTruthy();
+  expect(Array.isArray(reportSummary?.no_trade_reasons)).toBeTruthy();
+  expect((reportSummary?.no_trade_reasons as unknown[]).length).toBeGreaterThan(0);
 
   await page.reload();
   await expect(page.getByText(/Active ensemble:/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/No-trade gate:/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/No-trade reason:/i)).toBeVisible({ timeout: 20_000 });
 
   const pdfRes = await request.get(`${apiBase}/api/reports/daily/${reportId}/export.pdf`);
   expect(pdfRes.ok()).toBeTruthy();

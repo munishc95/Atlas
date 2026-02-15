@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class DataEnvelope(BaseModel):
@@ -72,6 +72,10 @@ class PolicyEnsembleMemberInput(BaseModel):
 
 class PolicyEnsembleMembersRequest(BaseModel):
     members: list[PolicyEnsembleMemberInput] = Field(default_factory=list)
+
+
+class PolicyEnsembleRegimeWeightsRequest(RootModel[dict[str, dict[str, float]]]):
+    pass
 
 
 class PaperRunStepRequest(BaseModel):
@@ -297,3 +301,9 @@ class RuntimeSettingsRequest(BaseModel):
     risk_overlay_corr_clamp_enabled: bool | None = None
     risk_overlay_corr_threshold: float | None = None
     risk_overlay_corr_reduce_factor: float | None = None
+    no_trade_enabled: bool | None = None
+    no_trade_regimes: list[str] | None = None
+    no_trade_max_realized_vol_annual: float | None = None
+    no_trade_min_breadth_pct: float | None = None
+    no_trade_min_trend_strength: float | None = None
+    no_trade_cooldown_trading_days: int | None = None

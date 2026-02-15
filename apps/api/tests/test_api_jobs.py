@@ -155,7 +155,18 @@ def test_idempotency_key_returns_same_job_id() -> None:
 def test_paper_diversification_limits_sector_concentration() -> None:
     with _client_inline_jobs() as client:
         reset = client.put(
-            "/api/settings", json={"paper_mode": "strategy", "active_policy_id": None}
+            "/api/settings",
+            json={
+                "paper_mode": "strategy",
+                "active_policy_id": None,
+                "active_ensemble_id": None,
+                "no_trade_enabled": False,
+                "no_trade_regimes": ["HIGH_VOL"],
+                "no_trade_cooldown_trading_days": 0,
+                "no_trade_max_realized_vol_annual": 10.0,
+                "no_trade_min_breadth_pct": 0.0,
+                "no_trade_min_trend_strength": 0.0,
+            },
         )
         assert reset.status_code == 200
 
@@ -172,6 +183,18 @@ def test_paper_diversification_limits_sector_concentration() -> None:
                 state.drawdown = 0.0
                 state.kill_switch_active = False
                 state.cooldown_days_left = 0
+                state.settings_json = {
+                    **(state.settings_json or {}),
+                    "paper_mode": "strategy",
+                    "active_policy_id": None,
+                    "active_ensemble_id": None,
+                    "no_trade_enabled": False,
+                    "no_trade_regimes": ["HIGH_VOL"],
+                    "no_trade_cooldown_trading_days": 0,
+                    "no_trade_max_realized_vol_annual": 10.0,
+                    "no_trade_min_breadth_pct": 0.0,
+                    "no_trade_min_trend_strength": 0.0,
+                }
                 session.add(state)
             for symbol in ("BANKA", "BANKB", "BANKC"):
                 if session.exec(select(Symbol).where(Symbol.symbol == symbol)).first() is None:

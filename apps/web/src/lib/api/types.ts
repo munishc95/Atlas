@@ -216,6 +216,7 @@ export type ApiPolicyEnsemble = {
   is_active: boolean;
   created_at: string;
   members: ApiPolicyEnsembleMember[];
+  regime_weights?: Record<string, Record<string, number>>;
 };
 
 export type ApiPolicyHealthSnapshot = {
@@ -320,6 +321,11 @@ export type ApiOperateStatus = {
   active_ensemble?: ApiPolicyEnsemble | null;
   active_bundle_id?: number | null;
   current_regime?: string | null;
+  no_trade?: Record<string, unknown>;
+  no_trade_triggered?: boolean;
+  no_trade_reasons?: string[];
+  ensemble_weights_source?: string | null;
+  ensemble_regime_used?: string | null;
   last_run_step_at?: string | null;
   latest_run?: Record<string, unknown> | null;
   latest_data_quality?: ApiDataQualityReport | null;
@@ -500,6 +506,12 @@ export type ApiOperateHealth = {
   latest_data_update?: ApiDataUpdateRun | null;
   latest_provider_update?: ApiProviderUpdateRun | null;
   latest_paper_run_id?: number | null;
+  current_regime?: string | null;
+  no_trade?: Record<string, unknown>;
+  no_trade_triggered?: boolean;
+  no_trade_reasons?: string[];
+  ensemble_weights_source?: string | null;
+  ensemble_regime_used?: string | null;
   last_run_step_at?: string | null;
   recent_event_counts_24h: Record<string, number>;
   fast_mode_enabled?: boolean;

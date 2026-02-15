@@ -89,6 +89,7 @@ def _reset_paper_state(*, use_simulator_engine: bool) -> None:
             **(state.settings_json or {}),
             "paper_mode": "strategy",
             "active_policy_id": None,
+            "active_ensemble_id": None,
             "allowed_sides": ["BUY", "SELL"],
             "operate_mode": "offline",
             "data_quality_stale_severity": "WARN",
@@ -98,6 +99,12 @@ def _reset_paper_state(*, use_simulator_engine: bool) -> None:
             "slippage_base_bps": 2.0,
             "slippage_vol_factor": 15.0,
             "commission_bps": 5.0,
+            "no_trade_enabled": False,
+            "no_trade_regimes": ["HIGH_VOL"],
+            "no_trade_cooldown_trading_days": 0,
+            "no_trade_max_realized_vol_annual": 10.0,
+            "no_trade_min_breadth_pct": 0.0,
+            "no_trade_min_trend_strength": 0.0,
         }
         session.add(state)
         session.commit()

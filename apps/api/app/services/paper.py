@@ -42,6 +42,7 @@ from app.services.data_updates import inactive_symbols_for_selection
 from app.services.ensembles import (
     get_active_policy_ensemble,
     list_policy_ensemble_members,
+    list_policy_ensemble_regime_weights,
     serialize_policy_ensemble,
 )
 from app.services.fast_mode import (
@@ -52,6 +53,7 @@ from app.services.fast_mode import (
     resolve_seed,
 )
 from app.services.operate_events import emit_operate_event
+from app.services.no_trade import evaluate_no_trade_gate
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
 from app.services.portfolio_risk import create_portfolio_risk_snapshot
 from app.services.policy_health import (
@@ -196,6 +198,12 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "risk_overlay_corr_clamp_enabled": settings.risk_overlay_corr_clamp_enabled,
             "risk_overlay_corr_threshold": settings.risk_overlay_corr_threshold,
             "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
+            "no_trade_enabled": settings.no_trade_enabled,
+            "no_trade_regimes": settings.no_trade_regimes,
+            "no_trade_max_realized_vol_annual": settings.no_trade_max_realized_vol_annual,
+            "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
+            "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
+            "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
             "paper_mode": "strategy",
             "active_policy_id": None,
             "active_ensemble_id": None,
@@ -1350,6 +1358,7 @@ def _run_paper_step_with_simulator_engine(
     safe_mode_active: bool,
     safe_mode_action: str,
     safe_mode_reason: str | None,
+    no_trade_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
     risk_overlay: dict[str, Any],
@@ -1496,30 +1505,6 @@ def _run_paper_step_with_simulator_engine(
             key = str(source_policy_id)
             actual_counts[key] = int(actual_counts.get(key, 0)) + 1
         ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
-    if ensemble_payload:
-        actual_counts: dict[str, int] = {}
-        for signal in executed_signals:
-            try:
-                source_policy_id = int(signal.get("source_policy_id") or 0)
-            except (TypeError, ValueError):
-                source_policy_id = 0
-            if source_policy_id <= 0:
-                continue
-            key = str(source_policy_id)
-            actual_counts[key] = int(actual_counts.get(key, 0)) + 1
-        ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
-    if ensemble_payload:
-        actual_counts: dict[str, int] = {}
-        for signal in executed_signals:
-            try:
-                source_policy_id = int(signal.get("source_policy_id") or 0)
-            except (TypeError, ValueError):
-                source_policy_id = 0
-            if source_policy_id <= 0:
-                continue
-            key = str(source_policy_id)
-            actual_counts[key] = int(actual_counts.get(key, 0)) + 1
-        ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
 
     run_summary = {
         "execution_mode": "LIVE",
@@ -1532,6 +1517,8 @@ def _run_paper_step_with_simulator_engine(
         "ensemble_active": bool(ensemble_payload),
         "ensemble_id": ensemble_payload.get("id"),
         "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_regime_used": ensemble_payload.get("regime_used"),
+        "ensemble_weights_source": ensemble_payload.get("weights_source"),
         "ensemble_risk_budget_by_policy": dict(
             ensemble_payload.get("risk_budget_by_policy", {})
             if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
@@ -1545,6 +1532,9 @@ def _run_paper_step_with_simulator_engine(
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
+        "no_trade": dict(no_trade_snapshot or {}),
+        "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
+        "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -1828,6 +1818,7 @@ def _run_paper_step_with_simulator_engine(
                 "status": quality_status,
                 "warnings": quality_warn_summary,
             },
+            "no_trade": dict(no_trade_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -1901,6 +1892,7 @@ def _run_paper_step_shadow_only(
     safe_mode_active: bool,
     safe_mode_action: str,
     safe_mode_reason: str | None,
+    no_trade_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
     risk_overlay: dict[str, Any],
@@ -2027,6 +2019,8 @@ def _run_paper_step_shadow_only(
         "ensemble_active": bool(ensemble_payload),
         "ensemble_id": ensemble_payload.get("id"),
         "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_regime_used": ensemble_payload.get("regime_used"),
+        "ensemble_weights_source": ensemble_payload.get("weights_source"),
         "ensemble_risk_budget_by_policy": dict(
             ensemble_payload.get("risk_budget_by_policy", {})
             if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
@@ -2040,6 +2034,9 @@ def _run_paper_step_shadow_only(
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
+        "no_trade": dict(no_trade_snapshot or {}),
+        "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
+        "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -2241,6 +2238,7 @@ def _run_paper_step_shadow_only(
                 "status": quality_status,
                 "warnings": quality_warn_summary,
             },
+            "no_trade": dict(no_trade_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -2530,6 +2528,34 @@ def run_paper_step(
             },
         )
 
+    no_trade_snapshot = evaluate_no_trade_gate(
+        session,
+        settings=settings,
+        store=store,
+        bundle_id=resolved_bundle_id,
+        timeframe=primary_timeframe,
+        asof_ts=asof_dt,
+        regime=regime,
+        overrides=state_settings,
+    )
+    no_trade_active = bool(no_trade_snapshot.get("triggered"))
+    no_trade_reasons = list(no_trade_snapshot.get("reasons", []))
+    if no_trade_active:
+        _log(
+            session,
+            "no_trade_gate_triggered",
+            {
+                "bundle_id": resolved_bundle_id,
+                "timeframe": primary_timeframe,
+                "regime": regime,
+                "reasons": no_trade_reasons,
+                "cooldown_remaining": no_trade_snapshot.get("cooldown_remaining", 0),
+                "breadth_pct": no_trade_snapshot.get("breadth_pct"),
+                "realized_vol": no_trade_snapshot.get("realized_vol"),
+                "trend_strength": no_trade_snapshot.get("trend_strength"),
+            },
+        )
+
     preferred_ensemble_id: int | None = None
     active_ensemble: PolicyEnsemble | None = None
     paper_mode_setting = str(state_settings.get("paper_mode", "strategy")).strip().lower()
@@ -2570,6 +2596,14 @@ def run_paper_step(
         if active_ensemble is not None
         else []
     )
+    ensemble_regime_weights = (
+        list_policy_ensemble_regime_weights(
+            session,
+            ensemble_id=int(active_ensemble.id or 0),
+        )
+        if active_ensemble is not None
+        else {}
+    )
     ensemble_meta: dict[str, Any] | None = None
     pre_skipped_signals: list[dict[str, Any]] = []
 
@@ -2578,6 +2612,8 @@ def run_paper_step(
         (policy.get("mode") == "policy" or use_ensemble_mode) and len(provided_signals) == 0
     )
     if safe_mode_active and safe_mode_action == "exits_only":
+        should_generate = False
+    if no_trade_active:
         should_generate = False
 
     if should_generate:
@@ -2608,11 +2644,39 @@ def run_paper_step(
                     enabled_members,
                     key=lambda row: int(row.get("policy_id") or 0),
                 )
-                positive_weights = {
+                base_positive_weights = {
                     int(row.get("policy_id") or 0): max(0.0, float(row.get("weight") or 0.0))
                     for row in sorted_members
                     if int(row.get("policy_id") or 0) > 0
                 }
+                regime_weight_payload = (
+                    ensemble_regime_weights.get(str(regime).strip().upper(), {})
+                    if isinstance(ensemble_regime_weights, dict)
+                    else {}
+                )
+                regime_positive_weights: dict[int, float] = {}
+                if isinstance(regime_weight_payload, dict):
+                    for key, value in regime_weight_payload.items():
+                        try:
+                            policy_id = int(key)
+                        except (TypeError, ValueError):
+                            continue
+                        if policy_id <= 0:
+                            continue
+                        regime_positive_weights[policy_id] = max(0.0, float(value))
+                use_regime_weights = any(
+                    weight > 0 and policy_id in base_positive_weights
+                    for policy_id, weight in regime_positive_weights.items()
+                )
+                weight_source = "regime" if use_regime_weights else "base"
+                positive_weights = (
+                    {
+                        policy_id: regime_positive_weights.get(policy_id, 0.0)
+                        for policy_id in sorted(base_positive_weights)
+                    }
+                    if use_regime_weights
+                    else dict(base_positive_weights)
+                )
                 total_weight = float(sum(value for value in positive_weights.values() if value > 0))
                 normalized_weights = {
                     policy_id: (value / total_weight if total_weight > 0 else 0.0)
@@ -2720,10 +2784,25 @@ def run_paper_step(
                     "id": int(active_ensemble.id or 0),
                     "name": active_ensemble.name,
                     "bundle_id": int(active_ensemble.bundle_id),
+                    "regime_used": str(regime).strip().upper(),
+                    "weights_source": weight_source,
                     "member_weights": {
                         str(policy_id): float(normalized_weights.get(policy_id, 0.0))
                         for policy_id in sorted(normalized_weights)
                     },
+                    "base_member_weights": {
+                        str(policy_id): float(base_positive_weights.get(policy_id, 0.0))
+                        for policy_id in sorted(base_positive_weights)
+                    },
+                    "regime_member_weights": (
+                        {
+                            str(policy_id): float(regime_positive_weights.get(policy_id, 0.0))
+                            for policy_id in sorted(regime_positive_weights)
+                            if policy_id in base_positive_weights
+                        }
+                        if use_regime_weights
+                        else {}
+                    ),
                     "risk_budget_by_policy": risk_budget_by_policy,
                     "selected_counts_by_policy": {},
                     "weights_sum": float(total_weight),
@@ -2741,6 +2820,8 @@ def run_paper_step(
                         "generated_count": generated_signals_count,
                         "ensemble_id": int(active_ensemble.id or 0),
                         "ensemble_name": active_ensemble.name,
+                        "regime_used": ensemble_meta.get("regime_used"),
+                        "weights_source": ensemble_meta.get("weights_source"),
                         "scan_truncated": generated_meta.scan_truncated,
                         "scanned_symbols": generated_meta.scanned_symbols,
                         "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -2855,6 +2936,28 @@ def run_paper_step(
                     "policy_id": policy.get("policy_id"),
                     "policy_name": policy.get("policy_name"),
                     "reason": "data_quality_fail_safe_mode",
+                }
+            )
+        candidates = []
+    elif no_trade_active:
+        for signal in candidates:
+            skipped_signals.append(
+                {
+                    "symbol": str(signal.get("symbol", "")).upper(),
+                    "underlying_symbol": str(
+                        signal.get("underlying_symbol", signal.get("symbol", ""))
+                    ).upper(),
+                    "template": str(signal.get("template", "trend_breakout")),
+                    "side": str(signal.get("side", "BUY")).upper(),
+                    "instrument_kind": str(signal.get("instrument_kind", "EQUITY_CASH")).upper(),
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                    "policy_name": policy.get("policy_name"),
+                    "reason": "no_trade_gate_triggered",
+                    "details": {
+                        "reasons": no_trade_reasons,
+                        "cooldown_remaining": no_trade_snapshot.get("cooldown_remaining", 0),
+                    },
                 }
             )
         candidates = []
@@ -3150,6 +3253,7 @@ def run_paper_step(
             safe_mode_active=safe_mode_active,
             safe_mode_action=safe_mode_action,
             safe_mode_reason=safe_mode_reason,
+            no_trade_snapshot=no_trade_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
             risk_overlay=risk_overlay,
@@ -3184,6 +3288,7 @@ def run_paper_step(
             safe_mode_active=safe_mode_active,
             safe_mode_action=safe_mode_action,
             safe_mode_reason=safe_mode_reason,
+            no_trade_snapshot=no_trade_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
             risk_overlay=risk_overlay,
@@ -3596,6 +3701,8 @@ def run_paper_step(
         "ensemble_active": bool(ensemble_payload),
         "ensemble_id": ensemble_payload.get("id"),
         "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_regime_used": ensemble_payload.get("regime_used"),
+        "ensemble_weights_source": ensemble_payload.get("weights_source"),
         "ensemble_risk_budget_by_policy": dict(
             ensemble_payload.get("risk_budget_by_policy", {})
             if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
@@ -3609,6 +3716,9 @@ def run_paper_step(
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
+        "no_trade": dict(no_trade_snapshot or {}),
+        "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
+        "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -3873,6 +3983,7 @@ def run_paper_step(
                 "status": quality_status,
                 "warnings": quality_warn_summary,
             },
+            "no_trade": dict(no_trade_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -3995,6 +4106,14 @@ def preview_policy_signals(
         if active_ensemble is not None
         else []
     )
+    ensemble_regime_weights = (
+        list_policy_ensemble_regime_weights(
+            session,
+            ensemble_id=int(active_ensemble.id or 0),
+        )
+        if active_ensemble is not None
+        else {}
+    )
 
     generated = SignalGenerationResult(
         signals=[],
@@ -4004,6 +4123,21 @@ def preview_policy_signals(
         total_symbols=0,
     )
     if use_ensemble_mode and active_ensemble is not None and ensemble_members:
+        regime_weight_payload = (
+            ensemble_regime_weights.get(str(regime).strip().upper(), {})
+            if isinstance(ensemble_regime_weights, dict)
+            else {}
+        )
+        regime_positive_weights: dict[int, float] = {}
+        if isinstance(regime_weight_payload, dict):
+            for key, value in regime_weight_payload.items():
+                try:
+                    policy_id = int(key)
+                except (TypeError, ValueError):
+                    continue
+                if policy_id <= 0:
+                    continue
+                regime_positive_weights[policy_id] = max(0.0, float(value))
         merged_signals: list[dict[str, Any]] = []
         scan_truncated_any = False
         scanned_symbols_total = 0
@@ -4016,7 +4150,12 @@ def preview_policy_signals(
             source_policy_id = int(member.get("policy_id") or 0)
             if source_policy_id <= 0:
                 continue
-            member_weight = max(0.0, float(member.get("weight") or 0.0))
+            base_member_weight = max(0.0, float(member.get("weight") or 0.0))
+            member_weight = (
+                max(0.0, float(regime_positive_weights.get(source_policy_id, 0.0)))
+                if any(weight > 0 for weight in regime_positive_weights.values())
+                else base_member_weight
+            )
             if member_weight <= 0:
                 continue
             member_policy = _resolve_execution_policy(
@@ -4118,6 +4257,14 @@ def preview_policy_signals(
         "evaluated_candidates": generated.evaluated_candidates,
         "total_symbols": generated.total_symbols,
         "ensemble": ensemble_payload,
+        "ensemble_weights_source": (
+            "regime"
+            if isinstance(ensemble_regime_weights.get(str(regime).strip().upper(), {}), dict)
+            and bool(ensemble_regime_weights.get(str(regime).strip().upper(), {}))
+            else "base"
+        )
+        if active_ensemble is not None
+        else None,
     }
 
 

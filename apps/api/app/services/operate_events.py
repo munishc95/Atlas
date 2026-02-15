@@ -192,6 +192,11 @@ def get_operate_health_summary(
     timeframe: str | None = None,
 ) -> dict[str, Any]:
     latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    latest_summary = (
+        latest_run.summary_json
+        if latest_run is not None and isinstance(latest_run.summary_json, dict)
+        else {}
+    )
     target_bundle_id = (
         bundle_id
         if bundle_id is not None
@@ -368,6 +373,12 @@ def get_operate_health_summary(
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,
+        "current_regime": latest_run.regime if latest_run is not None else None,
+        "no_trade": latest_summary.get("no_trade", {}),
+        "no_trade_triggered": bool(latest_summary.get("no_trade_triggered", False)),
+        "no_trade_reasons": latest_summary.get("no_trade_reasons", []),
+        "ensemble_weights_source": latest_summary.get("ensemble_weights_source"),
+        "ensemble_regime_used": latest_summary.get("ensemble_regime_used"),
         "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
         "recent_event_counts_24h": severity_counts,
         "fast_mode_enabled": bool(settings.fast_mode_enabled),

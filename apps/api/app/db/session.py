@@ -278,6 +278,24 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_ensembleregimeweight_ensemble_regime "
+                "ON ensembleregimeweight (ensemble_id, regime)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notradesnapshot_bundle_timeframe_ts "
+                "ON notradesnapshot (bundle_id, timeframe, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_notradesnapshot_triggered_ts "
+                "ON notradesnapshot (triggered, ts)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_autoevalrun_reco_action_ts "
                 "ON autoevalrun (recommended_action, ts)"
             )

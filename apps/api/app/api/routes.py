@@ -59,6 +59,7 @@ from app.schemas.api import (
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
     PolicyEnsembleMembersRequest,
+    PolicyEnsembleRegimeWeightsRequest,
     PolicyEvaluationRunRequest,
     PromoteStrategyRequest,
     ReplayRunRequest,
@@ -77,9 +78,12 @@ from app.services.ensembles import (
     create_policy_ensemble,
     get_active_policy_ensemble,
     get_policy_ensemble,
+    list_policy_ensemble_members,
     list_policy_ensembles,
+    list_policy_ensemble_regime_weights,
     serialize_policy_ensemble,
     set_active_policy_ensemble,
+    upsert_policy_ensemble_regime_weights,
     upsert_policy_ensemble_members,
 )
 from app.services.data_updates import (
@@ -1146,6 +1150,31 @@ def upsert_ensemble_members(
     )
 
 
+@router.put("/ensembles/{ensemble_id}/regime-weights")
+def put_ensemble_regime_weights(
+    ensemble_id: int,
+    payload: PolicyEnsembleRegimeWeightsRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    regime_weights = upsert_policy_ensemble_regime_weights(
+        session,
+        ensemble_id=ensemble_id,
+        payload=payload.root,
+    )
+    row = get_policy_ensemble(session, ensemble_id)
+    return _data(
+        {
+            **serialize_policy_ensemble(session, row, include_members=False),
+            "members": list_policy_ensemble_members(
+                session,
+                ensemble_id=ensemble_id,
+                enabled_only=False,
+            ),
+            "regime_weights": regime_weights,
+        }
+    )
+
+
 @router.post("/ensembles/{ensemble_id}/set-active")
 def set_active_ensemble(
     ensemble_id: int,
@@ -1344,6 +1373,11 @@ def operate_status(
     if isinstance(active_policy_id, int):
         policy = session.get(Policy, active_policy_id)
     latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    latest_summary = (
+        latest_run.summary_json
+        if latest_run is not None and isinstance(latest_run.summary_json, dict)
+        else {}
+    )
     active_bundle_id = (
         latest_run.bundle_id
         if latest_run is not None and latest_run.bundle_id is not None
@@ -1423,6 +1457,11 @@ def operate_status(
             "active_ensemble": active_ensemble_payload,
             "active_bundle_id": active_bundle_id,
             "current_regime": latest_run.regime if latest_run is not None else None,
+            "no_trade": latest_summary.get("no_trade", {}),
+            "no_trade_triggered": bool(latest_summary.get("no_trade_triggered", False)),
+            "no_trade_reasons": latest_summary.get("no_trade_reasons", []),
+            "ensemble_weights_source": latest_summary.get("ensemble_weights_source"),
+            "ensemble_regime_used": latest_summary.get("ensemble_regime_used"),
             "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
             "latest_data_quality": health_summary.get("latest_data_quality"),
@@ -1909,6 +1948,12 @@ def get_settings_payload(
         "risk_overlay_corr_clamp_enabled": settings.risk_overlay_corr_clamp_enabled,
         "risk_overlay_corr_threshold": settings.risk_overlay_corr_threshold,
         "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
+        "no_trade_enabled": settings.no_trade_enabled,
+        "no_trade_regimes": settings.no_trade_regimes,
+        "no_trade_max_realized_vol_annual": settings.no_trade_max_realized_vol_annual,
+        "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
+        "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
+        "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

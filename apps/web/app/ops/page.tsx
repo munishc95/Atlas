@@ -349,6 +349,22 @@ export default function OpsPage() {
   const fastModeEnabled = Boolean(
     healthQuery.data?.fast_mode_enabled ?? statusQuery.data?.fast_mode_enabled ?? false,
   );
+  const currentRegime = String(
+    statusQuery.data?.current_regime ?? healthQuery.data?.current_regime ?? "-",
+  );
+  const noTradeTriggered = Boolean(
+    statusQuery.data?.no_trade_triggered ?? healthQuery.data?.no_trade_triggered ?? false,
+  );
+  const noTradeReasons = (
+    (statusQuery.data?.no_trade_reasons as string[] | undefined) ??
+    (healthQuery.data?.no_trade_reasons as string[] | undefined) ??
+    []
+  ).slice(0, 4);
+  const ensembleWeightsSource = String(
+    statusQuery.data?.ensemble_weights_source ??
+      healthQuery.data?.ensemble_weights_source ??
+      "-",
+  );
   const latestRunSummary =
     ((statusQuery.data?.latest_run as Record<string, unknown> | null)?.summary_json as
       | Record<string, unknown>
@@ -420,6 +436,25 @@ export default function OpsPage() {
             Last run-step: {healthQuery.data?.last_run_step_at ?? statusQuery.data?.last_run_step_at ?? "-"}
           </p>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">Regime: {currentRegime}</p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            No-trade gate:{" "}
+            <span className={`badge ${noTradeTriggered ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>
+              {noTradeTriggered ? "Active" : "Inactive"}
+            </span>
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Ensemble weights source: {ensembleWeightsSource}
+          </p>
+        </div>
+        {noTradeReasons.length > 0 ? (
+          <ul className="mt-2 space-y-1 text-xs text-muted">
+            {noTradeReasons.map((reason, index) => (
+              <li key={`no-trade-reason-${index}`}>No-trade reason: {reason}</li>
+            ))}
+          </ul>
+        ) : null}
         <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Fast mode:{" "}
           <span className={`badge ${fastModeEnabled ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>

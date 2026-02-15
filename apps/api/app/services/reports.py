@@ -281,6 +281,10 @@ def build_daily_report_content(
                 if str(last_summary.get("execution_mode", "")).upper() == "SHADOW"
                 else None
             ),
+            "no_trade_triggered": bool(last_summary.get("no_trade_triggered", False)),
+            "no_trade_reasons": list(last_summary.get("no_trade_reasons", []))
+            if isinstance(last_summary.get("no_trade_reasons", []), list)
+            else [],
             "ensemble_active": bool(last_summary.get("ensemble_active", False)),
             "ensemble_id": _safe_int(last_summary.get("ensemble_id"), 0) or None,
             "ensemble_name": (
@@ -288,6 +292,8 @@ def build_daily_report_content(
                 if last_summary.get("ensemble_name") is not None
                 else None
             ),
+            "ensemble_weights_source": last_summary.get("ensemble_weights_source"),
+            "ensemble_regime_used": last_summary.get("ensemble_regime_used"),
         },
         "explainability": {
             "selected_reason_histogram": selected_hist,
@@ -299,6 +305,9 @@ def build_daily_report_content(
             "evaluated_candidates": int(
                 sum(_safe_int(row.evaluated_candidates, 0) for row in rows)
             ),
+            "no_trade_reasons": list(last_summary.get("no_trade_reasons", []))
+            if isinstance(last_summary.get("no_trade_reasons", []), list)
+            else [],
         },
         "risk": {
             "avg_exposure": avg_exposure,

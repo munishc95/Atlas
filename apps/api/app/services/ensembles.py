@@ -7,10 +7,13 @@ from sqlmodel import Session, select
 from app.core.exceptions import APIError
 from app.db.models import (
     DatasetBundle,
+    EnsembleRegimeWeight,
     Policy,
     PolicyEnsemble,
     PolicyEnsembleMember,
 )
+
+KNOWN_REGIMES = {"TREND_UP", "RANGE", "HIGH_VOL", "RISK_OFF"}
 
 
 def _normalize_weight(value: Any) -> float:
@@ -34,6 +37,13 @@ def _policy_lookup(session: Session, policy_ids: list[int]) -> dict[int, Policy]
         return {}
     rows = session.exec(select(Policy).where(Policy.id.in_(valid_ids))).all()
     return {int(row.id): row for row in rows if row.id is not None}
+
+
+def _normalize_regime(value: Any) -> str:
+    token = str(value or "").strip().upper()
+    if token in KNOWN_REGIMES:
+        return token
+    return token if token else "TREND_UP"
 
 
 def list_policy_ensemble_members(
@@ -90,6 +100,10 @@ def serialize_policy_ensemble(
             ensemble_id=int(ensemble.id or 0),
             enabled_only=False,
         )
+    payload["regime_weights"] = list_policy_ensemble_regime_weights(
+        session,
+        ensemble_id=int(ensemble.id or 0),
+    )
     return payload
 
 
@@ -232,3 +246,108 @@ def get_active_policy_ensemble(
         .order_by(PolicyEnsemble.created_at.desc(), PolicyEnsemble.id.desc())
     ).first()
 
+
+def list_policy_ensemble_regime_weights(
+    session: Session,
+    *,
+    ensemble_id: int,
+) -> dict[str, dict[str, float]]:
+    rows = list(
+        session.exec(
+            select(EnsembleRegimeWeight)
+            .where(EnsembleRegimeWeight.ensemble_id == int(ensemble_id))
+            .order_by(
+                EnsembleRegimeWeight.regime.asc(),
+                EnsembleRegimeWeight.policy_id.asc(),
+                EnsembleRegimeWeight.id.asc(),
+            )
+        ).all()
+    )
+    output: dict[str, dict[str, float]] = {}
+    for row in rows:
+        regime = _normalize_regime(row.regime)
+        output.setdefault(regime, {})[str(int(row.policy_id))] = float(row.weight)
+    return output
+
+
+def _normalize_regime_weights(
+    payload: dict[str, dict[str, float]],
+) -> dict[str, dict[int, float]]:
+    output: dict[str, dict[int, float]] = {}
+    for regime, values in (payload or {}).items():
+        if not isinstance(values, dict):
+            continue
+        regime_key = _normalize_regime(regime)
+        bucket: dict[int, float] = {}
+        for key, raw in values.items():
+            try:
+                policy_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if policy_id <= 0:
+                continue
+            weight = _normalize_weight(raw)
+            if weight <= 0:
+                continue
+            bucket[policy_id] = weight
+        if bucket:
+            output[regime_key] = bucket
+    return output
+
+
+def upsert_policy_ensemble_regime_weights(
+    session: Session,
+    *,
+    ensemble_id: int,
+    payload: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    ensemble = get_policy_ensemble(session, ensemble_id)
+    normalized = _normalize_regime_weights(payload)
+    member_rows = list(
+        session.exec(
+            select(PolicyEnsembleMember).where(
+                PolicyEnsembleMember.ensemble_id == int(ensemble.id or 0)
+            )
+        ).all()
+    )
+    member_policy_ids = {int(row.policy_id) for row in member_rows}
+    requested_policy_ids = {
+        policy_id for values in normalized.values() for policy_id in values.keys()
+    }
+    unknown = sorted(policy_id for policy_id in requested_policy_ids if policy_id not in member_policy_ids)
+    if unknown:
+        raise APIError(
+            code="invalid_payload",
+            message="Regime weights can only be assigned to existing ensemble members.",
+            details={"unknown_policy_ids": unknown},
+        )
+
+    existing_rows = list(
+        session.exec(
+            select(EnsembleRegimeWeight).where(
+                EnsembleRegimeWeight.ensemble_id == int(ensemble.id or 0)
+            )
+        ).all()
+    )
+    for row in existing_rows:
+        session.delete(row)
+
+    for regime, values in normalized.items():
+        total = float(sum(weight for weight in values.values() if weight > 0))
+        if total <= 0:
+            continue
+        for policy_id in sorted(values):
+            weight = float(values[policy_id]) / total
+            session.add(
+                EnsembleRegimeWeight(
+                    ensemble_id=int(ensemble.id or 0),
+                    regime=regime,
+                    policy_id=int(policy_id),
+                    weight=weight,
+                )
+            )
+    session.commit()
+    return list_policy_ensemble_regime_weights(
+        session,
+        ensemble_id=int(ensemble.id or 0),
+    )

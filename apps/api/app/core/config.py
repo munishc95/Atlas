@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     risk_overlay_corr_clamp_enabled: bool = False
     risk_overlay_corr_threshold: float = 0.65
     risk_overlay_corr_reduce_factor: float = 0.5
+    no_trade_enabled: bool = True
+    no_trade_regimes: list[str] = Field(default_factory=lambda: ["HIGH_VOL"])
+    no_trade_max_realized_vol_annual: float = 0.28
+    no_trade_min_breadth_pct: float = 35.0
+    no_trade_min_trend_strength: float = 15.0
+    no_trade_cooldown_trading_days: int = 2
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     upstox_access_token: str | None = None

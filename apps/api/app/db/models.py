@@ -215,6 +215,26 @@ class PolicyEnsembleMember(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class EnsembleRegimeWeight(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_ensembleregimeweight_ensemble_regime_policy",
+            "ensemble_id",
+            "regime",
+            "policy_id",
+            unique=True,
+        ),
+        Index("ix_ensembleregimeweight_ensemble_regime", "ensemble_id", "regime"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ensemble_id: int = Field(foreign_key="policyensemble.id", index=True)
+    regime: str = Field(index=True, max_length=24)
+    policy_id: int = Field(foreign_key="policy.id", index=True)
+    weight: float = 1.0
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class PolicyHealthSnapshot(SQLModel, table=True):
     __table_args__ = (
         Index(
@@ -254,6 +274,26 @@ class PaperRun(SQLModel, table=True):
     scan_truncated: bool = False
     summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     cost_summary_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class NoTradeSnapshot(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_notradesnapshot_bundle_timeframe_ts", "bundle_id", "timeframe", "ts"),
+        Index("ix_notradesnapshot_triggered_ts", "triggered", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utc_now, index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    regime: str | None = Field(default=None, max_length=24)
+    triggered: bool = Field(default=False, index=True)
+    reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    breadth_pct: float = 0.0
+    realized_vol: float = 0.0
+    trend_strength: float = 0.0
+    cooldown_remaining: int = 0
     created_at: datetime = Field(default_factory=utc_now)
 
 

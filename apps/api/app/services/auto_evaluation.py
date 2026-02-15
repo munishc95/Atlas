@@ -598,6 +598,21 @@ def _candidate_runs_in_window(
     return filtered
 
 
+def _no_trade_frequency(runs: list[PaperRun]) -> tuple[float, bool]:
+    if not runs:
+        return 0.0, False
+    triggered = 0
+    latest_triggered = False
+    for index, row in enumerate(runs):
+        summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+        flag = bool(summary.get("no_trade_triggered", False))
+        if flag:
+            triggered += 1
+        if index == len(runs) - 1:
+            latest_triggered = flag
+    return float(triggered / max(1, len(runs))), latest_triggered
+
+
 def _latest_quality(session: Session, *, bundle_id: int, timeframe: str) -> tuple[str | None, float]:
     row = session.exec(
         select(DataQualityReport)
@@ -797,7 +812,9 @@ def execute_auto_evaluation(
     )
     active_runs = _candidate_runs_in_window(all_window_runs, candidate=active_candidate)
     active_metrics = compute_health_metrics(active_runs, window_days=lookback_days)
-    active_score = _metrics_score(active_metrics)
+    active_no_trade_frequency, latest_active_no_trade = _no_trade_frequency(active_runs)
+    no_trade_penalty_weight = 0.20
+    active_score = _metrics_score(active_metrics) - (active_no_trade_frequency * no_trade_penalty_weight)
     active_trade_count = int(_safe_float(active_metrics.get("trade_count"), 0.0))
     active_run_count = len(active_runs)
 
@@ -933,7 +950,10 @@ def execute_auto_evaluation(
         )
         metrics = summary.get("metrics", {}) if isinstance(summary.get("metrics"), dict) else {}
         trade_count = int(summary.get("trade_count", 0))
-        candidate_score = _safe_float(summary.get("score"), _metrics_score(metrics))
+        candidate_no_trade_frequency = _safe_float(summary.get("no_trade_frequency"), 0.0)
+        candidate_score = _safe_float(summary.get("score"), _metrics_score(metrics)) - (
+            candidate_no_trade_frequency * no_trade_penalty_weight
+        )
         max_dd = abs(_safe_float(metrics.get("max_drawdown"), 0.0))
         dd_limit = active_max_dd_abs * max_dd_multiplier if active_max_dd_abs > 0 else settings.kill_switch_drawdown
         dd_pass = max_dd <= dd_limit
@@ -959,6 +979,7 @@ def execute_auto_evaluation(
                 "metrics": metrics,
                 "trade_count": trade_count,
                 "score": candidate_score,
+                "no_trade_frequency": candidate_no_trade_frequency,
                 "passes": accepted,
                 "reasons": item_reasons,
                 "engine_version": summary.get("engine_version"),
@@ -1003,6 +1024,12 @@ def execute_auto_evaluation(
             reasons.append("SWITCH: challenger policy improved score with acceptable drawdown.")
     else:
         reasons.append("KEEP: no challenger passed all deterministic gates.")
+    if latest_active_no_trade and recommended_action == ACTION_SWITCH:
+        recommended_action = ACTION_KEEP
+        recommended_entity_type = None
+        recommended_policy_id = None
+        recommended_ensemble_id = None
+        reasons.append("KEEP: latest run was no-trade; switch deferred until an executable day.")
 
     switch_gates = _switch_gates(session, asof_day=asof_day, settings_map=settings_map, settings=settings)
     if not quality_ok:
@@ -1054,6 +1081,8 @@ def execute_auto_evaluation(
             "metrics": active_metrics,
             "trade_count": active_trade_count,
             "run_count": active_run_count,
+            "no_trade_frequency": active_no_trade_frequency,
+            "latest_no_trade": latest_active_no_trade,
         },
         "challengers": challenger_rows,
         "gates": {

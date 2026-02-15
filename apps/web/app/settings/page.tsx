@@ -15,8 +15,22 @@ export default function SettingsPage() {
     queryKey: qk.settings,
     queryFn: async () => (await atlasApi.settings()).data,
   });
+  const operateStatusQuery = useQuery({
+    queryKey: qk.operateStatus,
+    queryFn: async () => (await atlasApi.operateStatus()).data,
+  });
+  const activeEnsembleId =
+    typeof operateStatusQuery.data?.active_ensemble_id === "number"
+      ? operateStatusQuery.data.active_ensemble_id
+      : null;
+  const activeEnsembleQuery = useQuery({
+    queryKey: qk.ensemble(activeEnsembleId),
+    queryFn: async () => (await atlasApi.ensembleById(Number(activeEnsembleId))).data,
+    enabled: activeEnsembleId !== null,
+  });
 
   const [form, setForm] = useState<Record<string, string>>({});
+  const [regimeWeightsText, setRegimeWeightsText] = useState("{}");
 
   useEffect(() => {
     if (!settingsQuery.data) {
@@ -28,6 +42,15 @@ export default function SettingsPage() {
     }
     setForm(nextForm);
   }, [settingsQuery.data]);
+
+  useEffect(() => {
+    if (!activeEnsembleQuery.data) {
+      setRegimeWeightsText("{}");
+      return;
+    }
+    const payload = activeEnsembleQuery.data.regime_weights ?? {};
+    setRegimeWeightsText(JSON.stringify(payload, null, 2));
+  }, [activeEnsembleQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -130,6 +153,15 @@ export default function SettingsPage() {
         risk_overlay_corr_clamp_enabled: form.risk_overlay_corr_clamp_enabled === "true",
         risk_overlay_corr_threshold: Number(form.risk_overlay_corr_threshold),
         risk_overlay_corr_reduce_factor: Number(form.risk_overlay_corr_reduce_factor),
+        no_trade_enabled: form.no_trade_enabled === "true",
+        no_trade_regimes: String(form.no_trade_regimes ?? "")
+          .split(",")
+          .map((value) => value.trim().toUpperCase())
+          .filter(Boolean),
+        no_trade_max_realized_vol_annual: Number(form.no_trade_max_realized_vol_annual),
+        no_trade_min_breadth_pct: Number(form.no_trade_min_breadth_pct),
+        no_trade_min_trend_strength: Number(form.no_trade_min_trend_strength),
+        no_trade_cooldown_trading_days: Number(form.no_trade_cooldown_trading_days),
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -141,6 +173,34 @@ export default function SettingsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not save settings");
+    },
+  });
+  const saveRegimeWeightsMutation = useMutation({
+    mutationFn: async () => {
+      if (activeEnsembleId === null) {
+        throw new Error("No active ensemble selected.");
+      }
+      let parsed: Record<string, Record<string, number>> = {};
+      try {
+        const candidate = JSON.parse(regimeWeightsText);
+        if (candidate && typeof candidate === "object") {
+          parsed = candidate as Record<string, Record<string, number>>;
+        }
+      } catch (error) {
+        throw new Error("Regime weights must be valid JSON.");
+      }
+      return (await atlasApi.putEnsembleRegimeWeights(activeEnsembleId, parsed)).data;
+    },
+    onSuccess: () => {
+      toast.success("Regime weights saved");
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      if (activeEnsembleId !== null) {
+        queryClient.invalidateQueries({ queryKey: qk.ensemble(activeEnsembleId) });
+        queryClient.invalidateQueries({ queryKey: qk.ensembles(1, 100, null) });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not save regime weights");
     },
   });
 
@@ -264,6 +324,12 @@ export default function SettingsPage() {
       { key: "risk_overlay_corr_clamp_enabled", label: "Risk overlay correlation clamp enabled (true/false)" },
       { key: "risk_overlay_corr_threshold", label: "Risk overlay correlation threshold" },
       { key: "risk_overlay_corr_reduce_factor", label: "Risk overlay correlation reduce factor" },
+      { key: "no_trade_enabled", label: "No-trade gate enabled (true/false)" },
+      { key: "no_trade_regimes", label: "No-trade blocked regimes (comma-separated)" },
+      { key: "no_trade_max_realized_vol_annual", label: "No-trade max realized annual vol" },
+      { key: "no_trade_min_breadth_pct", label: "No-trade min breadth (%)" },
+      { key: "no_trade_min_trend_strength", label: "No-trade min trend strength" },
+      { key: "no_trade_cooldown_trading_days", label: "No-trade cooldown (trading days)" },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],
@@ -323,6 +389,34 @@ export default function SettingsPage() {
             </p>
           </>
         )}
+      </section>
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Regime Ensemble Weights</h3>
+        <p className="mt-1 text-sm text-muted">
+          Configure regime-specific weights for the active ensemble.
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          Active ensemble:{" "}
+          {activeEnsembleQuery.data?.name
+            ? `${activeEnsembleQuery.data.name} (#${activeEnsembleQuery.data.id})`
+            : "-"}
+        </p>
+        <label className="mt-3 block text-sm text-muted">
+          Regime weights JSON
+          <textarea
+            className="focus-ring mt-1 min-h-[180px] w-full rounded-xl border border-border px-3 py-2 font-mono text-xs"
+            value={regimeWeightsText}
+            onChange={(event) => setRegimeWeightsText(event.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => saveRegimeWeightsMutation.mutate()}
+          className="focus-ring mt-3 rounded-xl border border-border px-4 py-2 text-sm text-muted"
+          disabled={saveRegimeWeightsMutation.isPending || activeEnsembleId === null}
+        >
+          {saveRegimeWeightsMutation.isPending ? "Saving..." : "Save Regime Weights"}
+        </button>
       </section>
     </div>
   );

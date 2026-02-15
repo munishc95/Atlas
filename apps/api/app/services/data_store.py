@@ -35,6 +35,16 @@ class DataStore:
         self._adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
         self._bundle_adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
 
+    def _connect_duckdb(self) -> duckdb.DuckDBPyConnection:
+        # Windows can keep file handles locked when another local process has opened the DB;
+        # fallback to in-memory because queries read directly from Parquet paths.
+        if self.duckdb_path:
+            try:
+                return duckdb.connect(self.duckdb_path, read_only=True)
+            except duckdb.IOException:
+                pass
+        return duckdb.connect(database=":memory:")
+
     def _parquet_path(self, symbol: str, timeframe: str) -> Path:
         return self.parquet_root / f"symbol={symbol}" / f"timeframe={timeframe}" / "ohlcv.parquet"
 
@@ -462,7 +472,7 @@ class DataStore:
         if not path.exists():
             return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
-        with duckdb.connect(self.duckdb_path) as conn:
+        with self._connect_duckdb() as conn:
             query = f"SELECT * FROM read_parquet('{path.as_posix()}')"
             clauses: list[str] = []
             params: list[object] = []
@@ -570,7 +580,7 @@ class DataStore:
         if not path.exists():
             return pd.DataFrame()
 
-        with duckdb.connect(self.duckdb_path) as conn:
+        with self._connect_duckdb() as conn:
             query = f"SELECT * FROM read_parquet('{path.as_posix()}')"
             clauses: list[str] = []
             params: list[object] = []
