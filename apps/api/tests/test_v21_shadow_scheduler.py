@@ -9,7 +9,15 @@ import pandas as pd
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import DatasetBundle, PaperOrder, PaperPosition, PaperRun, PaperState, ShadowPaperState
+from app.db.models import (
+    DatasetBundle,
+    PaperOrder,
+    PaperPosition,
+    PaperRun,
+    PaperState,
+    Policy,
+    ShadowPaperState,
+)
 from app.db.session import engine, init_db
 from app.services.data_store import DataStore
 from app.services.operate_scheduler import compute_next_scheduled_run_ist, run_auto_operate_once
@@ -374,3 +382,75 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
     )
     assert monday_next is not None
     assert monday_next.startswith("2026-02-16T15:35")
+
+
+def test_operate_scheduler_auto_eval_weekly_queues_once() -> None:
+    init_db()
+    settings = get_settings()
+
+    with Session(engine) as session:
+        state = _reset_live_state(session, settings)
+        bundle = DatasetBundle(
+            name=f"bundle-auto-eval-{uuid4().hex[:8]}",
+            provider="test",
+            symbols_json=["NIFTY500"],
+            supported_timeframes_json=["1d"],
+        )
+        policy = Policy(
+            name=f"policy-auto-eval-{uuid4().hex[:6]}",
+            definition_json={
+                "universe": {"bundle_id": None, "symbol_scope": "all"},
+                "timeframes": ["1d"],
+                "regime_map": {"TREND_UP": {"strategy_key": "trend_breakout"}},
+            },
+        )
+        session.add(bundle)
+        session.add(policy)
+        session.commit()
+        session.refresh(bundle)
+        session.refresh(policy)
+        assert bundle.id is not None
+        assert policy.id is not None
+        policy.definition_json = {
+            **(policy.definition_json or {}),
+            "universe": {"bundle_id": int(bundle.id), "symbol_scope": "all"},
+        }
+        session.add(policy)
+        session.commit()
+
+        state.settings_json = {
+            **(state.settings_json or {}),
+            "operate_auto_run_enabled": False,
+            "operate_auto_eval_enabled": True,
+            "operate_auto_eval_frequency": "WEEKLY",
+            "operate_auto_eval_day_of_week": 0,
+            "operate_auto_eval_time_ist": "09:00",
+            "operate_last_auto_eval_date": None,
+            "active_policy_id": int(policy.id),
+        }
+        session.add(state)
+        session.commit()
+
+        queue = _FakeQueue()
+        now_ist = datetime(2026, 2, 16, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))  # Monday
+        triggered = run_auto_operate_once(
+            session=session,
+            queue=queue,  # type: ignore[arg-type]
+            settings=settings,
+            now_ist=now_ist,
+        )
+        assert triggered is True
+        assert [call[0] for call in queue.calls] == ["app.jobs.tasks.run_auto_eval_job"]
+
+        refreshed = session.get(PaperState, 1)
+        assert refreshed is not None
+        assert str((refreshed.settings_json or {}).get("operate_last_auto_eval_date")) == "2026-02-16"
+
+        second = run_auto_operate_once(
+            session=session,
+            queue=queue,  # type: ignore[arg-type]
+            settings=settings,
+            now_ist=now_ist + timedelta(minutes=15),
+        )
+        assert second is False
+        assert len(queue.calls) == 1

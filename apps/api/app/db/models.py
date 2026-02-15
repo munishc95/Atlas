@@ -347,6 +347,46 @@ class PolicyShadowRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class AutoEvalRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_autoevalrun_ts", "ts"),
+        Index("ix_autoevalrun_bundle_ts", "bundle_id", "ts"),
+        Index("ix_autoevalrun_active_policy_ts", "active_policy_id", "ts"),
+        Index("ix_autoevalrun_reco_action_ts", "recommended_action", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utc_now, index=True)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    active_policy_id: int = Field(foreign_key="policy.id", index=True)
+    recommended_action: str = Field(default="KEEP", index=True, max_length=32)
+    recommended_policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    score_table_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    lookback_days: int = 20
+    digest: str = Field(default="", index=True, max_length=128)
+    status: str = Field(default="SUCCEEDED", max_length=16, index=True)
+    auto_switch_attempted: bool = False
+    auto_switch_applied: bool = False
+    details_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+class PolicySwitchEvent(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_policyswitchevent_ts", "ts"),
+        Index("ix_policyswitchevent_autoeval_ts", "auto_eval_id", "ts"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = Field(default_factory=utc_now, index=True)
+    from_policy_id: int = Field(foreign_key="policy.id", index=True)
+    to_policy_id: int = Field(foreign_key="policy.id", index=True)
+    reason: str = Field(default="", max_length=512)
+    auto_eval_id: int | None = Field(default=None, foreign_key="autoevalrun.id", index=True)
+    cooldown_state_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    mode: str = Field(default="MANUAL", max_length=16, index=True)
+
+
 class ReplayRun(SQLModel, table=True):
     __table_args__ = (
         Index("ix_replayrun_policy_created", "policy_id", "created_at"),

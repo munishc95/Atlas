@@ -403,6 +403,34 @@ One-button Ops orchestration:
   - `Run Today (Updates -> Quality -> Step -> Report)`
   - completion summary includes report id and direct PDF download.
 
+## Closed-Loop Learning + Controlled Switching (v2.5)
+
+Atlas now supports scheduled, explainable policy governance:
+
+- Auto-evaluation loop:
+  - compares active policy vs challengers on a rolling trading-day lookback
+  - deterministic recommendation: `KEEP`, `SWITCH`, or `SHADOW_ONLY`
+  - stores full audit trail in `AutoEvalRun` (`reasons_json`, `score_table_json`, `digest`)
+- Safety gates before switching:
+  - minimum sample/trade gates
+  - score-margin + max drawdown tolerance gates
+  - cooldown in trading days
+  - max switches in rolling 30 days
+  - data quality and safe-mode shadow-only gate checks
+- Controlled switching:
+  - auto-switch is off by default (`operate_auto_eval_auto_switch=false`)
+  - if enabled, switching only executes in live mode and only when all gates pass
+  - every switch is persisted to `PolicySwitchEvent`
+- Scheduler integration:
+  - calendar-aware auto-evaluation scheduling (`DAILY` or `WEEKLY`)
+  - dedupe key by trading date (`YYYY-MM-DD::AUTO_EVAL`)
+  - tracked via `operate_last_auto_eval_date`
+- Ops UI:
+  - new `Learning` section with latest recommendation, `Run Evaluation Now`, and `Apply Recommended Switch`
+  - switch history drawer for recent policy transitions
+- Policy detail UI:
+  - shows recent auto-evaluation outcomes and keep/demote reasons
+
 ## Universe Bundles (first-class scope)
 
 `DatasetBundle` is the explicit source of truth for universe membership:
@@ -482,6 +510,10 @@ A configurable cost model is available for both backtester and paper execution:
 - `POST /api/paper/signals/preview`
 - `GET /api/operate/status`
 - `POST /api/operate/run`
+- `POST /api/operate/auto-eval/run`
+- `GET /api/operate/auto-eval/history`
+- `GET /api/operate/auto-eval/{id}`
+- `GET /api/operate/policy-switches`
 - `POST /api/replay/run`
 - `GET /api/replay/runs`
 - `GET /api/replay/runs/{id}`

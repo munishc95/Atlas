@@ -213,6 +213,42 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_ts "
+                "ON autoevalrun (ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_bundle_ts "
+                "ON autoevalrun (bundle_id, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_active_policy_ts "
+                "ON autoevalrun (active_policy_id, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_reco_action_ts "
+                "ON autoevalrun (recommended_action, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyswitchevent_ts "
+                "ON policyswitchevent (ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyswitchevent_autoeval_ts "
+                "ON policyswitchevent (auto_eval_id, ts)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_monthlyreport_month_bundle_policy "
                 "ON monthlyreport (month, bundle_id, policy_id)"
             )

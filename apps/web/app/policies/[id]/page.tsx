@@ -32,6 +32,16 @@ export default function PolicyDetailPage() {
     queryFn: async () => (await atlasApi.policyHealth(policyId as number, 60, true)).data,
     enabled: policyId !== null,
   });
+  const autoEvalHistoryQuery = useQuery({
+    queryKey: qk.operateAutoEvalHistory(1, 10, null, policyId),
+    queryFn: async () =>
+      (
+        await atlasApi.operateAutoEvalHistory(1, 10, {
+          policy_id: policyId as number,
+        })
+      ).data,
+    enabled: policyId !== null,
+  });
 
   if (policyId === null) {
     return <EmptyState title="Invalid policy id" action="Open this page from a valid policy link." />;
@@ -162,6 +172,46 @@ export default function PolicyDetailPage() {
             </div>
           </div>
         </article>
+      </section>
+
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Recent evaluation outcomes</h3>
+        {autoEvalHistoryQuery.isLoading ? (
+          <LoadingState label="Loading evaluation outcomes" />
+        ) : autoEvalHistoryQuery.isError ? (
+          <ErrorState
+            title="Could not load evaluation outcomes"
+            action="Retry to fetch latest keep/demote recommendations."
+            onRetry={() => void autoEvalHistoryQuery.refetch()}
+          />
+        ) : (autoEvalHistoryQuery.data ?? []).length === 0 ? (
+          <EmptyState title="No auto-evaluations yet" action="Run auto evaluation from Ops." />
+        ) : (
+          <div className="mt-3 overflow-hidden rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface text-left text-muted">
+                <tr>
+                  <th className="px-3 py-2">Timestamp</th>
+                  <th className="px-3 py-2">Action</th>
+                  <th className="px-3 py-2">Recommended policy</th>
+                  <th className="px-3 py-2">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(autoEvalHistoryQuery.data ?? []).map((row) => (
+                  <tr key={row.id} className="border-t border-border">
+                    <td className="px-3 py-2">{row.ts}</td>
+                    <td className="px-3 py-2">{row.recommended_action}</td>
+                    <td className="px-3 py-2">{row.recommended_policy_id ?? "-"}</td>
+                    <td className="px-3 py-2 text-xs text-muted">
+                      {(row.reasons_json ?? []).slice(0, 2).join(" ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );

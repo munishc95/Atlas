@@ -287,6 +287,12 @@ export type ApiOperateStatus = {
   auto_run_include_data_updates?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
+  auto_eval_enabled?: boolean;
+  auto_eval_frequency?: string;
+  auto_eval_day_of_week?: number;
+  auto_eval_time_ist?: string;
+  last_auto_eval_date?: string | null;
+  next_auto_eval_run_ist?: string | null;
   active_policy_id?: number | null;
   active_policy_name?: string | null;
   active_bundle_id?: number | null;
@@ -402,6 +408,12 @@ export type ApiOperateHealth = {
   auto_run_include_data_updates?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
+  auto_eval_enabled?: boolean;
+  auto_eval_frequency?: string;
+  auto_eval_day_of_week?: number;
+  auto_eval_time_ist?: string;
+  last_auto_eval_date?: string | null;
+  next_auto_eval_run_ist?: string | null;
   active_bundle_id?: number | null;
   active_timeframe: string;
   latest_data_quality?: ApiDataQualityReport | null;
@@ -429,6 +441,34 @@ export type ApiOperateRunSummary = {
     date?: string;
   };
   steps?: Array<Record<string, unknown>>;
+};
+
+export type ApiAutoEvalRun = {
+  id: number;
+  ts: string;
+  bundle_id: number;
+  active_policy_id: number;
+  recommended_action: "KEEP" | "SWITCH" | "SHADOW_ONLY";
+  recommended_policy_id?: number | null;
+  reasons_json: string[];
+  score_table_json: Record<string, unknown>;
+  lookback_days: number;
+  digest: string;
+  status: string;
+  auto_switch_attempted: boolean;
+  auto_switch_applied: boolean;
+  details_json: Record<string, unknown>;
+};
+
+export type ApiPolicySwitchEvent = {
+  id: number;
+  ts: string;
+  from_policy_id: number;
+  to_policy_id: number;
+  reason: string;
+  auto_eval_id?: number | null;
+  cooldown_state_json: Record<string, unknown>;
+  mode: string;
 };
 
 export type ApiUniverseBundle = {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import threading
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -18,10 +18,18 @@ from app.services.trading_calendar import (
     compute_next_scheduled_run_ist as calendar_next_scheduled_run_ist,
     get_session as calendar_get_session,
     is_trading_day,
+    next_trading_day,
     parse_time_hhmm,
 )
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def compute_next_scheduled_run_ist(
@@ -41,6 +49,75 @@ def compute_next_scheduled_run_ist(
         now_ist=now_ist,
         settings=settings or get_settings(),
     )
+
+
+def _weekly_eval_day_for_week(
+    *,
+    target_day: date,
+    day_of_week: int,
+    segment: str,
+    settings: Settings,
+) -> date:
+    anchor = target_day - timedelta(days=target_day.weekday()) + timedelta(days=day_of_week % 7)
+    if is_trading_day(anchor, segment=segment, settings=settings):
+        return anchor
+    return next_trading_day(anchor, segment=segment, settings=settings)
+
+
+def _weekly_eval_matches_day(
+    *,
+    day: date,
+    day_of_week: int,
+    segment: str,
+    settings: Settings,
+) -> bool:
+    return day == _weekly_eval_day_for_week(
+        target_day=day,
+        day_of_week=day_of_week,
+        segment=segment,
+        settings=settings,
+    )
+
+
+def compute_next_auto_eval_run_ist(
+    *,
+    auto_eval_enabled: bool,
+    auto_eval_frequency: str,
+    auto_eval_day_of_week: int,
+    auto_eval_time_ist: str,
+    last_run_date: str | None,
+    segment: str = "EQUITIES",
+    settings: Settings | None = None,
+    now_ist: datetime | None = None,
+) -> str | None:
+    if not auto_eval_enabled:
+        return None
+    cfg = settings or get_settings()
+    now = now_ist or datetime.now(IST_ZONE)
+    run_time = parse_time_hhmm(auto_eval_time_ist, default=cfg.operate_auto_eval_time_ist)
+    frequency = str(auto_eval_frequency or "WEEKLY").strip().upper()
+
+    for offset in range(0, 40):
+        day = now.date() + timedelta(days=offset)
+        if not is_trading_day(day, segment=segment, settings=cfg):
+            continue
+        if frequency == "DAILY":
+            due = True
+        else:
+            due = _weekly_eval_matches_day(
+                day=day,
+                day_of_week=auto_eval_day_of_week,
+                segment=segment,
+                settings=cfg,
+            )
+        if not due:
+            continue
+        if day == now.date() and now.time() >= run_time:
+            continue
+        if isinstance(last_run_date, str) and last_run_date == day.isoformat():
+            continue
+        return datetime.combine(day, run_time, tzinfo=IST_ZONE).isoformat()
+    return None
 
 
 def _resolve_scheduler_context(session: Session) -> dict[str, Any]:
@@ -109,105 +186,204 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
         return False
 
     state_settings = context["state_settings"]
-    auto_run_enabled = bool(state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled))
-    if not auto_run_enabled:
+    segment = str(state_settings.get("trading_calendar_segment", settings.trading_calendar_segment))
+    now = now_ist or datetime.now(IST_ZONE)
+    today = now.date()
+    bundle_id = context["bundle_id"]
+    timeframe = str(context["timeframe"] or "1d")
+    regime = str(context["regime"] or "TREND_UP")
+    policy_id = context["policy_id"]
+    if not is_trading_day(today, segment=segment, settings=settings):
         return False
+
+    triggered = False
+    merged = dict(state_settings)
+
+    auto_run_enabled = bool(state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled))
     include_data_updates = bool(
         state_settings.get(
             "operate_auto_run_include_data_updates",
             settings.operate_auto_run_include_data_updates,
         )
     )
-
     run_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)),
         default=settings.operate_auto_run_time_ist,
     )
-    segment = str(state_settings.get("trading_calendar_segment", settings.trading_calendar_segment))
-    now = now_ist or datetime.now(IST_ZONE)
-    today = now.date()
-    if not is_trading_day(today, segment=segment, settings=settings) or now.time() < run_time:
-        return False
-
     last_run_date = state_settings.get("operate_last_auto_run_date")
-    if isinstance(last_run_date, str) and last_run_date == today.isoformat():
+    if auto_run_enabled and now.time() >= run_time:
+        if not (isinstance(last_run_date, str) and last_run_date == today.isoformat()):
+            queued_jobs: dict[str, str] = {}
+            if isinstance(bundle_id, int) and bundle_id > 0 and include_data_updates:
+                queued_jobs["data_updates"] = _enqueue_job(
+                    session=session,
+                    queue=queue,
+                    settings=settings,
+                    job_type="data_updates",
+                    task_path="app.jobs.tasks.run_data_updates_job",
+                    payload={"bundle_id": bundle_id, "timeframe": timeframe},
+                )
+            if isinstance(bundle_id, int) and bundle_id > 0:
+                queued_jobs["data_quality"] = _enqueue_job(
+                    session=session,
+                    queue=queue,
+                    settings=settings,
+                    job_type="data_quality",
+                    task_path="app.jobs.tasks.run_data_quality_job",
+                    payload={"bundle_id": bundle_id, "timeframe": timeframe},
+                )
+
+            queued_jobs["paper_step"] = _enqueue_job(
+                session=session,
+                queue=queue,
+                settings=settings,
+                job_type="paper_step",
+                task_path="app.jobs.tasks.run_paper_step_job",
+                payload={
+                    "regime": regime,
+                    "bundle_id": bundle_id,
+                    "auto_generate_signals": True,
+                    "signals": [],
+                    "mark_prices": {},
+                    "asof": now.astimezone(ZoneInfo("UTC")).isoformat(),
+                },
+            )
+
+            queued_jobs["daily_report"] = _enqueue_job(
+                session=session,
+                queue=queue,
+                settings=settings,
+                job_type="daily_report",
+                task_path="app.jobs.tasks.run_daily_report_job",
+                payload={
+                    "date": today.isoformat(),
+                    "bundle_id": bundle_id,
+                    "policy_id": policy_id,
+                },
+            )
+
+            merged["operate_last_auto_run_date"] = today.isoformat()
+            emit_operate_event(
+                session,
+                severity="INFO",
+                category="SYSTEM",
+                message="operate_auto_run_triggered",
+                details={
+                    "date": today.isoformat(),
+                    "bundle_id": bundle_id,
+                    "timeframe": timeframe,
+                    "policy_id": policy_id,
+                    "include_data_updates": include_data_updates,
+                    "calendar_segment": segment,
+                    "session": calendar_get_session(today, segment=segment, settings=settings),
+                    "queued_jobs": queued_jobs,
+                },
+                correlation_id=queued_jobs.get("paper_step"),
+            )
+            triggered = True
+
+    auto_eval_enabled = bool(
+        state_settings.get("operate_auto_eval_enabled", settings.operate_auto_eval_enabled)
+    )
+    auto_eval_frequency = str(
+        state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency)
+    ).strip().upper()
+    auto_eval_day_of_week = _safe_int(
+        state_settings.get("operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week),
+        settings.operate_auto_eval_day_of_week,
+    ) % 7
+    auto_eval_time = parse_time_hhmm(
+        str(state_settings.get("operate_auto_eval_time_ist", settings.operate_auto_eval_time_ist)),
+        default=settings.operate_auto_eval_time_ist,
+    )
+    auto_eval_last_date = state_settings.get("operate_last_auto_eval_date")
+    auto_eval_due = False
+    if auto_eval_frequency == "DAILY":
+        auto_eval_due = True
+    else:
+        auto_eval_due = _weekly_eval_matches_day(
+            day=today,
+            day_of_week=auto_eval_day_of_week,
+            segment=segment,
+            settings=settings,
+        )
+
+    if (
+        auto_eval_enabled
+        and auto_eval_due
+        and now.time() >= auto_eval_time
+        and not (isinstance(auto_eval_last_date, str) and auto_eval_last_date == today.isoformat())
+    ):
+        dedupe_key = f"{today.isoformat()}::AUTO_EVAL"
+        queued_eval_id: str | None = None
+        if isinstance(bundle_id, int) and bundle_id > 0 and isinstance(policy_id, int) and policy_id > 0:
+            queued_eval_id = _enqueue_job(
+                session=session,
+                queue=queue,
+                settings=settings,
+                job_type="auto_eval",
+                task_path="app.jobs.tasks.run_auto_eval_job",
+                payload={
+                    "bundle_id": bundle_id,
+                    "active_policy_id": policy_id,
+                    "timeframe": timeframe,
+                    "lookback_trading_days": _safe_int(
+                        state_settings.get(
+                            "operate_auto_eval_lookback_trading_days",
+                            settings.operate_auto_eval_lookback_trading_days,
+                        ),
+                        settings.operate_auto_eval_lookback_trading_days,
+                    ),
+                    "min_trades": _safe_int(
+                        state_settings.get(
+                            "operate_auto_eval_min_trades",
+                            settings.operate_auto_eval_min_trades,
+                        ),
+                        settings.operate_auto_eval_min_trades,
+                    ),
+                    "asof_date": today.isoformat(),
+                    "seed": 7,
+                },
+            )
+        else:
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="POLICY",
+                message="operate_auto_eval_skipped_missing_context",
+                details={
+                    "trading_date": today.isoformat(),
+                    "dedupe_key": dedupe_key,
+                    "bundle_id": bundle_id,
+                    "active_policy_id": policy_id,
+                },
+                correlation_id=None,
+            )
+        merged["operate_last_auto_eval_date"] = today.isoformat()
+        if queued_eval_id is not None:
+            emit_operate_event(
+                session,
+                severity="INFO",
+                category="SYSTEM",
+                message="operate_auto_eval_triggered",
+                details={
+                    "trading_date": today.isoformat(),
+                    "dedupe_key": dedupe_key,
+                    "bundle_id": bundle_id,
+                    "timeframe": timeframe,
+                    "active_policy_id": policy_id,
+                    "frequency": auto_eval_frequency,
+                    "calendar_segment": segment,
+                    "queued_job_id": queued_eval_id,
+                },
+                correlation_id=queued_eval_id,
+            )
+        triggered = True
+
+    if not triggered:
         return False
-
-    bundle_id = context["bundle_id"]
-    timeframe = str(context["timeframe"] or "1d")
-    regime = str(context["regime"] or "TREND_UP")
-    policy_id = context["policy_id"]
-
-    queued_jobs: dict[str, str] = {}
-    if isinstance(bundle_id, int) and bundle_id > 0 and include_data_updates:
-        queued_jobs["data_updates"] = _enqueue_job(
-            session=session,
-            queue=queue,
-            settings=settings,
-            job_type="data_updates",
-            task_path="app.jobs.tasks.run_data_updates_job",
-            payload={"bundle_id": bundle_id, "timeframe": timeframe},
-        )
-    if isinstance(bundle_id, int) and bundle_id > 0:
-        queued_jobs["data_quality"] = _enqueue_job(
-            session=session,
-            queue=queue,
-            settings=settings,
-            job_type="data_quality",
-            task_path="app.jobs.tasks.run_data_quality_job",
-            payload={"bundle_id": bundle_id, "timeframe": timeframe},
-        )
-
-    queued_jobs["paper_step"] = _enqueue_job(
-        session=session,
-        queue=queue,
-        settings=settings,
-        job_type="paper_step",
-        task_path="app.jobs.tasks.run_paper_step_job",
-        payload={
-            "regime": regime,
-            "bundle_id": bundle_id,
-            "auto_generate_signals": True,
-            "signals": [],
-            "mark_prices": {},
-            "asof": now.astimezone(ZoneInfo("UTC")).isoformat(),
-        },
-    )
-
-    queued_jobs["daily_report"] = _enqueue_job(
-        session=session,
-        queue=queue,
-        settings=settings,
-        job_type="daily_report",
-        task_path="app.jobs.tasks.run_daily_report_job",
-        payload={
-            "date": today.isoformat(),
-            "bundle_id": bundle_id,
-            "policy_id": policy_id,
-        },
-    )
-
-    merged = dict(state_settings)
-    merged["operate_last_auto_run_date"] = today.isoformat()
     state.settings_json = merged
     session.add(state)
-    emit_operate_event(
-        session,
-        severity="INFO",
-        category="SYSTEM",
-        message="operate_auto_run_triggered",
-        details={
-            "date": today.isoformat(),
-            "bundle_id": bundle_id,
-            "timeframe": timeframe,
-            "policy_id": policy_id,
-            "include_data_updates": include_data_updates,
-            "calendar_segment": segment,
-            "session": calendar_get_session(today, segment=segment, settings=settings),
-            "queued_jobs": queued_jobs,
-        },
-        correlation_id=queued_jobs.get("paper_step"),
-    )
     session.commit()
     return True
 

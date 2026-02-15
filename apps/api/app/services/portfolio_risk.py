@@ -89,6 +89,12 @@ def resolve_portfolio_risk_config(
     else:
         enabled = bool(operate_mode == "live")
 
+    # Keep execution guardrails deterministic: risk overlay is a live-operate control.
+    # Persisted state may carry old `risk_overlay_enabled=true` from earlier runs/tests,
+    # but offline mode should never apply live exposure caps by accident.
+    if operate_mode != "live":
+        enabled = False
+
     min_scale = max(0.0, _cfg_float(settings, overrides, "risk_overlay_min_scale", settings.risk_overlay_min_scale))
     max_scale = max(min_scale, _cfg_float(settings, overrides, "risk_overlay_max_scale", settings.risk_overlay_max_scale))
     corr_reduce = _cfg_float(

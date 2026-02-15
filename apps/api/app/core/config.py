@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     operate_auto_run_enabled: bool = False
     operate_auto_run_time_ist: str = "15:35"
     operate_auto_run_include_data_updates: bool = True
+    operate_auto_eval_enabled: bool = True
+    operate_auto_eval_frequency: str = "WEEKLY"
+    operate_auto_eval_day_of_week: int = 0
+    operate_auto_eval_time_ist: str = "16:00"
+    operate_auto_eval_lookback_trading_days: int = 20
+    operate_auto_eval_min_trades: int = 8
+    operate_auto_eval_cooldown_trading_days: int = 10
+    operate_auto_eval_max_switches_per_30d: int = 2
+    operate_auto_eval_auto_switch: bool = False
+    operate_auto_eval_shadow_only_gate: bool = True
     operate_max_stale_minutes_1d: int = 2880
     operate_max_stale_minutes_4h_ish: int = 720
     operate_max_gap_bars: int = 3

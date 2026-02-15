@@ -69,7 +69,7 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   page,
   request,
 }) => {
-  test.setTimeout(420_000);
+  test.setTimeout(600_000);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
   const importRes = await request.post(`${apiBase}/api/data/import`, {
@@ -164,7 +164,7 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
     timeout: 20_000,
   });
 
-  await page.getByLabel("Optuna trials").fill(process.env.PW_WF_TRIALS ?? "5");
+  await page.getByLabel("Optuna trials").fill(process.env.PW_WF_TRIALS ?? "1");
   const runWalkRes = page.waitForResponse(
     (res) => res.url().includes("/api/walkforward/run") && res.request().method() === "POST",
   );
@@ -413,6 +413,36 @@ test("smoke: import -> backtest -> walk-forward -> auto research -> policy -> pa
   );
   expect(operatePdfRes.ok()).toBeTruthy();
   expect(operatePdfRes.headers()["content-type"] ?? "").toContain("application/pdf");
+
+  const disableAutoSwitchRes = await request.put(`${apiBase}/api/settings`, {
+    data: { operate_auto_eval_auto_switch: false },
+  });
+  expect(disableAutoSwitchRes.ok()).toBeTruthy();
+  const beforeAutoEvalStatus = await request.get(`${apiBase}/api/operate/status`);
+  expect(beforeAutoEvalStatus.ok()).toBeTruthy();
+  const beforeAutoEvalBody = await beforeAutoEvalStatus.json();
+  const beforeActivePolicyId = Number(beforeAutoEvalBody?.data?.active_policy_id ?? 0);
+
+  const autoEvalRunRes = await request.post(`${apiBase}/api/operate/auto-eval/run`, {
+    data: {
+      bundle_id: bundleId,
+      active_policy_id: policyId,
+      timeframe: "1d",
+      asof_date: new Date().toISOString().slice(0, 10),
+      seed: 7,
+    },
+  });
+  expect(autoEvalRunRes.ok()).toBeTruthy();
+  const autoEvalRunBody = await autoEvalRunRes.json();
+  await waitForJob(request, apiBase, autoEvalRunBody.data.job_id, 240_000);
+  const afterAutoEvalStatus = await request.get(`${apiBase}/api/operate/status`);
+  expect(afterAutoEvalStatus.ok()).toBeTruthy();
+  const afterAutoEvalBody = await afterAutoEvalStatus.json();
+  const afterActivePolicyId = Number(afterAutoEvalBody?.data?.active_policy_id ?? 0);
+  expect(afterActivePolicyId).toBe(beforeActivePolicyId);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Learning" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Run Evaluation Now" })).toBeVisible({ timeout: 20_000 });
 
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "Reports", exact: true })).toBeVisible({

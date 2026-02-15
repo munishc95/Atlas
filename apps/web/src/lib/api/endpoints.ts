@@ -17,6 +17,8 @@ import type {
   ApiOperateHealth,
   ApiOperateRunSummary,
   ApiOperateStatus,
+  ApiAutoEvalRun,
+  ApiPolicySwitchEvent,
   ApiMonthlyReport,
   ApiResearchCandidate,
   ApiResearchRun,
@@ -235,6 +237,36 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  operateAutoEvalRun: (payload?: {
+    bundle_id?: number;
+    active_policy_id?: number;
+    challenger_policy_ids?: number[];
+    timeframe?: string;
+    lookback_trading_days?: number;
+    min_trades?: number;
+    asof_date?: string;
+    seed?: number;
+    auto_switch?: boolean;
+  }) =>
+    apiFetch<JobStart>("/api/operate/auto-eval/run", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  operateAutoEvalHistory: (
+    page = 1,
+    pageSize = 20,
+    params?: { bundle_id?: number; policy_id?: number },
+  ) => {
+    const search = new URLSearchParams();
+    search.set("page", String(page));
+    search.set("page_size", String(pageSize));
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (typeof params?.policy_id === "number") search.set("policy_id", String(params.policy_id));
+    return apiFetch<ApiAutoEvalRun[]>(`/api/operate/auto-eval/history?${search.toString()}`);
+  },
+  operateAutoEvalById: (id: number) => apiFetch<ApiAutoEvalRun>(`/api/operate/auto-eval/${id}`),
+  operatePolicySwitches: (limit = 10) =>
+    apiFetch<ApiPolicySwitchEvent[]>(`/api/operate/policy-switches?limit=${limit}`),
   generateDailyReport: (payload: { date?: string; bundle_id?: number; policy_id?: number }) =>
     apiFetch<JobStart>("/api/reports/daily/generate", {
       method: "POST",

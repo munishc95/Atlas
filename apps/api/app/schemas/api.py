@@ -114,6 +114,18 @@ class OperateRunRequest(BaseModel):
     seed: int | None = None
 
 
+class AutoEvalRunRequest(BaseModel):
+    bundle_id: int | None = None
+    active_policy_id: int | None = None
+    challenger_policy_ids: list[int] | None = None
+    timeframe: str | None = None
+    lookback_trading_days: int | None = None
+    min_trades: int | None = None
+    asof_date: str | None = None
+    seed: int | None = None
+    auto_switch: bool | None = None
+
+
 class MonthlyReportGenerateRequest(BaseModel):
     month: str | None = None  # YYYY-MM
     bundle_id: int | None = None
@@ -201,6 +213,16 @@ class RuntimeSettingsRequest(BaseModel):
     operate_auto_run_enabled: bool | None = None
     operate_auto_run_time_ist: str | None = None
     operate_auto_run_include_data_updates: bool | None = None
+    operate_auto_eval_enabled: bool | None = None
+    operate_auto_eval_frequency: str | None = None
+    operate_auto_eval_day_of_week: int | None = None
+    operate_auto_eval_time_ist: str | None = None
+    operate_auto_eval_lookback_trading_days: int | None = None
+    operate_auto_eval_min_trades: int | None = None
+    operate_auto_eval_cooldown_trading_days: int | None = None
+    operate_auto_eval_max_switches_per_30d: int | None = None
+    operate_auto_eval_auto_switch: bool | None = None
+    operate_auto_eval_shadow_only_gate: bool | None = None
     operate_max_stale_minutes_1d: int | None = None
     operate_max_stale_minutes_4h_ish: int | None = None
     operate_max_gap_bars: int | None = None

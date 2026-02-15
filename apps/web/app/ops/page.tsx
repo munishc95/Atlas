@@ -10,7 +10,12 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
-import type { ApiOperateEvent, ApiOperateRunSummary } from "@/src/lib/api/types";
+import type {
+  ApiAutoEvalRun,
+  ApiOperateEvent,
+  ApiOperateRunSummary,
+  ApiPolicySwitchEvent,
+} from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 function badgeTone(status: string): string {
@@ -28,6 +33,7 @@ export default function OpsPage() {
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ApiOperateEvent | null>(null);
+  const [selectedSwitch, setSelectedSwitch] = useState<ApiPolicySwitchEvent | null>(null);
   const [lastOperateSummary, setLastOperateSummary] = useState<ApiOperateRunSummary | null>(null);
 
   const statusQuery = useQuery({
@@ -40,18 +46,33 @@ export default function OpsPage() {
     queryFn: async () => (await atlasApi.operateHealth()).data,
     refetchInterval: 8_000,
   });
-  const eventsQuery = useQuery({
-    queryKey: qk.operateEvents(null, null, 20),
-    queryFn: async () => (await atlasApi.operateEvents({ limit: 20 })).data,
-    refetchInterval: 8_000,
-  });
-
   const activeBundleId =
     (statusQuery.data?.active_bundle_id as number | null | undefined) ??
     (healthQuery.data?.active_bundle_id as number | null | undefined) ??
     null;
   const activePolicyId = (statusQuery.data?.active_policy_id as number | null | undefined) ?? null;
   const activeTimeframe = String(healthQuery.data?.active_timeframe ?? "1d");
+  const eventsQuery = useQuery({
+    queryKey: qk.operateEvents(null, null, 20),
+    queryFn: async () => (await atlasApi.operateEvents({ limit: 20 })).data,
+    refetchInterval: 8_000,
+  });
+  const autoEvalHistoryQuery = useQuery({
+    queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId),
+    queryFn: async () =>
+      (
+        await atlasApi.operateAutoEvalHistory(1, 10, {
+          bundle_id: activeBundleId ?? undefined,
+          policy_id: activePolicyId ?? undefined,
+        })
+      ).data,
+    refetchInterval: 8_000,
+  });
+  const switchHistoryQuery = useQuery({
+    queryKey: qk.operatePolicySwitches(10),
+    queryFn: async () => (await atlasApi.operatePolicySwitches(10)).data,
+    refetchInterval: 8_000,
+  });
 
   const runQualityMutation = useMutation({
     mutationFn: async () => {
@@ -90,6 +111,38 @@ export default function OpsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not queue operate run");
+    },
+  });
+  const autoEvalMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.operateAutoEvalRun({
+          bundle_id: activeBundleId ?? undefined,
+          active_policy_id: activePolicyId ?? undefined,
+          timeframe: activeTimeframe,
+          asof_date: new Date().toISOString().slice(0, 10),
+          seed: 7,
+        })
+      ).data,
+    onSuccess: (payload) => {
+      setJobId(payload.job_id);
+      toast.success("Auto-evaluation queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue auto-evaluation");
+    },
+  });
+  const setActivePolicyMutation = useMutation({
+    mutationFn: async (policyId: number) => (await atlasApi.setActivePolicy(policyId)).data,
+    onSuccess: () => {
+      toast.success("Active policy switched");
+      queryClient.invalidateQueries({ queryKey: qk.settings });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.paperState });
+      queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not switch active policy");
     },
   });
   const runUpdatesMutation = useMutation({
@@ -172,6 +225,8 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
+      queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
+      queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       if (activeBundleId) {
         queryClient.invalidateQueries({ queryKey: qk.dataQualityLatest(activeBundleId, activeTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
@@ -186,6 +241,7 @@ export default function OpsPage() {
     }
   }, [
     activeBundleId,
+    activePolicyId,
     activeTimeframe,
     queryClient,
     stream.isTerminal,
@@ -208,6 +264,23 @@ export default function OpsPage() {
   const nextScheduledRun = String(
     healthQuery.data?.next_scheduled_run_ist ?? statusQuery.data?.next_scheduled_run_ist ?? "-",
   );
+  const autoEvalEnabled = Boolean(
+    healthQuery.data?.auto_eval_enabled ?? statusQuery.data?.auto_eval_enabled,
+  );
+  const autoEvalFrequency = String(
+    healthQuery.data?.auto_eval_frequency ?? statusQuery.data?.auto_eval_frequency ?? "WEEKLY",
+  );
+  const autoEvalTimeIst = String(
+    healthQuery.data?.auto_eval_time_ist ?? statusQuery.data?.auto_eval_time_ist ?? "16:00",
+  );
+  const nextAutoEvalRun = String(
+    healthQuery.data?.next_auto_eval_run_ist ?? statusQuery.data?.next_auto_eval_run_ist ?? "-",
+  );
+  const paperStateSettings =
+    ((statusQuery.data?.paper_state as Record<string, unknown> | undefined)?.settings_json as
+      | Record<string, unknown>
+      | undefined) ?? {};
+  const autoEvalAutoSwitch = Boolean(paperStateSettings.operate_auto_eval_auto_switch ?? false);
   const calendarSegment = String(
     healthQuery.data?.calendar_segment ?? statusQuery.data?.calendar_segment ?? "EQUITIES",
   );
@@ -220,6 +293,24 @@ export default function OpsPage() {
     healthQuery.data?.calendar_next_trading_day ?? statusQuery.data?.calendar_next_trading_day ?? "-",
   );
   const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
+  const autoEvalRuns = useMemo(
+    () => (autoEvalHistoryQuery.data ?? []) as ApiAutoEvalRun[],
+    [autoEvalHistoryQuery.data],
+  );
+  const latestAutoEval = autoEvalRuns[0] ?? null;
+  const switchHistory = useMemo(
+    () => (switchHistoryQuery.data ?? []) as ApiPolicySwitchEvent[],
+    [switchHistoryQuery.data],
+  );
+  const recommendedPolicyId =
+    latestAutoEval?.recommended_action === "SWITCH" && typeof latestAutoEval.recommended_policy_id === "number"
+      ? latestAutoEval.recommended_policy_id
+      : null;
+  const canApplyRecommendedSwitch =
+    !autoEvalAutoSwitch &&
+    recommendedPolicyId !== null &&
+    Number(recommendedPolicyId) > 0 &&
+    Number(activePolicyId ?? 0) !== Number(recommendedPolicyId);
 
   return (
     <div className="space-y-5">
@@ -254,6 +345,14 @@ export default function OpsPage() {
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
             Next scheduled run: {nextScheduledRun}
+          </p>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Auto-eval: {autoEvalEnabled ? "Enabled" : "Disabled"} ({autoEvalFrequency} @ {autoEvalTimeIst} IST)
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
+            Next evaluation: {nextAutoEvalRun}
           </p>
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -379,6 +478,118 @@ export default function OpsPage() {
           </div>
         </article>
       </section>
+
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Learning</h3>
+        <p className="mt-1 text-xs text-muted">
+          Closed-loop policy evaluation with cooldown and switch-rate safety gates.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => autoEvalMutation.mutate()}
+            disabled={autoEvalMutation.isPending || !activeBundleId || !activePolicyId}
+            className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+          >
+            {autoEvalMutation.isPending ? "Queuing..." : "Run Evaluation Now"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (recommendedPolicyId !== null) {
+                setActivePolicyMutation.mutate(recommendedPolicyId);
+              }
+            }}
+            disabled={!canApplyRecommendedSwitch || setActivePolicyMutation.isPending}
+            className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted disabled:opacity-50"
+          >
+            {setActivePolicyMutation.isPending ? "Applying..." : "Apply Recommended Switch"}
+          </button>
+          <p className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            Auto-switch: {autoEvalAutoSwitch ? "Enabled" : "Manual confirmation required"}
+          </p>
+        </div>
+        {autoEvalHistoryQuery.isLoading ? (
+          <div className="mt-3">
+            <LoadingState label="Loading auto-evaluation history" />
+          </div>
+        ) : autoEvalHistoryQuery.isError ? (
+          <div className="mt-3">
+            <ErrorState
+              title="Could not load auto-evaluations"
+              action="Retry to fetch the latest recommendation."
+              onRetry={() => void autoEvalHistoryQuery.refetch()}
+            />
+          </div>
+        ) : !latestAutoEval ? (
+          <div className="mt-3">
+            <EmptyState title="No evaluations yet" action="Run evaluation to generate a recommendation." />
+          </div>
+        ) : (
+          <div className="mt-3 space-y-2 text-sm">
+            <p>
+              <span className="text-muted">Latest recommendation:</span>{" "}
+              <span className={`badge ${badgeTone(latestAutoEval.recommended_action)}`}>
+                {latestAutoEval.recommended_action}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Recommended policy:</span>{" "}
+              {latestAutoEval.recommended_policy_id ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">Digest:</span> {latestAutoEval.digest}
+            </p>
+            <ul className="space-y-1 text-xs text-muted">
+              {(latestAutoEval.reasons_json ?? []).slice(0, 4).map((reason, index) => (
+                <li key={`auto-eval-reason-${index}`}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mt-4 overflow-hidden rounded-xl border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-surface text-left text-muted">
+              <tr>
+                <th className="px-3 py-2">Time</th>
+                <th className="px-3 py-2">From</th>
+                <th className="px-3 py-2">To</th>
+                <th className="px-3 py-2">Mode</th>
+                <th className="px-3 py-2">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {switchHistory.length === 0 ? (
+                <tr className="border-t border-border">
+                  <td className="px-3 py-3 text-xs text-muted" colSpan={5}>
+                    No policy switches recorded yet.
+                  </td>
+                </tr>
+              ) : (
+                switchHistory.map((row) => (
+                  <tr key={row.id} className="border-t border-border">
+                    <td className="px-3 py-2">{row.ts}</td>
+                    <td className="px-3 py-2">{row.from_policy_id}</td>
+                    <td className="px-3 py-2">{row.to_policy_id}</td>
+                    <td className="px-3 py-2">{row.mode}</td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                        onClick={() => setSelectedSwitch(row)}
+                      >
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section className="card p-4">
         <h3 className="text-base font-semibold">Latest operate run</h3>
         {!lastOperateSummary ? (
@@ -491,6 +702,26 @@ export default function OpsPage() {
         ) : null}
       </DetailsDrawer>
 
+      <DetailsDrawer
+        open={Boolean(selectedSwitch)}
+        onClose={() => setSelectedSwitch(null)}
+        title={`Policy Switch ${selectedSwitch?.id ?? ""}`}
+      >
+        {selectedSwitch ? (
+          <div className="space-y-2 text-sm">
+            <p><span className="text-muted">Timestamp:</span> {selectedSwitch.ts}</p>
+            <p><span className="text-muted">From policy:</span> {selectedSwitch.from_policy_id}</p>
+            <p><span className="text-muted">To policy:</span> {selectedSwitch.to_policy_id}</p>
+            <p><span className="text-muted">Mode:</span> {selectedSwitch.mode}</p>
+            <p><span className="text-muted">Reason:</span> {selectedSwitch.reason}</p>
+            <p><span className="text-muted">Auto-eval:</span> {selectedSwitch.auto_eval_id ?? "-"}</p>
+            <pre className="max-h-[280px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+{JSON.stringify(selectedSwitch.cooldown_state_json ?? {}, null, 2)}
+            </pre>
+          </div>
+        ) : null}
+      </DetailsDrawer>
+
       {(statusQuery.isError || healthQuery.isError) && (
         <ErrorState
           title="Ops data unavailable"
@@ -499,6 +730,8 @@ export default function OpsPage() {
             void statusQuery.refetch();
             void healthQuery.refetch();
             void eventsQuery.refetch();
+            void autoEvalHistoryQuery.refetch();
+            void switchHistoryQuery.refetch();
           }}
         />
       )}

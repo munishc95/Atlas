@@ -35,6 +35,14 @@ export const qk = {
     ["operateHealth", bundleId ?? "active", timeframe ?? "active"] as const,
   operateEvents: (severity?: string | null, category?: string | null, limit = 20) =>
     ["operateEvents", severity ?? "all", category ?? "all", limit] as const,
+  operateAutoEvalHistory: (
+    page = 1,
+    pageSize = 20,
+    bundleId?: number | null,
+    policyId?: number | null,
+  ) => ["operateAutoEvalHistory", page, pageSize, bundleId ?? "all", policyId ?? "all"] as const,
+  operateAutoEval: (id: number | null) => ["operateAutoEval", id] as const,
+  operatePolicySwitches: (limit = 10) => ["operatePolicySwitches", limit] as const,
   dataQualityLatest: (bundleId?: number | null, timeframe = "1d") =>
     ["dataQualityLatest", bundleId ?? "none", timeframe] as const,
   dataQualityHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>

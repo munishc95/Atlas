@@ -17,6 +17,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import APIError
 from app.db.models import (
     Backtest,
+    PolicySwitchEvent,
     Policy,
     PaperRun,
     ResearchRun,
@@ -29,6 +30,7 @@ from app.db.models import (
 from app.db.session import engine, get_session
 from app.jobs.queue import get_queue
 from app.jobs.tasks import (
+    run_auto_eval_job,
     run_backtest_job,
     run_data_updates_job,
     run_data_quality_job,
@@ -43,6 +45,7 @@ from app.jobs.tasks import (
     run_walkforward_job,
 )
 from app.schemas.api import (
+    AutoEvalRunRequest,
     BacktestRunRequest,
     CreatePolicyRequest,
     DataQualityRunRequest,
@@ -60,6 +63,11 @@ from app.schemas.api import (
     WalkForwardRunRequest,
 )
 from app.services.data_store import DataStore
+from app.services.auto_evaluation import (
+    get_auto_eval_run,
+    list_auto_eval_runs,
+    list_policy_switch_events,
+)
 from app.services.data_updates import (
     compute_data_coverage,
     get_latest_data_update_run,
@@ -179,13 +187,26 @@ def _enqueue_or_inline(
                 retry=retry,
             )
     except RedisError as exc:
-        update_job(
-            session,
-            job.id,
-            status="FAILED",
-            progress=100,
-            result={"error": {"code": "queue_error", "message": str(exc)}},
-        )
+        # Local-first fallback: if queue dispatch fails (e.g. Redis unavailable),
+        # run inline so operator flows/tests remain functional.
+        try:
+            inline_runner(job.id, *task_args, max_runtime_seconds=max_runtime_seconds)
+        except Exception as inline_exc:  # noqa: BLE001
+            update_job(
+                session,
+                job.id,
+                status="FAILED",
+                progress=100,
+                result={
+                    "error": {
+                        "code": "queue_error",
+                        "message": (
+                            f"Queue dispatch failed: {exc}. "
+                            f"Inline fallback failed: {inline_exc}"
+                        ),
+                    }
+                },
+            )
     except Exception as exc:  # noqa: BLE001
         update_job(
             session,
@@ -983,7 +1004,26 @@ def set_active_policy(
     policy = session.get(Policy, policy_id)
     if policy is None:
         raise APIError(code="not_found", message="Policy not found", status_code=404)
+    state = get_or_create_paper_state(session, settings)
+    before_settings = dict(state.settings_json or {})
+    from_policy_id = before_settings.get("active_policy_id")
     payload = activate_policy_mode(session=session, settings=settings, policy=policy)
+    try:
+        from_id = int(from_policy_id) if from_policy_id is not None else 0
+    except (TypeError, ValueError):
+        from_id = 0
+    if from_id > 0 and from_id != int(policy.id):
+        session.add(
+            PolicySwitchEvent(
+                from_policy_id=from_id,
+                to_policy_id=int(policy.id),
+                reason="manual_set_active",
+                auto_eval_id=None,
+                cooldown_state_json={},
+                mode="MANUAL",
+            )
+        )
+        session.commit()
     return _data({"policy_id": policy.id, "status": "active_policy_set", **payload})
 
 
@@ -1102,6 +1142,12 @@ def operate_status(
             "auto_run_include_data_updates": health_summary.get("auto_run_include_data_updates"),
             "last_auto_run_date": health_summary.get("last_auto_run_date"),
             "next_scheduled_run_ist": health_summary.get("next_scheduled_run_ist"),
+            "auto_eval_enabled": health_summary.get("auto_eval_enabled"),
+            "auto_eval_frequency": health_summary.get("auto_eval_frequency"),
+            "auto_eval_day_of_week": health_summary.get("auto_eval_day_of_week"),
+            "auto_eval_time_ist": health_summary.get("auto_eval_time_ist"),
+            "last_auto_eval_date": health_summary.get("last_auto_eval_date"),
+            "next_auto_eval_run_ist": health_summary.get("next_auto_eval_run_ist"),
             "active_policy_id": policy.id if policy is not None else None,
             "active_policy_name": policy.name if policy is not None else None,
             "active_bundle_id": latest_run.bundle_id if latest_run is not None else None,
@@ -1177,6 +1223,70 @@ def operate_run(
         request_hash=hash_payload(payload_dict),
         inline_runner=run_operate_run_job,
     )
+
+
+@router.post("/operate/auto-eval/run")
+def operate_auto_eval_run(
+    payload: AutoEvalRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="auto_eval",
+        task_path="app.jobs.tasks.run_auto_eval_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_auto_eval_job,
+    )
+
+
+@router.get("/operate/auto-eval/history")
+def operate_auto_eval_history(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    bundle_id: int | None = Query(default=None, ge=1),
+    policy_id: int | None = Query(default=None, ge=1),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows, total = list_auto_eval_runs(
+        session,
+        page=page,
+        page_size=page_size,
+        bundle_id=bundle_id,
+        policy_id=policy_id,
+    )
+    return _data(
+        [row.model_dump() for row in rows],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_next": page * page_size < total,
+        },
+    )
+
+
+@router.get("/operate/auto-eval/{auto_eval_id}")
+def operate_auto_eval_by_id(
+    auto_eval_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_auto_eval_run(session, auto_eval_id)
+    return _data(row.model_dump())
+
+
+@router.get("/operate/policy-switches")
+def operate_policy_switches(
+    limit: int = Query(default=10, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_policy_switch_events(session, limit=limit)
+    return _data([row.model_dump() for row in rows])
 
 
 @router.post("/paper/run-step")
@@ -1472,6 +1582,17 @@ def get_settings_payload(
         "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
         "operate_auto_run_include_data_updates": settings.operate_auto_run_include_data_updates,
         "operate_last_auto_run_date": None,
+        "operate_auto_eval_enabled": settings.operate_auto_eval_enabled,
+        "operate_auto_eval_frequency": settings.operate_auto_eval_frequency,
+        "operate_auto_eval_day_of_week": settings.operate_auto_eval_day_of_week,
+        "operate_auto_eval_time_ist": settings.operate_auto_eval_time_ist,
+        "operate_auto_eval_lookback_trading_days": settings.operate_auto_eval_lookback_trading_days,
+        "operate_auto_eval_min_trades": settings.operate_auto_eval_min_trades,
+        "operate_auto_eval_cooldown_trading_days": settings.operate_auto_eval_cooldown_trading_days,
+        "operate_auto_eval_max_switches_per_30d": settings.operate_auto_eval_max_switches_per_30d,
+        "operate_auto_eval_auto_switch": settings.operate_auto_eval_auto_switch,
+        "operate_auto_eval_shadow_only_gate": settings.operate_auto_eval_shadow_only_gate,
+        "operate_last_auto_eval_date": None,
         "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
         "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
         "operate_max_gap_bars": settings.operate_max_gap_bars,

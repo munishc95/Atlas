@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date as dt_date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -20,6 +20,60 @@ from app.services.trading_calendar import (
 ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
 ALLOWED_CATEGORIES = {"DATA", "EXECUTION", "POLICY", "SYSTEM"}
 IST_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _weekly_eval_day_for_week(
+    *,
+    target_day: dt_date,
+    day_of_week: int,
+    segment: str,
+    settings: Settings,
+) -> dt_date:
+    anchor = target_day - timedelta(days=target_day.weekday()) + timedelta(days=day_of_week % 7)
+    if is_trading_day(anchor, segment=segment, settings=settings):
+        return anchor
+    return next_trading_day(anchor, segment=segment, settings=settings)
+
+
+def _compute_next_auto_eval_run_ist(
+    *,
+    auto_eval_enabled: bool,
+    auto_eval_frequency: str,
+    auto_eval_day_of_week: int,
+    auto_eval_time_ist: str,
+    last_run_date: str | None,
+    segment: str,
+    settings: Settings,
+) -> str | None:
+    if not auto_eval_enabled:
+        return None
+    now = datetime.now(IST_ZONE)
+    try:
+        run_time = datetime.strptime(auto_eval_time_ist, "%H:%M").time()
+    except ValueError:
+        run_time = datetime.strptime("16:00", "%H:%M").time()
+    frequency = str(auto_eval_frequency or "WEEKLY").strip().upper()
+    for offset in range(0, 40):
+        day = now.date() + timedelta(days=offset)
+        if not is_trading_day(day, segment=segment, settings=settings):
+            continue
+        if frequency == "DAILY":
+            due = True
+        else:
+            due = day == _weekly_eval_day_for_week(
+                target_day=day,
+                day_of_week=auto_eval_day_of_week,
+                segment=segment,
+                settings=settings,
+            )
+        if not due:
+            continue
+        if day == now.date() and now.time() >= run_time:
+            continue
+        if isinstance(last_run_date, str) and last_run_date == day.isoformat():
+            continue
+        return datetime.combine(day, run_time, tzinfo=IST_ZONE).isoformat()
+    return None
 
 
 def _safe_upper(value: str, *, allowed: set[str], fallback: str) -> str:
@@ -149,14 +203,39 @@ def get_operate_health_summary(
             settings.operate_auto_run_include_data_updates,
         )
     )
+    auto_eval_enabled = bool(
+        state_settings.get("operate_auto_eval_enabled", settings.operate_auto_eval_enabled)
+    )
+    auto_eval_frequency = str(
+        state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency)
+    ).strip().upper()
+    try:
+        auto_eval_day_of_week = int(
+            state_settings.get("operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week)
+        ) % 7
+    except (TypeError, ValueError):
+        auto_eval_day_of_week = int(settings.operate_auto_eval_day_of_week) % 7
+    auto_eval_time_ist = str(
+        state_settings.get("operate_auto_eval_time_ist", settings.operate_auto_eval_time_ist)
+    )
     calendar_segment = str(
         state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)
     )
     last_auto_run_date = state_settings.get("operate_last_auto_run_date")
+    last_auto_eval_date = state_settings.get("operate_last_auto_eval_date")
     next_scheduled_run_ist = compute_next_scheduled_run_ist(
         auto_run_enabled=auto_run_enabled,
         auto_run_time_ist=auto_run_time_ist,
         last_run_date=(str(last_auto_run_date) if isinstance(last_auto_run_date, str) else None),
+        segment=calendar_segment,
+        settings=settings,
+    )
+    next_auto_eval_run_ist = _compute_next_auto_eval_run_ist(
+        auto_eval_enabled=auto_eval_enabled,
+        auto_eval_frequency=auto_eval_frequency,
+        auto_eval_day_of_week=auto_eval_day_of_week,
+        auto_eval_time_ist=auto_eval_time_ist,
+        last_run_date=(str(last_auto_eval_date) if isinstance(last_auto_eval_date, str) else None),
         segment=calendar_segment,
         settings=settings,
     )
@@ -196,6 +275,12 @@ def get_operate_health_summary(
         "auto_run_include_data_updates": auto_run_include_data_updates,
         "last_auto_run_date": last_auto_run_date,
         "next_scheduled_run_ist": next_scheduled_run_ist,
+        "auto_eval_enabled": auto_eval_enabled,
+        "auto_eval_frequency": auto_eval_frequency,
+        "auto_eval_day_of_week": auto_eval_day_of_week,
+        "auto_eval_time_ist": auto_eval_time_ist,
+        "last_auto_eval_date": last_auto_eval_date,
+        "next_auto_eval_run_ist": next_auto_eval_run_ist,
         "active_bundle_id": target_bundle_id,
         "active_timeframe": target_timeframe,
         "latest_data_quality": latest_quality.model_dump() if latest_quality is not None else None,
