@@ -17,6 +17,7 @@ from app.services.auto_evaluation import execute_auto_evaluation
 from app.services.data_store import DataStore
 from app.services.fast_mode import prefer_sample_bundle_id
 from app.services.data_updates import run_data_updates
+from app.services.provider_updates import run_provider_updates
 from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
 from app.services.importer import import_ohlcv_bytes
@@ -380,6 +381,60 @@ def run_data_updates_job(
             )
 
 
+def run_provider_updates_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    started = time.perf_counter()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Provider updates run started")
+            result = _execute_with_retry(
+                fn=lambda: _provider_updates_result(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    payload=payload,
+                    job_id=job_id,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="provider_updates",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Provider updates run finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="provider_updates",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Provider updates run failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="provider_updates", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "provider_updates_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="provider_updates",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
+            )
+
+
 def _data_updates_result(
     *,
     session: Session,
@@ -416,6 +471,53 @@ def _data_updates_result(
         "skipped_files": row.skipped_files,
         "rows_ingested": row.rows_ingested,
         "symbols_affected_json": row.symbols_affected_json,
+        "warnings_json": row.warnings_json,
+        "errors_json": row.errors_json,
+        "created_at": row.created_at.isoformat(),
+        "ended_at": row.ended_at.isoformat() if row.ended_at is not None else None,
+    }
+
+
+def _provider_updates_result(
+    *,
+    session: Session,
+    settings,
+    store: DataStore,
+    payload: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    bundle_id = int(payload.get("bundle_id") or 0)
+    if bundle_id <= 0:
+        raise ValueError("bundle_id is required for provider updates run")
+    timeframe = str(payload.get("timeframe") or "1d")
+    state = session.get(PaperState, 1)
+    overrides = dict(state.settings_json or {}) if state is not None else {}
+    row = run_provider_updates(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        overrides=overrides,
+        provider_kind=payload.get("provider_kind"),
+        max_symbols_per_run=payload.get("max_symbols_per_run"),
+        max_calls_per_run=payload.get("max_calls_per_run"),
+        start=payload.get("start"),
+        end=payload.get("end"),
+        correlation_id=job_id,
+    )
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "bundle_id": row.bundle_id,
+        "timeframe": row.timeframe,
+        "provider_kind": row.provider_kind,
+        "status": row.status,
+        "symbols_attempted": row.symbols_attempted,
+        "symbols_succeeded": row.symbols_succeeded,
+        "symbols_failed": row.symbols_failed,
+        "bars_added": row.bars_added,
+        "api_calls": row.api_calls,
+        "duration_seconds": row.duration_seconds,
         "warnings_json": row.warnings_json,
         "errors_json": row.errors_json,
         "created_at": row.created_at.isoformat(),
@@ -545,7 +647,9 @@ def _resolve_operate_context(
     elif latest_run is not None and latest_run.bundle_id is not None:
         bundle_id = int(latest_run.bundle_id)
     else:
-        latest_bundle = session.exec(select(DatasetBundle).order_by(DatasetBundle.created_at.desc())).first()
+        latest_bundle = session.exec(
+            select(DatasetBundle).order_by(DatasetBundle.created_at.desc())
+        ).first()
         if latest_bundle is not None and latest_bundle.id is not None:
             bundle_id = int(latest_bundle.id)
 
@@ -613,17 +717,87 @@ def _operate_run_result(
     include_data_updates = context["include_data_updates"]
     asof_dt: datetime = context["asof_dt"]
     state_settings: dict[str, Any] = context["state_settings"]
+    provider_enabled = bool(
+        state_settings.get("data_updates_provider_enabled", settings.data_updates_provider_enabled)
+    )
+    provider_timeframe_token = str(
+        state_settings.get(
+            "data_updates_provider_timeframe_enabled",
+            settings.data_updates_provider_timeframe_enabled,
+        )
+    )
+    provider_timeframes = {
+        str(item).strip().lower()
+        for item in provider_timeframe_token.split(",")
+        if str(item).strip()
+    }
+    provider_stage_enabled = include_data_updates and (
+        (str(timeframe).strip().lower() in provider_timeframes) if provider_enabled else False
+    )
+    step_order = ["data_updates", "data_quality", "paper_step", "daily_report"]
+    if provider_stage_enabled:
+        step_order = ["provider_updates", *step_order]
 
     summary: dict[str, Any] = {
         "bundle_id": bundle_id,
         "timeframe": timeframe,
         "policy_id": policy_id,
         "regime": regime,
-        "step_order": ["data_updates", "data_quality", "paper_step", "daily_report"],
+        "step_order": step_order,
         "steps": [],
     }
 
-    update_job(session, job_id, progress=15)
+    update_job(session, job_id, progress=10)
+    provider_payload: dict[str, Any] | None = None
+    if provider_stage_enabled:
+        step_started = time.perf_counter()
+        if isinstance(bundle_id, int) and bundle_id > 0:
+            append_job_log(session, job_id, "Operate run: provider updates started")
+            provider_row = run_provider_updates(
+                session=session,
+                settings=settings,
+                store=store,
+                bundle_id=bundle_id,
+                timeframe=timeframe,
+                overrides=state_settings,
+                provider_kind=payload.get("provider_kind"),
+                max_symbols_per_run=payload.get("provider_max_symbols_per_run"),
+                max_calls_per_run=payload.get("provider_max_calls_per_run"),
+                start=payload.get("provider_start"),
+                end=payload.get("provider_end"),
+                correlation_id=job_id,
+            )
+            provider_payload = {
+                "status": str(provider_row.status),
+                "run_id": int(provider_row.id) if provider_row.id is not None else None,
+                "provider_kind": provider_row.provider_kind,
+                "symbols_attempted": int(provider_row.symbols_attempted),
+                "symbols_succeeded": int(provider_row.symbols_succeeded),
+                "symbols_failed": int(provider_row.symbols_failed),
+                "bars_added": int(provider_row.bars_added),
+                "api_calls": int(provider_row.api_calls),
+            }
+        else:
+            provider_payload = {"status": "SKIPPED", "reason": "no_bundle"}
+        provider_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
+        summary["provider_updates"] = provider_payload
+        summary["steps"].append({"name": "provider_updates", **provider_payload})
+        emit_operate_event(
+            session,
+            severity="INFO",
+            category="SYSTEM",
+            message="job_duration_recorded",
+            details={
+                "job_id": job_id,
+                "job_kind": "provider_updates",
+                "duration_seconds": provider_payload["duration_seconds"],
+                "status": provider_payload.get("status"),
+                "mode": "operate_run",
+            },
+            correlation_id=job_id,
+        )
+
+    update_job(session, job_id, progress=25 if provider_stage_enabled else 15)
     step_started = time.perf_counter()
     if include_data_updates and isinstance(bundle_id, int) and bundle_id > 0:
         append_job_log(session, job_id, "Operate run: data updates started")
@@ -635,7 +809,9 @@ def _operate_run_result(
             timeframe=timeframe,
             overrides=state_settings,
             max_files_per_run=(
-                int(payload["max_files_per_run"]) if payload.get("max_files_per_run") is not None else None
+                int(payload["max_files_per_run"])
+                if payload.get("max_files_per_run") is not None
+                else None
             ),
             correlation_id=job_id,
         )
@@ -667,7 +843,7 @@ def _operate_run_result(
         correlation_id=job_id,
     )
 
-    update_job(session, job_id, progress=40)
+    update_job(session, job_id, progress=45 if provider_stage_enabled else 40)
     step_started = time.perf_counter()
     if isinstance(bundle_id, int) and bundle_id > 0:
         append_job_log(session, job_id, "Operate run: data quality started")
@@ -707,7 +883,7 @@ def _operate_run_result(
         correlation_id=job_id,
     )
 
-    update_job(session, job_id, progress=65)
+    update_job(session, job_id, progress=70 if provider_stage_enabled else 65)
     step_started = time.perf_counter()
     append_job_log(session, job_id, "Operate run: paper step started")
     paper_payload = {
@@ -733,11 +909,7 @@ def _operate_run_result(
         "mode": (
             "SHADOW"
             if str(paper_result.get("execution_mode", "")).upper() == "SHADOW"
-            else (
-                "SAFE"
-                if bool((paper_result.get("safe_mode") or {}).get("active"))
-                else "NORMAL"
-            )
+            else ("SAFE" if bool((paper_result.get("safe_mode") or {}).get("active")) else "NORMAL")
         ),
         "selected_signals_count": int(paper_result.get("selected_signals_count", 0)),
         "generated_signals_count": int(paper_result.get("generated_signals_count", 0)),
@@ -763,7 +935,7 @@ def _operate_run_result(
         correlation_id=job_id,
     )
 
-    update_job(session, job_id, progress=85)
+    update_job(session, job_id, progress=88 if provider_stage_enabled else 85)
     step_started = time.perf_counter()
     append_job_log(session, job_id, "Operate run: daily report generation started")
     report_date = payload.get("date")
@@ -809,6 +981,9 @@ def _operate_run_result(
     summary["quality_status"] = quality_payload.get("status")
     summary["update_status"] = step_payload.get("status")
     summary["durations_seconds"] = {
+        "provider_updates": float(provider_payload.get("duration_seconds", 0.0))
+        if isinstance(provider_payload, dict)
+        else 0.0,
         "data_updates": float(step_payload.get("duration_seconds", 0.0)),
         "data_quality": float(quality_payload.get("duration_seconds", 0.0)),
         "paper_step": float(paper_summary.get("duration_seconds", 0.0)),

@@ -75,7 +75,9 @@ def _ensure_indexes_and_columns() -> None:
             conn.execute(text("ALTER TABLE paperposition ADD COLUMN qty_lots INTEGER DEFAULT 1"))
     if not _has_column("paperposition", "margin_reserved"):
         with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE paperposition ADD COLUMN margin_reserved FLOAT DEFAULT 0"))
+            conn.execute(
+                text("ALTER TABLE paperposition ADD COLUMN margin_reserved FLOAT DEFAULT 0")
+            )
     if not _has_column("paperposition", "must_exit_by_eod"):
         bool_type = "INTEGER" if is_sqlite else "BOOLEAN"
         with engine.begin() as conn:
@@ -135,8 +137,7 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_paperrun_mode_created "
-                "ON paperrun (mode, created_at)"
+                "CREATE INDEX IF NOT EXISTS ix_paperrun_mode_created ON paperrun (mode, created_at)"
             )
         )
         conn.execute(
@@ -211,16 +212,10 @@ def _ensure_indexes_and_columns() -> None:
                 "ON replayrun (bundle_id, created_at)"
             )
         )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_autoevalrun_ts ON autoevalrun (ts)"))
         conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_ts "
-                "ON autoevalrun (ts)"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_bundle_ts "
-                "ON autoevalrun (bundle_id, ts)"
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_bundle_ts ON autoevalrun (bundle_id, ts)"
             )
         )
         conn.execute(
@@ -236,10 +231,7 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_policyswitchevent_ts "
-                "ON policyswitchevent (ts)"
-            )
+            text("CREATE INDEX IF NOT EXISTS ix_policyswitchevent_ts ON policyswitchevent (ts)")
         )
         conn.execute(
             text(
@@ -278,10 +270,7 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_dataupdatefile_run_id "
-                "ON dataupdatefile (run_id)"
-            )
+            text("CREATE INDEX IF NOT EXISTS ix_dataupdatefile_run_id ON dataupdatefile (run_id)")
         )
         conn.execute(
             text(
@@ -296,8 +285,42 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)")
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_instrumentmap_provider_symbol "
+                "ON instrumentmap (provider, symbol)"
+            )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_instrumentmap_provider_refreshed "
+                "ON instrumentmap (provider, last_refreshed)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_providerupdaterun_bundle_timeframe_created "
+                "ON providerupdaterun (bundle_id, timeframe, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_providerupdaterun_status_created "
+                "ON providerupdaterun (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_providerupdateitem_run_symbol "
+                "ON providerupdateitem (run_id, symbol)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_providerupdateitem_status_created "
+                "ON providerupdateitem (status, created_at)"
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_operateevent_severity_ts "

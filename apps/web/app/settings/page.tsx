@@ -99,6 +99,13 @@ export default function SettingsPage() {
         operate_auto_eval_shadow_only_gate: form.operate_auto_eval_shadow_only_gate === "true",
         data_updates_inbox_enabled: form.data_updates_inbox_enabled === "true",
         data_updates_max_files_per_run: Number(form.data_updates_max_files_per_run),
+        data_updates_provider_enabled: form.data_updates_provider_enabled === "true",
+        data_updates_provider_kind: form.data_updates_provider_kind,
+        data_updates_provider_max_symbols_per_run: Number(
+          form.data_updates_provider_max_symbols_per_run,
+        ),
+        data_updates_provider_max_calls_per_run: Number(form.data_updates_provider_max_calls_per_run),
+        data_updates_provider_timeframe_enabled: form.data_updates_provider_timeframe_enabled,
         coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
         coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
         coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
@@ -200,6 +207,20 @@ export default function SettingsPage() {
       { key: "operate_auto_eval_shadow_only_gate", label: "Auto-eval shadow-only safety gate (true/false)" },
       { key: "data_updates_inbox_enabled", label: "Data inbox updates enabled (true/false)" },
       { key: "data_updates_max_files_per_run", label: "Data updates max files per run" },
+      { key: "data_updates_provider_enabled", label: "Provider updates enabled (true/false)" },
+      { key: "data_updates_provider_kind", label: "Provider kind (UPSTOX/MOCK)" },
+      {
+        key: "data_updates_provider_max_symbols_per_run",
+        label: "Provider updates max symbols per run",
+      },
+      {
+        key: "data_updates_provider_max_calls_per_run",
+        label: "Provider updates max API calls per run",
+      },
+      {
+        key: "data_updates_provider_timeframe_enabled",
+        label: "Provider updates enabled timeframes (comma-separated)",
+      },
       { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
       { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },
       {

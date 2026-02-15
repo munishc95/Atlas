@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     operate_scan_truncated_reduce_to: int = 80
     data_updates_inbox_enabled: bool = True
     data_updates_max_files_per_run: int = 50
+    data_updates_provider_enabled: bool = False
+    data_updates_provider_kind: str = "UPSTOX"
+    data_updates_provider_max_symbols_per_run: int = 120
+    data_updates_provider_max_calls_per_run: int = 400
+    data_updates_provider_timeframe_enabled: str = "1d"
     coverage_missing_latest_warn_pct: float = 10.0
     coverage_missing_latest_fail_pct: float = 25.0
     coverage_inactive_after_missing_days: int = 3
@@ -129,6 +134,13 @@ class Settings(BaseSettings):
     risk_overlay_corr_reduce_factor: float = 0.5
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
+    upstox_access_token: str | None = None
+    upstox_base_url: str = "https://api.upstox.com"
+    upstox_timeout_seconds: float = 12.0
+    upstox_retry_max: int = 2
+    upstox_retry_backoff_seconds: float = 1.0
+    upstox_throttle_seconds: float = 0.15
+    upstox_symbol_map_json: str | None = None
     optuna_storage_url: str | None = None
     optuna_default_trials: int = 150
     optuna_default_timeout_seconds: int | None = None

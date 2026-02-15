@@ -165,6 +165,11 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
             "data_updates_inbox_enabled": settings.data_updates_inbox_enabled,
             "data_updates_max_files_per_run": settings.data_updates_max_files_per_run,
+            "data_updates_provider_enabled": settings.data_updates_provider_enabled,
+            "data_updates_provider_kind": settings.data_updates_provider_kind,
+            "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
+            "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
+            "data_updates_provider_timeframe_enabled": settings.data_updates_provider_timeframe_enabled,
             "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
             "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
             "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
@@ -248,7 +253,9 @@ def _get_or_create_shadow_state(
     row = ShadowPaperState(
         bundle_id=bundle_key,
         policy_id=policy_key,
-        state_json=_default_shadow_state_payload(live_state=live_state, state_settings=state_settings),
+        state_json=_default_shadow_state_payload(
+            live_state=live_state, state_settings=state_settings
+        ),
     )
     session.add(row)
     session.commit()
@@ -580,7 +587,9 @@ def _is_futures_kind(instrument_kind: str) -> bool:
 def _futures_margin_pct(state_settings: dict[str, Any], settings: Settings) -> float:
     return max(
         0.0,
-        float(state_settings.get("futures_initial_margin_pct", settings.futures_initial_margin_pct)),
+        float(
+            state_settings.get("futures_initial_margin_pct", settings.futures_initial_margin_pct)
+        ),
     )
 
 
@@ -790,7 +799,9 @@ def _resolve_execution_policy(
                     "params": {},
                     "cost_model": dict(policy_definition.get("cost_model", {})),
                     "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
-                    "ranking_weights": dict(policy_definition.get("ranking", {}).get("weights", {})),
+                    "ranking_weights": dict(
+                        policy_definition.get("ranking", {}).get("weights", {})
+                    ),
                 }
             selection_reasons.append(
                 f"Policy {selected_policy.name} is {current_status}; fallback selected {fallback.name}."
@@ -842,7 +853,9 @@ def _resolve_execution_policy(
                     "params": {},
                     "cost_model": dict(policy_definition.get("cost_model", {})),
                     "allowed_instruments": dict(policy_definition.get("allowed_instruments", {})),
-                    "ranking_weights": dict(policy_definition.get("ranking", {}).get("weights", {})),
+                    "ranking_weights": dict(
+                        policy_definition.get("ranking", {}).get("weights", {})
+                    ),
                 }
             selection_reasons.append(
                 f"Policy {selected_policy.name} health is DEGRADED; fallback selected {fallback.name}."
@@ -1243,7 +1256,9 @@ def _close_position(
     side = position.side.upper()
     exit_side = "BUY" if side == "SELL" else "SELL"
     notional = position.qty * price
-    qty_lots = max(1, int(getattr(position, "qty_lots", max(1, position.qty // max(1, position.lot_size)))))
+    qty_lots = max(
+        1, int(getattr(position, "qty_lots", max(1, position.qty // max(1, position.lot_size))))
+    )
     is_futures = _is_futures_kind(position.instrument_kind)
     cost_override = dict(policy.get("cost_model", {}))
     if side == "SELL" and position.instrument_kind == "EQUITY_CASH":
@@ -1504,10 +1519,26 @@ def _run_paper_step_with_simulator_engine(
         ],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
-        "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
-        "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
-        "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
-        "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+        "risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "risk_scale", risk_overlay.get("risk_scale", 1.0)
+            )
+        ),
+        "realized_vol": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "realized_vol", risk_overlay.get("realized_vol", 0.0)
+            )
+        ),
+        "target_vol": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "target_vol", risk_overlay.get("target_vol", 0.0)
+            )
+        ),
+        "caps_applied": dict(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "caps", risk_overlay.get("caps", {})
+            )
+        ),
         "equity_before": equity_before,
         "equity_after": float(state.equity),
         "cash_before": cash_before,
@@ -1650,10 +1681,9 @@ def _run_paper_step_with_simulator_engine(
             )
             if fallback is not None:
                 merged_state = dict(state.settings_json or {})
-                if (
-                    str(merged_state.get("paper_mode", "strategy")) == "policy"
-                    and int(merged_state.get("active_policy_id") or 0) == int(active_policy.id)
-                ):
+                if str(merged_state.get("paper_mode", "strategy")) == "policy" and int(
+                    merged_state.get("active_policy_id") or 0
+                ) == int(active_policy.id):
                     merged_state["active_policy_id"] = int(fallback.id)
                     merged_state["active_policy_name"] = fallback.name
                     state.settings_json = merged_state
@@ -1750,10 +1780,26 @@ def _run_paper_step_with_simulator_engine(
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
             "risk_overlay": {
-                "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
-                "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
-                "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
-                "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+                "risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "risk_scale", risk_overlay.get("risk_scale", 1.0)
+                    )
+                ),
+                "realized_vol": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "realized_vol", risk_overlay.get("realized_vol", 0.0)
+                    )
+                ),
+                "target_vol": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "target_vol", risk_overlay.get("target_vol", 0.0)
+                    )
+                ),
+                "caps_applied": dict(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "caps", risk_overlay.get("caps", {})
+                    )
+                ),
             },
             "engine_version": sim_execution.metadata.get("engine_version"),
             "data_digest": sim_execution.metadata.get("data_digest"),
@@ -1852,9 +1898,9 @@ def _run_paper_step_shadow_only(
     )
 
     shadow_positions_after = [dict(item) for item in sim_execution.positions_after]
-    shadow_orders_after = (shadow_orders_before + [dict(item) for item in sim_execution.orders_generated])[
-        -500:
-    ]
+    shadow_orders_after = (
+        shadow_orders_before + [dict(item) for item in sim_execution.orders_generated]
+    )[-500:]
     shadow_after = {
         **shadow_before,
         "cash": shadow_cash_after,
@@ -1876,7 +1922,10 @@ def _run_paper_step_shadow_only(
     gross_pnl = float(net_pnl + total_cost)
     turnover = float(sim_execution.traded_notional_total / max(1e-9, shadow_equity_before))
     positions_notional = float(
-        sum(float(item.get("qty", 0)) * float(item.get("avg_price", 0.0)) for item in shadow_positions_after)
+        sum(
+            float(item.get("qty", 0)) * float(item.get("avg_price", 0.0))
+            for item in shadow_positions_after
+        )
     )
     exposure = float(positions_notional / max(1e-9, shadow_equity_after))
     live_position_ids = {int(row.id) for row in live_positions if row.id is not None}
@@ -1947,10 +1996,26 @@ def _run_paper_step_shadow_only(
         ],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
-        "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
-        "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
-        "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
-        "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+        "risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "risk_scale", risk_overlay.get("risk_scale", 1.0)
+            )
+        ),
+        "realized_vol": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "realized_vol", risk_overlay.get("realized_vol", 0.0)
+            )
+        ),
+        "target_vol": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "target_vol", risk_overlay.get("target_vol", 0.0)
+            )
+        ),
+        "caps_applied": dict(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "caps", risk_overlay.get("caps", {})
+            )
+        ),
         "equity_before": shadow_equity_before,
         "equity_after": shadow_equity_after,
         "cash_before": shadow_cash_before,
@@ -2113,10 +2178,26 @@ def _run_paper_step_shadow_only(
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
             "risk_overlay": {
-                "risk_scale": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("risk_scale", risk_overlay.get("risk_scale", 1.0))),
-                "realized_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("realized_vol", risk_overlay.get("realized_vol", 0.0))),
-                "target_vol": float((sim_execution.metadata.get("risk_overlay", {}) or {}).get("target_vol", risk_overlay.get("target_vol", 0.0))),
-                "caps_applied": dict((sim_execution.metadata.get("risk_overlay", {}) or {}).get("caps", risk_overlay.get("caps", {}))),
+                "risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "risk_scale", risk_overlay.get("risk_scale", 1.0)
+                    )
+                ),
+                "realized_vol": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "realized_vol", risk_overlay.get("realized_vol", 0.0)
+                    )
+                ),
+                "target_vol": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "target_vol", risk_overlay.get("target_vol", 0.0)
+                    )
+                ),
+                "caps_applied": dict(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "caps", risk_overlay.get("caps", {})
+                    )
+                ),
             },
             "engine_version": sim_execution.metadata.get("engine_version"),
             "data_digest": sim_execution.metadata.get("data_digest"),
@@ -2166,9 +2247,7 @@ def run_paper_step(
 
     positions_before = get_positions(session)
     orders_before = get_orders(session)
-    positions_before_by_id = {
-        int(row.id): row for row in positions_before if row.id is not None
-    }
+    positions_before_by_id = {int(row.id): row for row in positions_before if row.id is not None}
     position_ids_before = {int(row.id) for row in positions_before if row.id is not None}
     order_ids_before = {int(row.id) for row in orders_before if row.id is not None}
     equity_before = float(state.equity)
@@ -2274,11 +2353,15 @@ def run_paper_step(
     )
     if cost_spike_active:
         risk_scale = float(
-            state_settings.get("operate_cost_spike_risk_scale", settings.operate_cost_spike_risk_scale)
+            state_settings.get(
+                "operate_cost_spike_risk_scale", settings.operate_cost_spike_risk_scale
+            )
         )
         current_risk = float(policy.get("risk_per_trade", base_risk_per_trade))
         policy["risk_per_trade"] = max(0.0001, current_risk * max(0.1, risk_scale))
-        policy["max_positions"] = max(1, min(int(policy.get("max_positions", 1)), base_max_positions))
+        policy["max_positions"] = max(
+            1, min(int(policy.get("max_positions", 1)), base_max_positions)
+        )
         policy["selection_reason"] = (
             f"{policy.get('selection_reason', '')} Risk throttled due to cost-ratio spike."
         ).strip()
@@ -2483,15 +2566,15 @@ def run_paper_step(
             )
         candidates = []
     candidate_symbols = {
-        str(item.get("symbol", "")).upper() for item in candidates if str(item.get("symbol", "")).strip()
+        str(item.get("symbol", "")).upper()
+        for item in candidates
+        if str(item.get("symbol", "")).strip()
     }
     candidate_symbols.update(open_underlyings)
     sectors = {
         row.symbol: (row.sector or "UNKNOWN")
         for row in session.exec(
-            select(Symbol).where(
-                Symbol.symbol.in_(list(candidate_symbols))
-            )
+            select(Symbol).where(Symbol.symbol.in_(list(candidate_symbols)))
         ).all()
     }
     sector_counts: dict[str, int] = {}
@@ -3362,10 +3445,9 @@ def run_paper_step(
             )
             if fallback is not None:
                 merged_state = dict(state.settings_json or {})
-                if (
-                    str(merged_state.get("paper_mode", "strategy")) == "policy"
-                    and int(merged_state.get("active_policy_id") or 0) == int(active_policy.id)
-                ):
+                if str(merged_state.get("paper_mode", "strategy")) == "policy" and int(
+                    merged_state.get("active_policy_id") or 0
+                ) == int(active_policy.id):
                     merged_state["active_policy_id"] = int(fallback.id)
                     merged_state["active_policy_name"] = fallback.name
                     state.settings_json = merged_state

@@ -10,7 +10,7 @@ import pandas as pd
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import PaperRun, PaperState
+from app.db.models import PaperRun
 from app.db.session import engine, init_db
 from app.engine.simulator import SimulationConfig, simulate_portfolio_step
 from app.main import app
@@ -233,6 +233,7 @@ def test_operate_run_executes_in_order_and_persists_report_artifacts() -> None:
                 "paper_mode": "strategy",
                 "active_policy_id": None,
                 "operate_auto_run_include_data_updates": True,
+                "data_updates_provider_enabled": False,
                 "reports_auto_generate_daily": False,
                 "risk_overlay_enabled": True,
                 "operate_mode": "live",

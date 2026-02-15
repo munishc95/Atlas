@@ -27,6 +27,20 @@ class Instrument(SQLModel, table=True):
     metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
 
 
+class InstrumentMap(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_instrumentmap_provider_symbol", "provider", "symbol", unique=True),
+        Index("ix_instrumentmap_provider_refreshed", "provider", "last_refreshed"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    provider: str = Field(index=True, max_length=32)
+    symbol: str = Field(index=True, max_length=64)
+    instrument_key: str = Field(max_length=128)
+    last_refreshed: datetime = Field(default_factory=utc_now, index=True)
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
 class DatasetBundle(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True, max_length=128)
@@ -148,7 +162,9 @@ class Policy(SQLModel, table=True):
 
 class PolicyHealthSnapshot(SQLModel, table=True):
     __table_args__ = (
-        Index("ix_policyhealthsnapshot_policy_window_date", "policy_id", "window_days", "asof_date"),
+        Index(
+            "ix_policyhealthsnapshot_policy_window_date", "policy_id", "window_days", "asof_date"
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -273,6 +289,62 @@ class DataUpdateFile(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ProviderUpdateRun(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_providerupdaterun_bundle_timeframe_created",
+            "bundle_id",
+            "timeframe",
+            "created_at",
+        ),
+        Index("ix_providerupdaterun_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    symbols_attempted: int = 0
+    symbols_succeeded: int = 0
+    symbols_failed: int = 0
+    bars_added: int = 0
+    api_calls: int = 0
+    duration_seconds: float = 0.0
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    ended_at: datetime | None = Field(default=None)
+
+
+class ProviderUpdateItem(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_providerupdateitem_run_symbol",
+            "run_id",
+            "symbol",
+        ),
+        Index("ix_providerupdateitem_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(foreign_key="providerupdaterun.id", index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
+    symbol: str = Field(default="", index=True, max_length=64)
+    status: str = Field(default="PENDING", index=True, max_length=16)
+    bars_added: int = 0
+    api_calls: int = 0
+    start_ts: datetime | None = Field(default=None)
+    end_ts: datetime | None = Field(default=None)
+    last_bar_before: datetime | None = Field(default=None)
+    last_bar_after: datetime | None = Field(default=None)
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class OperateEvent(SQLModel, table=True):
     __table_args__ = (
         Index("ix_operateevent_ts", "ts"),
@@ -290,9 +362,7 @@ class OperateEvent(SQLModel, table=True):
 
 
 class DailyReport(SQLModel, table=True):
-    __table_args__ = (
-        Index("ix_dailyreport_date_bundle_policy", "date", "bundle_id", "policy_id"),
-    )
+    __table_args__ = (Index("ix_dailyreport_date_bundle_policy", "date", "bundle_id", "policy_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
     date: dt_date = Field(index=True)

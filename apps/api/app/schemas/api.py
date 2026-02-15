@@ -103,12 +103,27 @@ class DataUpdatesRunRequest(BaseModel):
     max_files_per_run: int | None = None
 
 
+class ProviderUpdatesRunRequest(BaseModel):
+    bundle_id: int
+    timeframe: str = "1d"
+    provider_kind: str | None = None
+    max_symbols_per_run: int | None = None
+    max_calls_per_run: int | None = None
+    start: str | None = None
+    end: str | None = None
+
+
 class OperateRunRequest(BaseModel):
     bundle_id: int | None = None
     timeframe: str | None = None
     regime: str | None = None
     policy_id: int | None = None
     include_data_updates: bool | None = None
+    provider_kind: str | None = None
+    provider_max_symbols_per_run: int | None = None
+    provider_max_calls_per_run: int | None = None
+    provider_start: str | None = None
+    provider_end: str | None = None
     date: str | None = None
     asof: str | None = None
     seed: int | None = None
@@ -234,6 +249,11 @@ class RuntimeSettingsRequest(BaseModel):
     operate_scan_truncated_reduce_to: int | None = None
     data_updates_inbox_enabled: bool | None = None
     data_updates_max_files_per_run: int | None = None
+    data_updates_provider_enabled: bool | None = None
+    data_updates_provider_kind: str | None = None
+    data_updates_provider_max_symbols_per_run: int | None = None
+    data_updates_provider_max_calls_per_run: int | None = None
+    data_updates_provider_timeframe_enabled: str | None = None
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None

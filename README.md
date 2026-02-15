@@ -341,16 +341,22 @@ Atlas now supports local-first automated data refresh from a drop-folder inbox:
 
 Scheduler auto-run order is now:
 
-1. data updates (if enabled)
-2. data quality
-3. paper run-step
-4. daily report
+1. provider updates (if enabled)
+2. inbox data updates (if enabled)
+3. data quality
+4. paper run-step
+5. daily report
 
 New runtime settings:
 
 - `operate_auto_run_include_data_updates` (default `true`)
 - `data_updates_inbox_enabled` (default `true`)
 - `data_updates_max_files_per_run` (default `50`)
+- `data_updates_provider_enabled` (default `false`)
+- `data_updates_provider_kind` (default `UPSTOX`)
+- `data_updates_provider_max_symbols_per_run`
+- `data_updates_provider_max_calls_per_run`
+- `data_updates_provider_timeframe_enabled` (default `1d`)
 - `coverage_missing_latest_warn_pct`
 - `coverage_missing_latest_fail_pct`
 - `coverage_inactive_after_missing_days`
@@ -365,6 +371,52 @@ Frontend additions:
 
 - `Universe & Data` page includes `Data Updates` controls and a coverage details drawer.
 - `Ops` page shows latest data update status and quick action to run updates.
+
+## Upstox Provider Updates + Inbox Fallback (v2.7)
+
+Atlas now supports optional provider-driven OHLCV refresh with local-first fallback:
+
+- Formal provider interface in `apps/api/app/providers`:
+  - `list_symbols(bundle_id)`
+  - `fetch_ohlc(symbols, timeframe, start, end)`
+  - `supports_timeframes()`
+- New provider implementations:
+  - `UpstoxProvider` for automated historical candle pulls
+  - `MockProvider` for deterministic fast-mode and test runs
+- Upstox mapping table:
+  - `InstrumentMap` persists `(provider, symbol, instrument_key, last_refreshed)`
+  - optional env seed map via `ATLAS_UPSTOX_SYMBOL_MAP_JSON`
+- Provider update persistence:
+  - `ProviderUpdateRun`
+  - `ProviderUpdateItem`
+- Idempotent merge/upsert behavior:
+  - bars are deduplicated by timestamp per `(symbol, timeframe)`
+  - existing inbox flow remains unchanged
+- Rate-limit-aware fetch behavior:
+  - retry with exponential backoff on 429/5xx
+  - per-run max API call cap
+  - event emission for partial/failure outcomes
+- Fast mode behavior:
+  - symbol scan is hard-capped in provider updates as well
+  - deterministic ordering remains seed-based
+
+UI updates:
+
+- `Universe & Data` includes:
+  - provider updates enable/disable toggle
+  - run provider update action
+  - latest provider update status/calls/bars
+- `Ops` includes:
+  - latest provider update status + duration + API calls
+  - quick action to run provider updates
+
+Scheduler/operate order with provider enabled:
+
+1. provider updates
+2. inbox updates
+3. data quality
+4. paper run-step
+5. daily report
 
 ## Portfolio Risk Overlay + One-Button Operate (v2.4)
 
@@ -483,6 +535,9 @@ A configurable cost model is available for both backtester and paper execution:
 - `POST /api/data/updates/run`
 - `GET /api/data/updates/latest?bundle_id=&timeframe=`
 - `GET /api/data/updates/history?bundle_id=&timeframe=&days=`
+- `POST /api/data/provider-updates/run`
+- `GET /api/data/provider-updates/latest?bundle_id=&timeframe=`
+- `GET /api/data/provider-updates/history?bundle_id=&timeframe=&days=`
 - `GET /api/data/coverage?bundle_id=&timeframe=&top_n=`
 - `GET /api/paper/state`
 - `GET /api/settings`

@@ -5,14 +5,28 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from app.providers.base import DataProvider
+from sqlmodel import Session
+
+from app.services.data_store import DataStore
+from app.providers.base import BaseProvider, DataProvider
 
 
-class MockProvider(DataProvider):
+class MockProvider(DataProvider, BaseProvider):
     """Synthetic data provider for deterministic tests."""
 
-    def __init__(self, seed: int = 7) -> None:
+    kind = "MOCK"
+
+    def __init__(
+        self,
+        seed: int = 7,
+        *,
+        session: Session | None = None,
+        store: DataStore | None = None,
+    ) -> None:
+        BaseProvider.__init__(self)
         self.seed = seed
+        self.session = session
+        self.store = store
 
     def get_symbols(self) -> list[str]:
         return ["MOCK1", "MOCK2", "MOCK3"]
@@ -48,3 +62,31 @@ class MockProvider(DataProvider):
 
     def get_corporate_actions(self, symbol: str) -> list[dict[str, object]]:
         return []
+
+    def list_symbols(self, bundle_id: int) -> list[str]:
+        if self.session is not None and self.store is not None:
+            scoped = self.store.get_bundle_symbols(self.session, int(bundle_id), timeframe="1d")
+            if scoped:
+                return scoped
+        return self.get_symbols()
+
+    def fetch_ohlc(
+        self,
+        symbols: list[str],
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        output: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            self.count_api_call(1)
+            output[str(symbol).upper()] = self.get_ohlcv(
+                str(symbol).upper(),
+                timeframe=timeframe,
+                start=start,
+                end=end,
+            )
+        return output
+
+    def supports_timeframes(self) -> set[str]:
+        return {"1d", "4h_ish", "4h_ish_resampled"}

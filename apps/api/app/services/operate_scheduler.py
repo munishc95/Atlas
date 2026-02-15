@@ -179,7 +179,9 @@ def _enqueue_job(
     return job.id
 
 
-def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings, now_ist: datetime | None = None) -> bool:
+def run_auto_operate_once(
+    *, session: Session, queue: Queue, settings: Settings, now_ist: datetime | None = None
+) -> bool:
     context = _resolve_scheduler_context(session)
     state: PaperState | None = context["state"]
     if state is None:
@@ -199,13 +201,33 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     triggered = False
     merged = dict(state_settings)
 
-    auto_run_enabled = bool(state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled))
+    auto_run_enabled = bool(
+        state_settings.get("operate_auto_run_enabled", settings.operate_auto_run_enabled)
+    )
     include_data_updates = bool(
         state_settings.get(
             "operate_auto_run_include_data_updates",
             settings.operate_auto_run_include_data_updates,
         )
     )
+    provider_updates_enabled = bool(
+        state_settings.get(
+            "data_updates_provider_enabled",
+            settings.data_updates_provider_enabled,
+        )
+    )
+    provider_timeframe_token = str(
+        state_settings.get(
+            "data_updates_provider_timeframe_enabled",
+            settings.data_updates_provider_timeframe_enabled,
+        )
+    )
+    provider_timeframes = {
+        str(item).strip().lower()
+        for item in provider_timeframe_token.split(",")
+        if str(item).strip()
+    }
+    provider_timeframe_allowed = str(timeframe).strip().lower() in provider_timeframes
     run_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)),
         default=settings.operate_auto_run_time_ist,
@@ -215,6 +237,15 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
         if not (isinstance(last_run_date, str) and last_run_date == today.isoformat()):
             queued_jobs: dict[str, str] = {}
             if isinstance(bundle_id, int) and bundle_id > 0 and include_data_updates:
+                if provider_updates_enabled and provider_timeframe_allowed:
+                    queued_jobs["provider_updates"] = _enqueue_job(
+                        session=session,
+                        queue=queue,
+                        settings=settings,
+                        job_type="provider_updates",
+                        task_path="app.jobs.tasks.run_provider_updates_job",
+                        payload={"bundle_id": bundle_id, "timeframe": timeframe},
+                    )
                 queued_jobs["data_updates"] = _enqueue_job(
                     session=session,
                     queue=queue,
@@ -274,6 +305,7 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
                     "timeframe": timeframe,
                     "policy_id": policy_id,
                     "include_data_updates": include_data_updates,
+                    "provider_updates_enabled": provider_updates_enabled,
                     "calendar_segment": segment,
                     "session": calendar_get_session(today, segment=segment, settings=settings),
                     "queued_jobs": queued_jobs,
@@ -285,13 +317,20 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     auto_eval_enabled = bool(
         state_settings.get("operate_auto_eval_enabled", settings.operate_auto_eval_enabled)
     )
-    auto_eval_frequency = str(
-        state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency)
-    ).strip().upper()
-    auto_eval_day_of_week = _safe_int(
-        state_settings.get("operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week),
-        settings.operate_auto_eval_day_of_week,
-    ) % 7
+    auto_eval_frequency = (
+        str(state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency))
+        .strip()
+        .upper()
+    )
+    auto_eval_day_of_week = (
+        _safe_int(
+            state_settings.get(
+                "operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week
+            ),
+            settings.operate_auto_eval_day_of_week,
+        )
+        % 7
+    )
     auto_eval_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_eval_time_ist", settings.operate_auto_eval_time_ist)),
         default=settings.operate_auto_eval_time_ist,
@@ -316,7 +355,12 @@ def run_auto_operate_once(*, session: Session, queue: Queue, settings: Settings,
     ):
         dedupe_key = f"{today.isoformat()}::AUTO_EVAL"
         queued_eval_id: str | None = None
-        if isinstance(bundle_id, int) and bundle_id > 0 and isinstance(policy_id, int) and policy_id > 0:
+        if (
+            isinstance(bundle_id, int)
+            and bundle_id > 0
+            and isinstance(policy_id, int)
+            and policy_id > 0
+        ):
             queued_eval_id = _enqueue_job(
                 session=session,
                 queue=queue,

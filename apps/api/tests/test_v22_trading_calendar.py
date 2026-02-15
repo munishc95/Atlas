@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import get_settings
 from app.db.models import DatasetBundle, PaperState
@@ -86,6 +86,8 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
             "operate_auto_run_enabled": True,
             "operate_auto_run_time_ist": "09:00",
             "operate_last_auto_run_date": None,
+            "operate_auto_run_include_data_updates": True,
+            "data_updates_provider_enabled": False,
             "active_policy_id": None,
         }
         session.add(state)
@@ -109,7 +111,9 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
-        assert str((refreshed.settings_json or {}).get("operate_last_auto_run_date")) == "2026-02-01"
+        assert (
+            str((refreshed.settings_json or {}).get("operate_last_auto_run_date")) == "2026-02-01"
+        )
 
         # same trading day should dedupe
         fired_again = run_auto_operate_once(

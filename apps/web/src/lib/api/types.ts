@@ -301,6 +301,7 @@ export type ApiOperateStatus = {
   latest_run?: Record<string, unknown> | null;
   latest_data_quality?: ApiDataQualityReport | null;
   latest_data_update?: ApiDataUpdateRun | null;
+  latest_provider_update?: ApiProviderUpdateRun | null;
   recent_event_counts_24h?: Record<string, number>;
   fast_mode_enabled?: boolean;
   last_job_durations?: Record<
@@ -344,6 +345,24 @@ export type ApiDataUpdateRun = {
   skipped_files: number;
   rows_ingested: number;
   symbols_affected_json: string[];
+  warnings_json: Array<Record<string, unknown>>;
+  errors_json: Array<Record<string, unknown>>;
+  created_at: string;
+  ended_at?: string | null;
+};
+
+export type ApiProviderUpdateRun = {
+  id: number;
+  bundle_id?: number | null;
+  timeframe: string;
+  provider_kind: string;
+  status: string;
+  symbols_attempted: number;
+  symbols_succeeded: number;
+  symbols_failed: number;
+  bars_added: number;
+  api_calls: number;
+  duration_seconds: number;
   warnings_json: Array<Record<string, unknown>>;
   errors_json: Array<Record<string, unknown>>;
   created_at: string;
@@ -423,6 +442,7 @@ export type ApiOperateHealth = {
   active_timeframe: string;
   latest_data_quality?: ApiDataQualityReport | null;
   latest_data_update?: ApiDataUpdateRun | null;
+  latest_provider_update?: ApiProviderUpdateRun | null;
   latest_paper_run_id?: number | null;
   last_run_step_at?: string | null;
   recent_event_counts_24h: Record<string, number>;

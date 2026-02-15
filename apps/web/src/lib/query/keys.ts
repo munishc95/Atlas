@@ -51,6 +51,10 @@ export const qk = {
     ["dataUpdatesLatest", bundleId ?? "none", timeframe] as const,
   dataUpdatesHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>
     ["dataUpdatesHistory", bundleId ?? "all", timeframe ?? "all", days] as const,
+  providerUpdatesLatest: (bundleId?: number | null, timeframe?: string | null) =>
+    ["providerUpdatesLatest", bundleId ?? "all", timeframe ?? "all"] as const,
+  providerUpdatesHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>
+    ["providerUpdatesHistory", bundleId ?? "all", timeframe ?? "all", days] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>

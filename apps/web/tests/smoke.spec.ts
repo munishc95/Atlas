@@ -87,9 +87,30 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       operate_auto_run_include_data_updates: false,
       paper_mode: "strategy",
       active_policy_id: null,
+      data_updates_provider_enabled: true,
+      data_updates_provider_kind: "MOCK",
+      data_updates_provider_timeframe_enabled: "1d",
+      data_updates_provider_max_symbols_per_run: 5,
+      data_updates_provider_max_calls_per_run: 20,
     },
   });
   expect(settingsRes.ok()).toBeTruthy();
+
+  const providerUpdateRes = await request.post(`${apiBase}/api/data/provider-updates/run`, {
+    data: {
+      bundle_id: bundleId,
+      timeframe: "1d",
+    },
+  });
+  expect(providerUpdateRes.ok()).toBeTruthy();
+  const providerUpdateBody = await providerUpdateRes.json();
+  const providerUpdateJob = await waitForJob(
+    request,
+    apiBase,
+    String(providerUpdateBody?.data?.job_id),
+    180_000,
+  );
+  expect(providerUpdateJob.status).toBe("SUCCEEDED");
 
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
@@ -117,4 +138,3 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   await expect(page.getByText("No operate run summary yet")).toHaveCount(0);
 });
-

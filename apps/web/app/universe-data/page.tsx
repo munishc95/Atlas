@@ -23,7 +23,7 @@ export default function UniverseDataPage() {
   const [bundleId, setBundleId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | null>(null);
+  const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | "provider" | null>(null);
   const [showCoverageDrawer, setShowCoverageDrawer] = useState(false);
 
   const universeQuery = useQuery({
@@ -40,6 +40,10 @@ export default function UniverseDataPage() {
     queryKey: qk.universes,
     queryFn: async () => (await atlasApi.universes()).data,
   });
+  const settingsQuery = useQuery({
+    queryKey: qk.settings,
+    queryFn: async () => (await atlasApi.settings()).data,
+  });
   const coverageTimeframe = timeframe === "4h_ish_resampled" ? "4h_ish" : timeframe;
   const dataUpdatesLatestQuery = useQuery({
     queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe),
@@ -50,6 +54,21 @@ export default function UniverseDataPage() {
       }
       try {
         return (await atlasApi.dataUpdatesLatest(bundleId, coverageTimeframe)).data;
+      } catch (error) {
+        if (error instanceof ApiClientError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    refetchInterval: 10_000,
+  });
+  const providerUpdatesLatestQuery = useQuery({
+    queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      try {
+        return (await atlasApi.providerUpdatesLatest(bundleId ?? undefined, coverageTimeframe)).data;
       } catch (error) {
         if (error instanceof ApiClientError && error.status === 404) {
           return null;
@@ -133,6 +152,38 @@ export default function UniverseDataPage() {
       toast.error(error.message || "Could not queue data update job");
     },
   });
+  const providerUpdatesMutation = useMutation({
+    mutationFn: async () => {
+      if (!bundleId) {
+        throw new Error("Choose a bundle before running provider updates.");
+      }
+      return (
+        await atlasApi.runProviderUpdates({
+          bundle_id: bundleId,
+          timeframe: coverageTimeframe,
+        })
+      ).data;
+    },
+    onSuccess: (result) => {
+      setActiveJobId(result.job_id);
+      setActiveJobKind("provider");
+      toast.success("Provider update job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue provider update job");
+    },
+  });
+  const providerToggleMutation = useMutation({
+    mutationFn: async (enabled: boolean) =>
+      (await atlasApi.updateSettings({ data_updates_provider_enabled: enabled })).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.settings });
+      toast.success("Provider updates setting saved");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not save provider setting");
+    },
+  });
 
   const stream = useJobStream(activeJobId);
 
@@ -147,14 +198,29 @@ export default function UniverseDataPage() {
       queryClient.invalidateQueries({ queryKey: qk.jobs(20) });
       if (bundleId) {
         queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
+        queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
       }
-      toast.success(activeJobKind === "updates" ? "Data updates completed" : "Import completed");
+      if (activeJobKind === "updates") {
+        toast.success("Data updates completed");
+      } else if (activeJobKind === "provider") {
+        toast.success("Provider updates completed");
+      } else {
+        toast.success("Import completed");
+      }
     }
     if (stream.status === "FAILED") {
-      toast.error(activeJobKind === "updates" ? "Data updates failed" : "Import failed");
+      if (activeJobKind === "updates") {
+        toast.error("Data updates failed");
+      } else if (activeJobKind === "provider") {
+        toast.error("Provider updates failed");
+      } else {
+        toast.error("Import failed");
+      }
     }
   }, [activeJobId, activeJobKind, bundleId, coverageTimeframe, queryClient, stream.isTerminal, stream.status]);
+
+  const providerEnabled = String(settingsQuery.data?.data_updates_provider_enabled ?? "false") === "true";
 
   const symbols = universeQuery.data?.symbols ?? [];
   const pagedRows = useMemo(
@@ -170,7 +236,13 @@ export default function UniverseDataPage() {
           setActiveJobId(null);
           setActiveJobKind(null);
         }}
-        title={activeJobKind === "updates" ? "Data Updates Job" : "Import Job"}
+        title={
+          activeJobKind === "updates"
+            ? "Data Updates Job"
+            : activeJobKind === "provider"
+              ? "Provider Updates Job"
+              : "Import Job"
+        }
       />
 
       <section className="card p-4">
@@ -368,6 +440,46 @@ export default function UniverseDataPage() {
               className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
             >
               {updatesMutation.isPending ? "Queuing..." : "Run Data Updates"}
+            </button>
+          </div>
+          <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p>
+              Provider updates:{" "}
+              <span
+                className={`badge ${
+                  providerEnabled ? "bg-success/15 text-success" : "bg-surface text-muted"
+                }`}
+              >
+                {providerEnabled ? "Enabled" : "Disabled"}
+              </span>
+            </p>
+            <p>
+              Latest provider run:{" "}
+              <span className="font-semibold text-foreground">
+                {providerUpdatesLatestQuery.data?.status ?? "Not run yet"}
+              </span>
+            </p>
+            <p>Bars added: {providerUpdatesLatestQuery.data?.bars_added ?? 0}</p>
+            <p>API calls: {providerUpdatesLatestQuery.data?.api_calls ?? 0}</p>
+            <button
+              type="button"
+              onClick={() => providerToggleMutation.mutate(!providerEnabled)}
+              disabled={providerToggleMutation.isPending}
+              className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
+            >
+              {providerToggleMutation.isPending
+                ? "Saving..."
+                : providerEnabled
+                  ? "Disable Provider Updates"
+                  : "Enable Provider Updates"}
+            </button>
+            <button
+              type="button"
+              onClick={() => providerUpdatesMutation.mutate()}
+              disabled={providerUpdatesMutation.isPending || !bundleId}
+              className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
+            >
+              {providerUpdatesMutation.isPending ? "Queuing..." : "Run Provider Update"}
             </button>
           </div>
         </article>

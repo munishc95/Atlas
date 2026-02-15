@@ -7,7 +7,14 @@ from zoneinfo import ZoneInfo
 from sqlmodel import Session, select
 
 from app.core.config import Settings
-from app.db.models import DataQualityReport, DataUpdateRun, OperateEvent, PaperRun, PaperState
+from app.db.models import (
+    DataQualityReport,
+    DataUpdateRun,
+    OperateEvent,
+    PaperRun,
+    PaperState,
+    ProviderUpdateRun,
+)
 from app.services.trading_calendar import (
     compute_next_scheduled_run_ist,
     get_session as calendar_get_session,
@@ -119,9 +126,15 @@ def list_operate_events(
     if since is not None:
         stmt = stmt.where(OperateEvent.ts >= since)
     if severity:
-        stmt = stmt.where(OperateEvent.severity == _safe_upper(severity, allowed=ALLOWED_SEVERITIES, fallback="INFO"))
+        stmt = stmt.where(
+            OperateEvent.severity
+            == _safe_upper(severity, allowed=ALLOWED_SEVERITIES, fallback="INFO")
+        )
     if category:
-        stmt = stmt.where(OperateEvent.category == _safe_upper(category, allowed=ALLOWED_CATEGORIES, fallback="SYSTEM"))
+        stmt = stmt.where(
+            OperateEvent.category
+            == _safe_upper(category, allowed=ALLOWED_CATEGORIES, fallback="SYSTEM")
+        )
     stmt = stmt.limit(max(1, min(int(limit), 500)))
     return list(session.exec(stmt).all())
 
@@ -156,6 +169,21 @@ def _latest_data_update_run(
     return session.exec(stmt).first()
 
 
+def _latest_provider_update_run(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> ProviderUpdateRun | None:
+    stmt = select(ProviderUpdateRun)
+    if bundle_id is not None:
+        stmt = stmt.where(ProviderUpdateRun.bundle_id == bundle_id)
+    if timeframe:
+        stmt = stmt.where(ProviderUpdateRun.timeframe == timeframe)
+    stmt = stmt.order_by(ProviderUpdateRun.created_at.desc(), ProviderUpdateRun.id.desc()).limit(1)
+    return session.exec(stmt).first()
+
+
 def get_operate_health_summary(
     session: Session,
     settings: Settings,
@@ -164,7 +192,11 @@ def get_operate_health_summary(
     timeframe: str | None = None,
 ) -> dict[str, Any]:
     latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
-    target_bundle_id = bundle_id if bundle_id is not None else (latest_run.bundle_id if latest_run is not None else None)
+    target_bundle_id = (
+        bundle_id
+        if bundle_id is not None
+        else (latest_run.bundle_id if latest_run is not None else None)
+    )
     target_timeframe = timeframe
     if not target_timeframe and latest_run is not None:
         summary = latest_run.summary_json if isinstance(latest_run.summary_json, dict) else {}
@@ -184,9 +216,16 @@ def get_operate_health_summary(
         bundle_id=target_bundle_id,
         timeframe=target_timeframe,
     )
+    latest_provider_update = _latest_provider_update_run(
+        session,
+        bundle_id=target_bundle_id,
+        timeframe=target_timeframe,
+    )
     state = session.get(PaperState, 1)
     state_settings = dict(state.settings_json or {}) if state is not None else {}
-    safe_mode_on_fail = bool(state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail))
+    safe_mode_on_fail = bool(
+        state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail)
+    )
     safe_mode_action = str(
         state_settings.get("operate_safe_mode_action", settings.operate_safe_mode_action)
     )
@@ -206,13 +245,20 @@ def get_operate_health_summary(
     auto_eval_enabled = bool(
         state_settings.get("operate_auto_eval_enabled", settings.operate_auto_eval_enabled)
     )
-    auto_eval_frequency = str(
-        state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency)
-    ).strip().upper()
+    auto_eval_frequency = (
+        str(state_settings.get("operate_auto_eval_frequency", settings.operate_auto_eval_frequency))
+        .strip()
+        .upper()
+    )
     try:
-        auto_eval_day_of_week = int(
-            state_settings.get("operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week)
-        ) % 7
+        auto_eval_day_of_week = (
+            int(
+                state_settings.get(
+                    "operate_auto_eval_day_of_week", settings.operate_auto_eval_day_of_week
+                )
+            )
+            % 7
+        )
     except (TypeError, ValueError):
         auto_eval_day_of_week = int(settings.operate_auto_eval_day_of_week) % 7
     auto_eval_time_ist = str(
@@ -247,7 +293,11 @@ def get_operate_health_summary(
 
     mode = "NORMAL"
     mode_reason: str | None = None
-    if latest_quality is not None and str(latest_quality.status).upper() == "FAIL" and safe_mode_on_fail:
+    if (
+        latest_quality is not None
+        and str(latest_quality.status).upper() == "FAIL"
+        and safe_mode_on_fail
+    ):
         mode = "SAFE MODE"
         mode_reason = "data_quality_fail_safe_mode"
 
@@ -312,7 +362,12 @@ def get_operate_health_summary(
         "active_timeframe": target_timeframe,
         "latest_data_quality": latest_quality.model_dump() if latest_quality is not None else None,
         "latest_data_update": latest_update.model_dump() if latest_update is not None else None,
-        "latest_paper_run_id": int(latest_run.id) if latest_run is not None and latest_run.id is not None else None,
+        "latest_provider_update": (
+            latest_provider_update.model_dump() if latest_provider_update is not None else None
+        ),
+        "latest_paper_run_id": int(latest_run.id)
+        if latest_run is not None and latest_run.id is not None
+        else None,
         "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
         "recent_event_counts_24h": severity_counts,
         "fast_mode_enabled": bool(settings.fast_mode_enabled),

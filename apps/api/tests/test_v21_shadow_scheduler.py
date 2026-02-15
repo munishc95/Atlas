@@ -333,6 +333,8 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
             "operate_auto_run_enabled": True,
             "operate_auto_run_time_ist": "09:00",
             "operate_last_auto_run_date": None,
+            "operate_auto_run_include_data_updates": True,
+            "data_updates_provider_enabled": False,
             "active_policy_id": None,
         }
         session.add(state)
@@ -363,7 +365,9 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
-        assert str((refreshed.settings_json or {}).get("operate_last_auto_run_date")) == "2026-02-13"
+        assert (
+            str((refreshed.settings_json or {}).get("operate_last_auto_run_date")) == "2026-02-13"
+        )
 
         second = run_auto_operate_once(
             session=session,
@@ -444,7 +448,9 @@ def test_operate_scheduler_auto_eval_weekly_queues_once() -> None:
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
-        assert str((refreshed.settings_json or {}).get("operate_last_auto_eval_date")) == "2026-02-16"
+        assert (
+            str((refreshed.settings_json or {}).get("operate_last_auto_eval_date")) == "2026-02-16"
+        )
 
         second = run_auto_operate_once(
             session=session,

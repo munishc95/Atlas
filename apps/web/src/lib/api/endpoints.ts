@@ -13,6 +13,7 @@ import type {
   ApiDataCoverage,
   ApiDataQualityReport,
   ApiDataUpdateRun,
+  ApiProviderUpdateRun,
   ApiOperateEvent,
   ApiOperateHealth,
   ApiOperateRunSummary,
@@ -50,6 +51,19 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  runProviderUpdates: (payload: {
+    bundle_id: number;
+    timeframe?: string;
+    provider_kind?: string;
+    max_symbols_per_run?: number;
+    max_calls_per_run?: number;
+    start?: string;
+    end?: string;
+  }) =>
+    apiFetch<JobStart>("/api/data/provider-updates/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   dataUpdatesLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataUpdateRun>(
       `/api/data/updates/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,
@@ -61,6 +75,23 @@ export const atlasApi = {
     if (params?.days) search.set("days", String(params.days));
     return apiFetch<ApiDataUpdateRun[]>(
       `/api/data/updates/history${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  providerUpdatesLatest: (bundleId?: number, timeframe?: string) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    return apiFetch<ApiProviderUpdateRun>(
+      `/api/data/provider-updates/latest${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  providerUpdatesHistory: (params?: { bundle_id?: number; timeframe?: string; days?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (params?.days) search.set("days", String(params.days));
+    return apiFetch<ApiProviderUpdateRun[]>(
+      `/api/data/provider-updates/history${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
   dataCoverage: (bundleId: number, timeframe = "1d", topN = 50) =>

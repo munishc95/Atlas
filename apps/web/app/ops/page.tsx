@@ -165,6 +165,26 @@ export default function OpsPage() {
       toast.error(error.message || "Could not queue data update job");
     },
   });
+  const runProviderUpdatesMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeBundleId) {
+        throw new Error("Active bundle is required before running provider updates.");
+      }
+      return (
+        await atlasApi.runProviderUpdates({
+          bundle_id: activeBundleId,
+          timeframe: activeTimeframe,
+        })
+      ).data;
+    },
+    onSuccess: (payload) => {
+      setJobId(payload.job_id);
+      toast.success("Provider update job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue provider update job");
+    },
+  });
 
   const dailyReportMutation = useMutation({
     mutationFn: async () =>
@@ -231,6 +251,7 @@ export default function OpsPage() {
         queryClient.invalidateQueries({ queryKey: qk.dataQualityLatest(activeBundleId, activeTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
         queryClient.invalidateQueries({ queryKey: ["dataUpdatesLatest"] });
+        queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(activeBundleId, activeTimeframe) });
         queryClient.invalidateQueries({ queryKey: ["dataCoverage"] });
       }
       toast.success("Ops action complete");
@@ -252,6 +273,8 @@ export default function OpsPage() {
   const mode = String(healthQuery.data?.mode ?? statusQuery.data?.mode ?? "NORMAL");
   const latestQuality = healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
   const latestUpdate = healthQuery.data?.latest_data_update ?? statusQuery.data?.latest_data_update ?? null;
+  const latestProviderUpdate =
+    healthQuery.data?.latest_provider_update ?? statusQuery.data?.latest_provider_update ?? null;
   const eventCounts = healthQuery.data?.recent_event_counts_24h ?? {};
   const autoRunEnabled = Boolean(healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled);
   const autoRunTimeIst = String(
@@ -452,6 +475,14 @@ export default function OpsPage() {
             </button>
             <button
               type="button"
+              onClick={() => runProviderUpdatesMutation.mutate()}
+              disabled={runProviderUpdatesMutation.isPending || !activeBundleId}
+              className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+            >
+              {runProviderUpdatesMutation.isPending ? "Queuing..." : "Run Provider Update"}
+            </button>
+            <button
+              type="button"
               onClick={() => runUpdatesMutation.mutate()}
               disabled={runUpdatesMutation.isPending || !activeBundleId}
               className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
@@ -500,6 +531,16 @@ export default function OpsPage() {
                 );
               },
             )}
+          </div>
+          <div className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p>
+              Provider update run:{" "}
+              <span className={`badge ${badgeTone(String(latestProviderUpdate?.status ?? "N/A"))}`}>
+                {latestProviderUpdate?.status ?? "Not run"}
+              </span>
+            </p>
+            <p>API calls: {Number(latestProviderUpdate?.api_calls ?? 0)}</p>
+            <p>Duration: {Number(latestProviderUpdate?.duration_seconds ?? 0).toFixed(2)}s</p>
           </div>
         </article>
       </section>

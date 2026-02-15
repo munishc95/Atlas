@@ -32,6 +32,7 @@ from app.jobs.queue import get_queue
 from app.jobs.tasks import (
     run_auto_eval_job,
     run_backtest_job,
+    run_provider_updates_job,
     run_data_updates_job,
     run_data_quality_job,
     run_import_job,
@@ -50,6 +51,7 @@ from app.schemas.api import (
     CreatePolicyRequest,
     DataQualityRunRequest,
     DataUpdatesRunRequest,
+    ProviderUpdatesRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
     OperateRunRequest,
@@ -72,6 +74,10 @@ from app.services.data_updates import (
     compute_data_coverage,
     get_latest_data_update_run,
     list_data_update_history,
+)
+from app.services.provider_updates import (
+    get_latest_provider_update_run,
+    list_provider_update_history,
 )
 from app.services.data_quality import (
     get_latest_data_quality_report,
@@ -206,8 +212,7 @@ def _enqueue_or_inline(
                     "error": {
                         "code": "queue_error",
                         "message": (
-                            f"Queue dispatch failed: {exc}. "
-                            f"Inline fallback failed: {inline_exc}"
+                            f"Queue dispatch failed: {exc}. Inline fallback failed: {inline_exc}"
                         ),
                     }
                 },
@@ -397,6 +402,58 @@ def data_updates_history(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     rows = list_data_update_history(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        days=days,
+    )
+    return _data([row.model_dump() for row in rows])
+
+
+@router.post("/data/provider-updates/run")
+def run_provider_updates(
+    payload: ProviderUpdatesRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="provider_updates",
+        task_path="app.jobs.tasks.run_provider_updates_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_provider_updates_job,
+    )
+
+
+@router.get("/data/provider-updates/latest")
+def latest_provider_update(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_latest_provider_update_run(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if row is None:
+        raise APIError(code="not_found", message="No provider update run found", status_code=404)
+    return _data(row.model_dump())
+
+
+@router.get("/data/provider-updates/history")
+def provider_updates_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    days: int = Query(default=7, ge=1, le=365),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_provider_update_history(
         session,
         bundle_id=bundle_id,
         timeframe=timeframe,
@@ -1104,14 +1161,10 @@ def operate_status(
     if policy is not None:
         state_settings = state.get("settings_json", {})
         short_window = int(
-            state_settings.get(
-                "health_window_days_short", settings.health_window_days_short
-            )
+            state_settings.get("health_window_days_short", settings.health_window_days_short)
         )
         long_window = int(
-            state_settings.get(
-                "health_window_days_long", settings.health_window_days_long
-            )
+            state_settings.get("health_window_days_long", settings.health_window_days_long)
         )
         health_short = get_policy_health_snapshot(
             session,
@@ -1161,6 +1214,7 @@ def operate_status(
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
             "latest_data_quality": health_summary.get("latest_data_quality"),
             "latest_data_update": health_summary.get("latest_data_update"),
+            "latest_provider_update": health_summary.get("latest_provider_update"),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "fast_mode_enabled": health_summary.get("fast_mode_enabled"),
             "last_job_durations": health_summary.get("last_job_durations"),
@@ -1184,7 +1238,9 @@ def operate_events(
         try:
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError as exc:
-            raise APIError(code="invalid_since", message="since must be an ISO datetime string") from exc
+            raise APIError(
+                code="invalid_since", message="since must be an ISO datetime string"
+            ) from exc
     rows = list_operate_events(
         session,
         since=since_dt,
@@ -1428,13 +1484,17 @@ def get_daily_reports(
 
 
 @router.get("/reports/daily/{report_id}")
-def get_daily_report_by_id(report_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+def get_daily_report_by_id(
+    report_id: int, session: Session = Depends(get_session)
+) -> dict[str, Any]:
     row = get_daily_report(session, report_id)
     return _data(row.model_dump())
 
 
 @router.get("/reports/daily/{report_id}/export.json")
-def export_daily_report_json(report_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+def export_daily_report_json(
+    report_id: int, session: Session = Depends(get_session)
+) -> dict[str, Any]:
     row = get_daily_report(session, report_id)
     return _data(row.content_json)
 
@@ -1611,6 +1671,11 @@ def get_settings_payload(
         "operate_scan_truncated_reduce_to": settings.operate_scan_truncated_reduce_to,
         "data_updates_inbox_enabled": settings.data_updates_inbox_enabled,
         "data_updates_max_files_per_run": settings.data_updates_max_files_per_run,
+        "data_updates_provider_enabled": settings.data_updates_provider_enabled,
+        "data_updates_provider_kind": settings.data_updates_provider_kind,
+        "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
+        "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
+        "data_updates_provider_timeframe_enabled": settings.data_updates_provider_timeframe_enabled,
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
         "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
@@ -1697,9 +1762,7 @@ def stream_job(job_id: str, settings: Settings = Depends(get_settings)):
         return Session(engine)
 
     poll_seconds = (
-        float(settings.fast_mode_job_poll_seconds)
-        if fast_mode_enabled(settings)
-        else 1.0
+        float(settings.fast_mode_job_poll_seconds) if fast_mode_enabled(settings) else 1.0
     )
     return StreamingResponse(
         job_event_stream(
