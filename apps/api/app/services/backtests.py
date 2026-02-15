@@ -12,6 +12,7 @@ from app.db.models import Backtest, Trade
 from app.engine.backtester import BacktestConfig, run_backtest
 from app.services.jobs import append_job_log
 from app.services.data_store import DataStore
+from app.services.fast_mode import resolve_seed
 from app.strategies.templates import generate_signal_sides
 
 
@@ -103,7 +104,7 @@ def _build_config(settings: Settings, payload_config: dict[str, Any]) -> Backtes
         ),
         cost_mode=str(payload_config.get("cost_mode", settings.cost_mode)),
         cost_params=cost_params,
-        seed=int(payload_config.get("seed", 7)),
+        seed=resolve_seed(settings=settings, value=payload_config.get("seed"), default=7),
     )
 
 

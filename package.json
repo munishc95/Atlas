@@ -11,6 +11,8 @@
     "dev:stack:e2e": "powershell -ExecutionPolicy Bypass -File ./scripts/dev.ps1 -InstallE2E",
     "dev:stack:no-docker": "powershell -ExecutionPolicy Bypass -File ./scripts/dev.ps1 -SkipDocker",
     "setup:e2e": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-e2e.ps1 -Install",
+    "test:e2e:smoke": "pnpm -C apps/web test:e2e:smoke",
+    "test:e2e:full": "pnpm -C apps/web test:e2e:full",
     "format:backend": "python -m ruff format apps/api && python -m ruff check apps/api --fix",
     "format:frontend": "pnpm -C apps/web format",
     "format:docs": "pnpm exec prettier --write \"README.md\" \"AGENTS.md\" \"docs/**/*.md\"",

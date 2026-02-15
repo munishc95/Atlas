@@ -15,6 +15,7 @@ from app.db.session import engine
 from app.services.backtests import execute_backtest
 from app.services.auto_evaluation import execute_auto_evaluation
 from app.services.data_store import DataStore
+from app.services.fast_mode import prefer_sample_bundle_id
 from app.services.data_updates import run_data_updates
 from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
@@ -57,6 +58,33 @@ def _emit_job_error_event(
         category="SYSTEM",
         message=f"{job_type} job failed.",
         details={"job_id": job_id, "job_type": job_type, "error": str(exc)},
+        correlation_id=job_id,
+    )
+
+
+def _emit_job_duration_event(
+    session: Session,
+    *,
+    job_id: str,
+    job_kind: str,
+    duration_seconds: float,
+    status: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    details = {
+        "job_id": job_id,
+        "job_kind": str(job_kind),
+        "duration_seconds": round(float(duration_seconds), 3),
+        "status": str(status).upper(),
+    }
+    if isinstance(extra, dict):
+        details.update(extra)
+    emit_operate_event(
+        session,
+        severity="INFO" if str(status).upper() in {"SUCCEEDED", "DONE"} else "WARN",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details=details,
         correlation_id=job_id,
     )
 
@@ -251,6 +279,7 @@ def run_data_quality_job(
 ) -> None:
     settings = get_settings()
     store = _store()
+    started = time.perf_counter()
     with Session(engine) as session:
         try:
             update_job(session, job_id, status="RUNNING", progress=10)
@@ -271,6 +300,13 @@ def run_data_quality_job(
             )
             update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
             append_job_log(session, job_id, "Data quality run finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="data_quality",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Data quality run failed: {exc}")
             _emit_job_error_event(session, job_id=job_id, job_type="data_quality", exc=exc)
@@ -281,6 +317,13 @@ def run_data_quality_job(
                 progress=100,
                 result={"error": {"code": "data_quality_failed", "message": str(exc)}},
             )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="data_quality",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
+            )
 
 
 def run_data_updates_job(
@@ -290,6 +333,7 @@ def run_data_updates_job(
 ) -> None:
     settings = get_settings()
     store = _store()
+    started = time.perf_counter()
     with Session(engine) as session:
         try:
             update_job(session, job_id, status="RUNNING", progress=10)
@@ -310,6 +354,13 @@ def run_data_updates_job(
             )
             update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
             append_job_log(session, job_id, "Data updates run finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="data_updates",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Data updates run failed: {exc}")
             _emit_job_error_event(session, job_id=job_id, job_type="data_updates", exc=exc)
@@ -319,6 +370,13 @@ def run_data_updates_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "data_updates_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="data_updates",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
             )
 
 
@@ -409,6 +467,7 @@ def run_paper_step_job(
     max_runtime_seconds: int | None = None,
 ) -> None:
     settings = get_settings()
+    started = time.perf_counter()
     with Session(engine) as session:
         try:
             update_job(session, job_id, status="RUNNING", progress=10)
@@ -423,6 +482,13 @@ def run_paper_step_job(
             )
             update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
             append_job_log(session, job_id, "Paper step finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="paper_step",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Paper step failed: {exc}")
             _emit_job_error_event(session, job_id=job_id, job_type="paper_step", exc=exc)
@@ -432,6 +498,13 @@ def run_paper_step_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "paper_step_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="paper_step",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
             )
 
 
@@ -467,6 +540,8 @@ def _resolve_operate_context(
     raw_bundle = payload.get("bundle_id")
     if isinstance(raw_bundle, int) and raw_bundle > 0:
         bundle_id = int(raw_bundle)
+    elif settings.fast_mode_enabled:
+        bundle_id = prefer_sample_bundle_id(session, settings=settings)
     elif latest_run is not None and latest_run.bundle_id is not None:
         bundle_id = int(latest_run.bundle_id)
     else:
@@ -549,6 +624,7 @@ def _operate_run_result(
     }
 
     update_job(session, job_id, progress=15)
+    step_started = time.perf_counter()
     if include_data_updates and isinstance(bundle_id, int) and bundle_id > 0:
         append_job_log(session, job_id, "Operate run: data updates started")
         update_row = run_data_updates(
@@ -574,9 +650,25 @@ def _operate_run_result(
     else:
         step_payload = {"status": "SKIPPED", "reason": "disabled_or_no_bundle"}
         summary["data_updates"] = step_payload
+    step_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
     summary["steps"].append({"name": "data_updates", **step_payload})
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details={
+            "job_id": job_id,
+            "job_kind": "data_updates",
+            "duration_seconds": step_payload["duration_seconds"],
+            "status": step_payload.get("status"),
+            "mode": "operate_run",
+        },
+        correlation_id=job_id,
+    )
 
     update_job(session, job_id, progress=40)
+    step_started = time.perf_counter()
     if isinstance(bundle_id, int) and bundle_id > 0:
         append_job_log(session, job_id, "Operate run: data quality started")
         quality = run_data_quality_report(
@@ -598,9 +690,25 @@ def _operate_run_result(
     else:
         quality_payload = {"status": "SKIPPED", "reason": "no_bundle"}
     summary["data_quality"] = quality_payload
+    quality_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
     summary["steps"].append({"name": "data_quality", **quality_payload})
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details={
+            "job_id": job_id,
+            "job_kind": "data_quality",
+            "duration_seconds": quality_payload["duration_seconds"],
+            "status": quality_payload.get("status"),
+            "mode": "operate_run",
+        },
+        correlation_id=job_id,
+    )
 
     update_job(session, job_id, progress=65)
+    step_started = time.perf_counter()
     append_job_log(session, job_id, "Operate run: paper step started")
     paper_payload = {
         "regime": regime,
@@ -638,9 +746,25 @@ def _operate_run_result(
         "risk_overlay": paper_result.get("risk_overlay", {}),
     }
     summary["paper"] = paper_summary
+    paper_summary["duration_seconds"] = round(time.perf_counter() - step_started, 3)
     summary["steps"].append({"name": "paper_step", **paper_summary})
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details={
+            "job_id": job_id,
+            "job_kind": "paper_step",
+            "duration_seconds": paper_summary["duration_seconds"],
+            "status": paper_summary.get("status"),
+            "mode": "operate_run",
+        },
+        correlation_id=job_id,
+    )
 
     update_job(session, job_id, progress=85)
+    step_started = time.perf_counter()
     append_job_log(session, job_id, "Operate run: daily report generation started")
     report_date = payload.get("date")
     if isinstance(report_date, str) and report_date.strip():
@@ -664,11 +788,32 @@ def _operate_run_result(
         "date": report_row.date.isoformat(),
     }
     summary["daily_report"] = report_payload
+    report_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
     summary["steps"].append({"name": "daily_report", **report_payload})
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details={
+            "job_id": job_id,
+            "job_kind": "daily_report",
+            "duration_seconds": report_payload["duration_seconds"],
+            "status": report_payload.get("status"),
+            "mode": "operate_run",
+        },
+        correlation_id=job_id,
+    )
 
     summary["mode"] = paper_summary["mode"]
     summary["quality_status"] = quality_payload.get("status")
     summary["update_status"] = step_payload.get("status")
+    summary["durations_seconds"] = {
+        "data_updates": float(step_payload.get("duration_seconds", 0.0)),
+        "data_quality": float(quality_payload.get("duration_seconds", 0.0)),
+        "paper_step": float(paper_summary.get("duration_seconds", 0.0)),
+        "daily_report": float(report_payload.get("duration_seconds", 0.0)),
+    }
     return {
         "status": "ok",
         "summary": summary,
@@ -765,6 +910,7 @@ def run_daily_report_job(
     max_runtime_seconds: int | None = None,
 ) -> None:
     settings = get_settings()
+    started = time.perf_counter()
 
     with Session(engine) as session:
         try:
@@ -784,6 +930,13 @@ def run_daily_report_job(
             )
             update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
             append_job_log(session, job_id, "Daily report generation finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="daily_report",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Daily report failed: {exc}")
             _emit_job_error_event(session, job_id=job_id, job_type="daily_report", exc=exc)
@@ -793,6 +946,13 @@ def run_daily_report_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "daily_report_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="daily_report",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
             )
 
 
@@ -937,6 +1097,7 @@ def run_auto_eval_job(
 ) -> None:
     settings = get_settings()
     store = _store()
+    started = time.perf_counter()
 
     def progress_cb(progress: int, message: str | None = None) -> None:
         try:
@@ -965,6 +1126,13 @@ def run_auto_eval_job(
             )
             update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
             append_job_log(session, job_id, "Auto evaluation finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="auto_eval",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
         except Exception as exc:  # noqa: BLE001
             append_job_log(session, job_id, f"Auto evaluation failed: {exc}")
             _emit_job_error_event(session, job_id=job_id, job_type="auto_eval", exc=exc)
@@ -974,6 +1142,13 @@ def run_auto_eval_job(
                 status="FAILED",
                 progress=100,
                 result={"error": {"code": "auto_eval_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="auto_eval",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
             )
 
 

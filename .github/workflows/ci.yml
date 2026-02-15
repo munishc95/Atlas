@@ -25,6 +25,8 @@ jobs:
         env:
           PYTHONPATH: apps/api
           ATLAS_JOBS_INLINE: "true"
+          ATLAS_E2E_FAST: "1"
+          ATLAS_FAST_MODE: "1"
         run: |
           set -o pipefail
           python -m pytest apps/api/tests -q | tee backend-tests.log
@@ -90,8 +92,8 @@ jobs:
             frontend-typecheck.log
           if-no-files-found: ignore
 
-  e2e:
-    name: E2E Smoke
+  e2e-smoke:
+    name: E2E Smoke (Fast)
     runs-on: ubuntu-latest
     needs:
       - backend-tests
@@ -99,8 +101,11 @@ jobs:
     env:
       PYTHONPATH: apps/api
       NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_ATLAS_FAST_MODE: "1"
       PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
       ATLAS_JOBS_INLINE: "true"
+      ATLAS_E2E_FAST: "1"
+      ATLAS_FAST_MODE: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -153,45 +158,18 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: pnpm -C apps/web exec playwright install --with-deps chromium
 
-      - name: Start API server
-        shell: bash
-        run: |
-          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir apps/api > e2e-api.log 2>&1 &
-          echo $! > api.pid
-
-      - name: Wait for API health
-        shell: bash
-        run: |
-          for i in {1..60}; do
-            if curl --fail --silent "http://127.0.0.1:8000/api/health" > /dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "API failed to become healthy in time"
-          exit 1
-
       - name: Run Playwright smoke
         run: |
           set -o pipefail
-          pnpm -C apps/web test:e2e | tee e2e.log
+          pnpm -C apps/web test:e2e:smoke | tee e2e-smoke.log
 
       - name: Upload E2E logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-logs
+          name: e2e-smoke-logs
           path: |
-            e2e.log
-            e2e-api.log
+            e2e-smoke.log
             apps/web/playwright-report
             apps/web/test-results
           if-no-files-found: ignore
-
-      - name: Stop API server
-        if: always()
-        shell: bash
-        run: |
-          if [ -f api.pid ]; then
-            kill "$(cat api.pid)" || true
-          fi

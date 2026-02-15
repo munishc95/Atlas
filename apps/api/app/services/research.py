@@ -12,6 +12,14 @@ from app.core.config import Settings
 from app.core.exceptions import APIError
 from app.db.models import Dataset, DatasetBundle, Policy, ResearchCandidate, ResearchRun
 from app.services.data_store import DataStore
+from app.services.fast_mode import (
+    clamp_job_timeout_seconds,
+    clamp_optuna_trials,
+    clamp_scan_symbols,
+    prefer_sample_bundle_id,
+    prefer_sample_dataset_id,
+    resolve_seed,
+)
 from app.services.walkforward import execute_walkforward
 from app.strategies.templates import list_templates
 
@@ -325,17 +333,23 @@ def execute_research_run(
     symbol_scope = str(payload.get("symbol_scope", "liquid")).strip().lower() or "liquid"
     requested_bundle_id = payload.get("bundle_id")
 
-    trials_per_strategy = int(
-        cfg.get("trials_per_strategy", max(20, settings.optuna_default_trials // 3))
+    trials_per_strategy = clamp_optuna_trials(
+        settings=settings,
+        requested=int(
+            cfg.get("trials_per_strategy", max(20, settings.optuna_default_trials // 3))
+        ),
     )
-    max_symbols = int(cfg.get("max_symbols", 12))
+    max_symbols = clamp_scan_symbols(
+        settings=settings,
+        requested=int(cfg.get("max_symbols", 12)),
+    )
     max_evaluations = int(cfg.get("max_evaluations", 0))
     timeout_seconds = cfg.get("timeout_seconds", settings.optuna_default_timeout_seconds)
     timeout_seconds = int(timeout_seconds) if timeout_seconds is not None else None
+    timeout_seconds = clamp_job_timeout_seconds(settings=settings, requested=timeout_seconds)
     sampler = str(cfg.get("sampler", "tpe"))
     pruner = str(cfg.get("pruner", "median"))
-    seed = cfg.get("seed")
-    seed = int(seed) if seed is not None else None
+    seed = resolve_seed(settings=settings, value=cfg.get("seed"), default=7)
 
     constraints = {
         "max_drawdown": float(cfg.get("max_drawdown", 0.2)),
@@ -344,9 +358,34 @@ def execute_research_run(
     }
 
     _emit(progress_cb, 8, "Creating research run")
+    resolved_bundle_id: int | None = None
+    try:
+        if requested_bundle_id is not None:
+            parsed_bundle = int(requested_bundle_id)
+            if parsed_bundle > 0:
+                resolved_bundle_id = parsed_bundle
+    except (TypeError, ValueError):
+        resolved_bundle_id = None
+    if resolved_bundle_id is None:
+        resolved_bundle_id = prefer_sample_bundle_id(session, settings=settings)
+    resolved_dataset_id: int | None = None
+    try:
+        if payload.get("dataset_id") is not None:
+            parsed_dataset = int(payload.get("dataset_id"))
+            if parsed_dataset > 0:
+                resolved_dataset_id = parsed_dataset
+    except (TypeError, ValueError):
+        resolved_dataset_id = None
+    if resolved_dataset_id is None and resolved_bundle_id is None:
+        resolved_dataset_id = prefer_sample_dataset_id(
+            session,
+            settings=settings,
+            timeframe=primary_timeframe,
+        )
+
     run = ResearchRun(
-        dataset_id=payload.get("dataset_id"),
-        bundle_id=requested_bundle_id,
+        dataset_id=resolved_dataset_id,
+        bundle_id=resolved_bundle_id,
         timeframes_json=timeframes,
         config_json={
             "symbol_scope": symbol_scope,
@@ -356,7 +395,7 @@ def execute_research_run(
             "timeout_seconds": timeout_seconds,
             "sampler": sampler,
             "pruner": pruner,
-            "seed": seed,
+            "seed": int(seed),
             "constraints": constraints,
             "objective": str(cfg.get("objective", "oos_robustness")),
         },
@@ -389,7 +428,7 @@ def execute_research_run(
             timeframe=timeframes[0],
             symbol_scope=symbol_scope,
             max_symbols_scan=max_symbols,
-            seed=seed or 7,
+            seed=seed,
         )
     elif run.dataset_id is not None:
         dataset = session.get(Dataset, run.dataset_id)
@@ -416,7 +455,7 @@ def execute_research_run(
                 timeframe=timeframes[0],
                 symbol_scope=symbol_scope,
                 max_symbols_scan=max_symbols,
-                seed=seed or 7,
+                seed=seed,
             )
         else:
             if dataset.timeframe not in timeframes:
@@ -430,7 +469,7 @@ def execute_research_run(
                 timeframe=timeframes[0],
                 symbol_scope=symbol_scope,
                 max_symbols_scan=max_symbols,
-                seed=seed or 7,
+                seed=seed,
             )
     else:
         symbols = _sample_symbols_by_adv(
@@ -476,7 +515,7 @@ def execute_research_run(
                 "timeout_seconds": timeout_seconds,
                 "sampler": sampler,
                 "pruner": pruner,
-                "seed": None if seed is None else seed + idx,
+                "seed": int(seed + idx),
                 "max_oos_drawdown": constraints["max_drawdown"],
                 "min_train_trades": max(3, constraints["min_trades"] // 4),
             },
@@ -565,7 +604,7 @@ def execute_research_run(
     policy_preview["timeframes"] = timeframes
     policy_preview["ranking"] = {
         "method": "robust_score",
-        "seed": seed if seed is not None else 7,
+        "seed": int(seed),
         "weights": {"signal": 0.65, "liquidity": 0.25, "stability": 0.10},
     }
     policy_preview["cost_model"] = {

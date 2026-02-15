@@ -571,11 +571,24 @@ pnpm -C apps/web exec playwright install --with-deps chromium
 Run E2E smoke:
 
 ```powershell
-# Ensure API is running first (worker optional if ATLAS_JOBS_INLINE=true)
-pnpm -C apps/web test:e2e
+# Fast deterministic smoke (default)
+pnpm -C apps/web test:e2e:smoke
+```
+
+Run full E2E journey:
+
+```powershell
+pnpm -C apps/web test:e2e:full
 ```
 
 Playwright test command auto-starts a clean Next dev server via Playwright `webServer`.
+For deterministic local/CI speed, set:
+
+```powershell
+$env:ATLAS_E2E_FAST="1"
+$env:ATLAS_FAST_MODE="1"
+$env:NEXT_PUBLIC_ATLAS_FAST_MODE="1"
+```
 
 ### Formatting and line endings
 
@@ -600,8 +613,13 @@ Workflow: `.github/workflows/ci.yml`
 
 - `backend-tests`: installs backend deps and runs `pytest`
 - `frontend-checks`: installs frontend deps, runs lint + typecheck
-- `e2e`: installs both stacks, installs Playwright Chromium, starts API, runs E2E smoke
+- `e2e-smoke`: installs both stacks, installs Playwright Chromium, runs fast smoke E2E
 - Failure logs are uploaded as artifacts for troubleshooting
+
+Nightly full E2E workflow: `.github/workflows/nightly-e2e-full.yml`
+
+- Runs the full Playwright journey on schedule/manual dispatch
+- Uploads Playwright artifacts on completion
 
 ## Developer docs
 

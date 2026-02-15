@@ -292,6 +292,12 @@ export default function OpsPage() {
   const nextTradingDay = String(
     healthQuery.data?.calendar_next_trading_day ?? statusQuery.data?.calendar_next_trading_day ?? "-",
   );
+  const fastModeEnabled = Boolean(
+    healthQuery.data?.fast_mode_enabled ?? statusQuery.data?.fast_mode_enabled ?? false,
+  );
+  const lastJobDurations = (healthQuery.data?.last_job_durations ??
+    statusQuery.data?.last_job_durations ??
+    {}) as Record<string, { duration_seconds?: number; status?: string; ts?: string }>;
   const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
   const autoEvalRuns = useMemo(
     () => (autoEvalHistoryQuery.data ?? []) as ApiAutoEvalRun[],
@@ -338,6 +344,12 @@ export default function OpsPage() {
             Last run-step: {healthQuery.data?.last_run_step_at ?? statusQuery.data?.last_run_step_at ?? "-"}
           </p>
         </div>
+        <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+          Fast mode:{" "}
+          <span className={`badge ${fastModeEnabled ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>
+            {fastModeEnabled ? "Enabled" : "Disabled"}
+          </span>
+        </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Auto-run: {autoRunEnabled ? "Enabled" : "Disabled"} ({autoRunTimeIst} IST)
@@ -475,6 +487,19 @@ export default function OpsPage() {
             <p className="rounded-lg border border-border px-2 py-2">INFO: {eventCounts.INFO ?? 0}</p>
             <p className="rounded-lg border border-border px-2 py-2">WARN: {eventCounts.WARN ?? 0}</p>
             <p className="rounded-lg border border-border px-2 py-2">ERROR: {eventCounts.ERROR ?? 0}</p>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+            {(["data_updates", "data_quality", "paper_step", "daily_report", "auto_eval"] as const).map(
+              (jobKind) => {
+                const row = lastJobDurations[jobKind] ?? {};
+                const duration = Number(row.duration_seconds ?? 0);
+                return (
+                  <p key={jobKind} className="rounded-lg border border-border px-2 py-2">
+                    {jobKind}: {duration > 0 ? `${duration.toFixed(2)}s` : "-"}
+                  </p>
+                );
+              },
+            )}
           </div>
         </article>
       </section>

@@ -1,0 +1,88 @@
+name: Nightly E2E Full
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  e2e-full:
+    name: Full E2E Journey
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: apps/api
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
+      ATLAS_JOBS_INLINE: "true"
+      ATLAS_E2E_FAST: "1"
+      ATLAS_FAST_MODE: "1"
+      NEXT_PUBLIC_ATLAS_FAST_MODE: "1"
+      PW_WF_TRIALS: "1"
+      PW_RESEARCH_TRIALS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+          run_install: false
+
+      - name: Resolve pnpm store path
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install backend dependencies
+        run: python -m pip install -e "apps/api[dev]"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('apps/web/package.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm -C apps/web exec playwright install --with-deps chromium
+
+      - name: Run Playwright full
+        run: |
+          set -o pipefail
+          pnpm -C apps/web test:e2e:full | tee e2e-full.log
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-artifacts
+          path: |
+            e2e-full.log
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore

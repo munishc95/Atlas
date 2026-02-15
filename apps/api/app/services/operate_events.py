@@ -258,6 +258,33 @@ def get_operate_health_summary(
         key = str(row.severity).upper()
         severity_counts[key] = severity_counts.get(key, 0) + 1
 
+    duration_map: dict[str, dict[str, Any]] = {}
+    for row in recent_events:
+        details = row.details_json if isinstance(row.details_json, dict) else {}
+        job_kind = str(details.get("job_kind", "")).strip()
+        if not job_kind:
+            continue
+        duration = details.get("duration_seconds")
+        try:
+            duration_value = float(duration)
+        except (TypeError, ValueError):
+            continue
+        existing = duration_map.get(job_kind)
+        if existing is None:
+            duration_map[job_kind] = {
+                "duration_seconds": duration_value,
+                "status": str(details.get("status", "unknown")),
+                "ts": row.ts.isoformat(),
+            }
+        else:
+            existing_ts = str(existing.get("ts", ""))
+            if row.ts.isoformat() > existing_ts:
+                duration_map[job_kind] = {
+                    "duration_seconds": duration_value,
+                    "status": str(details.get("status", "unknown")),
+                    "ts": row.ts.isoformat(),
+                }
+
     return {
         "mode": mode,
         "mode_reason": mode_reason,
@@ -288,4 +315,6 @@ def get_operate_health_summary(
         "latest_paper_run_id": int(latest_run.id) if latest_run is not None and latest_run.id is not None else None,
         "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
         "recent_event_counts_24h": severity_counts,
+        "fast_mode_enabled": bool(settings.fast_mode_enabled),
+        "last_job_durations": duration_map,
     }

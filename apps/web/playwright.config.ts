@@ -22,6 +22,8 @@ export default defineConfig({
       env: {
         PYTHONPATH: "apps/api",
         ATLAS_JOBS_INLINE: process.env.ATLAS_JOBS_INLINE ?? "true",
+        ATLAS_E2E_FAST: process.env.ATLAS_E2E_FAST ?? "1",
+        ATLAS_FAST_MODE: process.env.ATLAS_FAST_MODE ?? "1",
       },
     },
     {
@@ -32,6 +34,7 @@ export default defineConfig({
       env: {
         NEXT_PUBLIC_API_BASE_URL: apiBase,
         NEXT_PUBLIC_FORCE_INLINE_JOBS: process.env.NEXT_PUBLIC_FORCE_INLINE_JOBS ?? "true",
+        NEXT_PUBLIC_ATLAS_FAST_MODE: process.env.NEXT_PUBLIC_ATLAS_FAST_MODE ?? "1",
       },
     },
   ],

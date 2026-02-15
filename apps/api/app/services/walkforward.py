@@ -12,6 +12,11 @@ from app.db.models import WalkForwardFold, WalkForwardRun
 from app.engine.backtester import BacktestConfig, run_backtest
 from app.engine.optimizer import optimize_template_params, robust_score
 from app.services.data_store import DataStore
+from app.services.fast_mode import (
+    clamp_job_timeout_seconds,
+    clamp_optuna_trials,
+    resolve_seed,
+)
 from app.strategies.templates import get_template
 
 ProgressCallback = Callable[[int, str | None], None]
@@ -111,13 +116,16 @@ def execute_walkforward(
     session.commit()
     session.refresh(run)
 
-    trials = int(cfg.get("trials", settings.optuna_default_trials))
+    trials = clamp_optuna_trials(
+        settings=settings,
+        requested=int(cfg.get("trials", settings.optuna_default_trials)),
+    )
     timeout_seconds = cfg.get("timeout_seconds", settings.optuna_default_timeout_seconds)
     timeout_seconds = int(timeout_seconds) if timeout_seconds is not None else None
+    timeout_seconds = clamp_job_timeout_seconds(settings=settings, requested=timeout_seconds)
     sampler = str(cfg.get("sampler", "tpe"))
     pruner = str(cfg.get("pruner", "median"))
-    seed = cfg.get("seed")
-    seed = int(seed) if seed is not None else None
+    seed = resolve_seed(settings=settings, value=cfg.get("seed"), default=7)
     cost_params = {
         "brokerage_bps": settings.brokerage_bps,
         "stt_delivery_buy_bps": settings.stt_delivery_buy_bps,

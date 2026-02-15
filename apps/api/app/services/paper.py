@@ -38,6 +38,13 @@ from app.services.data_quality import (
 )
 from app.services.data_store import DataStore
 from app.services.data_updates import inactive_symbols_for_selection
+from app.services.fast_mode import (
+    clamp_job_timeout_seconds,
+    clamp_scan_symbols,
+    prefer_sample_bundle_id,
+    prefer_sample_dataset_id,
+    resolve_seed,
+)
 from app.services.operate_events import emit_operate_event
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
 from app.services.portfolio_risk import create_portfolio_risk_snapshot
@@ -952,7 +959,7 @@ def _resolve_symbol_scope(payload: dict[str, Any], policy: dict[str, Any]) -> st
     return "liquid"
 
 
-def _resolve_seed(payload: dict[str, Any], policy: dict[str, Any]) -> int:
+def _resolve_seed(payload: dict[str, Any], policy: dict[str, Any], settings: Settings) -> int:
     explicit = payload.get("seed")
     if isinstance(explicit, int):
         return explicit
@@ -970,13 +977,14 @@ def _resolve_seed(payload: dict[str, Any], policy: dict[str, Any]) -> int:
                 return int(value)
             except (TypeError, ValueError):
                 pass
-    return 7
+    return resolve_seed(settings=settings, value=None, default=7)
 
 
 def _resolve_bundle_id(
     session: Session,
     payload: dict[str, Any],
     policy: dict[str, Any],
+    settings: Settings,
 ) -> int | None:
     explicit_id = payload.get("bundle_id")
     if isinstance(explicit_id, int):
@@ -999,6 +1007,9 @@ def _resolve_bundle_id(
                     return bundle_id_int
             except (TypeError, ValueError):
                 pass
+    preferred = prefer_sample_bundle_id(session, settings=settings)
+    if preferred is not None:
+        return preferred
     return None
 
 
@@ -1007,6 +1018,7 @@ def _resolve_dataset_id(
     payload: dict[str, Any],
     policy: dict[str, Any],
     timeframes: list[str],
+    settings: Settings,
 ) -> int | None:
     explicit_id = payload.get("dataset_id")
     if isinstance(explicit_id, int):
@@ -1031,6 +1043,13 @@ def _resolve_dataset_id(
                 pass
 
     preferred_timeframe = timeframes[0] if timeframes else "1d"
+    preferred = prefer_sample_dataset_id(
+        session,
+        settings=settings,
+        timeframe=preferred_timeframe,
+    )
+    if preferred is not None:
+        return preferred
     candidate = session.exec(
         select(Dataset)
         .where(Dataset.timeframe == preferred_timeframe)
@@ -1070,7 +1089,11 @@ def _resolve_max_symbols_scan(
     hard_cap = int(
         state_settings.get("autopilot_max_symbols_scan", settings.autopilot_max_symbols_scan)
     )
-    return max(1, min(max(1, int(requested)), max(1, hard_cap)))
+    return clamp_scan_symbols(
+        settings=settings,
+        requested=max(1, int(requested)),
+        hard_cap=max(1, hard_cap),
+    )
 
 
 def _resolve_max_runtime_seconds(
@@ -1095,7 +1118,8 @@ def _resolve_max_runtime_seconds(
     hard_cap = int(
         state_settings.get("autopilot_max_runtime_seconds", settings.autopilot_max_runtime_seconds)
     )
-    return max(1, min(max(1, int(requested)), max(1, hard_cap)))
+    effective = max(1, min(max(1, int(requested)), max(1, hard_cap)))
+    return clamp_job_timeout_seconds(settings=settings, requested=effective)
 
 
 def _normalize_allowed_sides(state_settings: dict[str, Any], settings: Settings) -> set[str]:
@@ -1318,7 +1342,7 @@ def _run_paper_step_with_simulator_engine(
     drawdown_before: float,
     mtm_before: float,
 ) -> dict[str, Any]:
-    seed = _resolve_seed(payload, policy)
+    seed = _resolve_seed(payload, policy, settings)
     sim_execution = execute_paper_step_with_simulator(
         session=session,
         settings=settings,
@@ -1781,7 +1805,7 @@ def _run_paper_step_shadow_only(
     live_positions: list[PaperPosition],
     live_orders: list[PaperOrder],
 ) -> dict[str, Any]:
-    seed = _resolve_seed(payload, policy)
+    seed = _resolve_seed(payload, policy, settings)
     shadow_row = _get_or_create_shadow_state(
         session=session,
         live_state=live_state,
@@ -2232,15 +2256,16 @@ def run_paper_step(
         total_symbols=0,
     )
     resolved_timeframes: list[str] = _resolve_timeframes(payload, policy)
-    resolved_bundle_id: int | None = _resolve_bundle_id(session, payload, policy)
+    resolved_bundle_id: int | None = _resolve_bundle_id(session, payload, policy, settings)
     resolved_dataset_id: int | None = _resolve_dataset_id(
         session,
         payload,
         policy,
         resolved_timeframes,
+        settings,
     )
     primary_timeframe = resolved_timeframes[0] if resolved_timeframes else "1d"
-    seed = _resolve_seed(payload, policy)
+    seed = _resolve_seed(payload, policy, settings)
 
     cost_spike_active, cost_spike_meta = _cost_ratio_spike_active(
         session,
@@ -3473,8 +3498,8 @@ def preview_policy_signals(
 
     timeframes = _resolve_timeframes(payload, policy)
     state_settings = state.settings_json or {}
-    bundle_id = _resolve_bundle_id(session, payload, policy)
-    dataset_id = _resolve_dataset_id(session, payload, policy, timeframes)
+    bundle_id = _resolve_bundle_id(session, payload, policy, settings)
+    dataset_id = _resolve_dataset_id(session, payload, policy, timeframes, settings)
     if bundle_id is None and dataset_id is None:
         return {
             "regime": regime,
@@ -3502,7 +3527,7 @@ def preview_policy_signals(
     symbol_scope = _resolve_symbol_scope(payload, policy)
     max_symbols_scan = _resolve_max_symbols_scan(payload, policy, state_settings, settings)
     max_runtime_seconds = _resolve_max_runtime_seconds(payload, state_settings, settings)
-    seed = _resolve_seed(payload, policy)
+    seed = _resolve_seed(payload, policy, settings)
     generated = generate_signals_for_policy(
         session=session,
         store=store,

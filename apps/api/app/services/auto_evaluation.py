@@ -17,6 +17,7 @@ from app.db.models import (
     PolicySwitchEvent,
 )
 from app.services.data_store import DataStore
+from app.services.fast_mode import resolve_seed
 from app.services.operate_events import emit_operate_event
 from app.services.paper import get_or_create_paper_state
 from app.services.policy_health import DEGRADED, compute_health_metrics, get_policy_health_snapshot
@@ -292,7 +293,7 @@ def execute_auto_evaluation(
             settings.operate_auto_eval_min_trades,
         ),
     )
-    seed = _safe_int(payload.get("seed"), 7)
+    seed = resolve_seed(settings=settings, value=payload.get("seed"), default=7)
     asof_day = _parse_iso_date(payload.get("asof_date")) or datetime.now(timezone.utc).date()
     if not is_trading_day(asof_day, segment=segment, settings=settings):
         asof_day = previous_trading_day(asof_day, segment=segment, settings=settings)
@@ -648,4 +649,3 @@ def list_policy_switch_events(session: Session, *, limit: int = 10) -> list[Poli
             .limit(max(1, min(int(limit), 200)))
         ).all()
     )
-

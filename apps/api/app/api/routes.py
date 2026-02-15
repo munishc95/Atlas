@@ -80,6 +80,7 @@ from app.services.data_quality import (
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
 from app.services.operate_events import get_operate_health_summary, list_operate_events
+from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.paper import (
     activate_policy_mode,
     get_orders,
@@ -160,11 +161,15 @@ def _enqueue_or_inline(
         idempotency_key=idempotency_key,
         request_hash=request_hash,
     )
-    max_runtime_seconds = settings.job_default_timeout_seconds
+    max_runtime_seconds = int(settings.job_default_timeout_seconds)
     if task_args and isinstance(task_args[0], dict):
         cfg = task_args[0].get("config")
         if isinstance(cfg, dict) and cfg.get("max_runtime_seconds") is not None:
             max_runtime_seconds = max(1, int(cfg["max_runtime_seconds"]))
+    max_runtime_seconds = clamp_job_timeout_seconds(
+        settings=settings,
+        requested=max_runtime_seconds,
+    )
     retry = None
     if settings.job_retry_max > 0:
         intervals = [
@@ -174,7 +179,7 @@ def _enqueue_or_inline(
         retry = Retry(max=settings.job_retry_max, interval=intervals)
 
     try:
-        if settings.jobs_inline:
+        if settings.jobs_inline or fast_mode_enabled(settings):
             inline_runner(job.id, *task_args, max_runtime_seconds=max_runtime_seconds)
         else:
             queue = get_queue(settings)
@@ -1157,6 +1162,8 @@ def operate_status(
             "latest_data_quality": health_summary.get("latest_data_quality"),
             "latest_data_update": health_summary.get("latest_data_update"),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
+            "fast_mode_enabled": health_summary.get("fast_mode_enabled"),
+            "last_job_durations": health_summary.get("last_job_durations"),
             "health_short": health_short,
             "health_long": health_long,
             "paper_state": state,
@@ -1685,12 +1692,21 @@ def job_status(job_id: str, session: Session = Depends(get_session)) -> dict[str
 
 
 @router.get("/jobs/{job_id}/stream")
-def stream_job(job_id: str):
+def stream_job(job_id: str, settings: Settings = Depends(get_settings)):
     def session_factory() -> Session:
         return Session(engine)
 
+    poll_seconds = (
+        float(settings.fast_mode_job_poll_seconds)
+        if fast_mode_enabled(settings)
+        else 1.0
+    )
     return StreamingResponse(
-        job_event_stream(session_factory=session_factory, job_id=job_id),
+        job_event_stream(
+            session_factory=session_factory,
+            job_id=job_id,
+            poll_seconds=max(0.1, poll_seconds),
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )

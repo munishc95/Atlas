@@ -11,9 +11,10 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const fastMode = process.env.NEXT_PUBLIC_ATLAS_FAST_MODE === "1";
   return (
     <html lang="en">
-      <body>
+      <body className={fastMode ? "fast-mode" : undefined}>
         <Providers>
           <AppShell>{children}</AppShell>
         </Providers>

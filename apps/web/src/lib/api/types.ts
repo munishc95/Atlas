@@ -302,6 +302,11 @@ export type ApiOperateStatus = {
   latest_data_quality?: ApiDataQualityReport | null;
   latest_data_update?: ApiDataUpdateRun | null;
   recent_event_counts_24h?: Record<string, number>;
+  fast_mode_enabled?: boolean;
+  last_job_durations?: Record<
+    string,
+    { duration_seconds: number; status: string; ts: string }
+  >;
   health_short?: ApiPolicyHealthSnapshot | null;
   health_long?: ApiPolicyHealthSnapshot | null;
   paper_state: Record<string, unknown>;
@@ -421,6 +426,11 @@ export type ApiOperateHealth = {
   latest_paper_run_id?: number | null;
   last_run_step_at?: string | null;
   recent_event_counts_24h: Record<string, number>;
+  fast_mode_enabled?: boolean;
+  last_job_durations?: Record<
+    string,
+    { duration_seconds: number; status: string; ts: string }
+  >;
 };
 
 export type ApiOperateRunSummary = {
@@ -440,6 +450,7 @@ export type ApiOperateRunSummary = {
     id?: number;
     date?: string;
   };
+  durations_seconds?: Record<string, number>;
   steps?: Array<Record<string, unknown>>;
 };
 

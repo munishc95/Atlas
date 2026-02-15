@@ -86,6 +86,19 @@ a {
   animation: shimmer 1.4s infinite;
 }
 
+body.fast-mode *,
+body.fast-mode *::before,
+body.fast-mode *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+body.fast-mode .skeleton::after {
+  animation: none !important;
+}
+
 @keyframes shimmer {
   to {
     transform: translateX(100%);

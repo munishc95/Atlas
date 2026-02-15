@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     job_default_timeout_seconds: int = 10_800
     job_retry_max: int = 2
     job_retry_backoff_seconds: int = 5
+    fast_mode: bool = False
+    e2e_fast: bool = False
+    fast_mode_max_symbols_scan: int = 10
+    fast_mode_max_optuna_trials: int = 5
+    fast_mode_seed: int = 7
+    fast_mode_job_timeout_seconds: int = 1_200
+    fast_mode_job_poll_seconds: float = 0.25
 
     risk_per_trade: float = 0.005
     max_positions: int = 3
@@ -126,6 +133,10 @@ class Settings(BaseSettings):
     optuna_default_trials: int = 150
     optuna_default_timeout_seconds: int | None = None
 
+    @property
+    def fast_mode_enabled(self) -> bool:
+        return bool(self.fast_mode or self.e2e_fast)
+
     def ensure_local_paths(self) -> None:
         Path("apps/api/.atlas").mkdir(parents=True, exist_ok=True)
         Path(self.parquet_root).mkdir(parents=True, exist_ok=True)
@@ -137,5 +148,11 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
+    if settings.fast_mode_enabled:
+        settings.jobs_inline = True
+        settings.job_default_timeout_seconds = min(
+            max(30, int(settings.job_default_timeout_seconds)),
+            max(30, int(settings.fast_mode_job_timeout_seconds)),
+        )
     settings.ensure_local_paths()
     return settings
