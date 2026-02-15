@@ -176,12 +176,16 @@ def build_daily_report_content(
                 "data_quality_status": None,
                 "mode": "LIVE",
                 "shadow_note": None,
+                "ensemble_active": False,
+                "ensemble_id": None,
+                "ensemble_name": None,
             },
             "explainability": {
                 "selected_reason_histogram": {},
                 "skipped_reason_histogram": {},
                 "scan_truncated_runs": 0,
                 "data_quality_warning_messages": [],
+                "ensemble_selected_counts_by_policy": {},
             },
             "risk": {
                 "avg_exposure": 0.0,
@@ -189,6 +193,7 @@ def build_daily_report_content(
                 "adv_cap_hits": 0,
                 "correlation_cap_hits": 0,
                 "sector_cap_hits": 0,
+                "ensemble_risk_budget_by_policy": {},
             },
             "links": {"paper_run_ids": [], "order_ids": []},
         }
@@ -205,6 +210,19 @@ def build_daily_report_content(
     selected_hist = _histogram(rows, "selected_reason_histogram")
     skipped_hist = _histogram(rows, "skipped_reason_histogram")
     scan_truncated = int(sum(1 for row in rows if bool(row.scan_truncated)))
+    ensemble_selected_totals: dict[str, int] = defaultdict(int)
+    ensemble_risk_budget_latest: dict[str, float] = {}
+    for row in rows:
+        summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+        counts = summary.get("ensemble_selected_counts_by_policy", {})
+        if isinstance(counts, dict):
+            for key, value in counts.items():
+                ensemble_selected_totals[str(key)] += _safe_int(value, 0)
+        budget = summary.get("ensemble_risk_budget_by_policy", {})
+        if isinstance(budget, dict) and budget:
+            ensemble_risk_budget_latest = {
+                str(key): _safe_float(value, 0.0) for key, value in budget.items()
+            }
     safe_mode_runs = int(
         sum(
             1
@@ -263,12 +281,20 @@ def build_daily_report_content(
                 if str(last_summary.get("execution_mode", "")).upper() == "SHADOW"
                 else None
             ),
+            "ensemble_active": bool(last_summary.get("ensemble_active", False)),
+            "ensemble_id": _safe_int(last_summary.get("ensemble_id"), 0) or None,
+            "ensemble_name": (
+                str(last_summary.get("ensemble_name"))
+                if last_summary.get("ensemble_name") is not None
+                else None
+            ),
         },
         "explainability": {
             "selected_reason_histogram": selected_hist,
             "skipped_reason_histogram": skipped_hist,
             "scan_truncated_runs": scan_truncated,
             "data_quality_warning_messages": quality_warning_messages,
+            "ensemble_selected_counts_by_policy": dict(ensemble_selected_totals),
             "scanned_symbols": int(sum(_safe_int(row.scanned_symbols, 0) for row in rows)),
             "evaluated_candidates": int(
                 sum(_safe_int(row.evaluated_candidates, 0) for row in rows)
@@ -282,6 +308,7 @@ def build_daily_report_content(
             "sector_cap_hits": _safe_int(skipped_hist.get("sector_concentration", 0), 0),
             "equity_start": _safe_float(first_summary.get("equity_before"), 0.0),
             "equity_end": _safe_float(last_summary.get("equity_after"), 0.0),
+            "ensemble_risk_budget_by_policy": ensemble_risk_budget_latest,
         },
         "links": {
             "paper_run_ids": [int(row.id) for row in rows if row.id is not None],

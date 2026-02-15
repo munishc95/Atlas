@@ -129,6 +129,7 @@ def _resolve_scheduler_context(session: Session) -> dict[str, Any]:
     timeframe = "1d"
     regime = "TREND_UP"
     policy_id: int | None = None
+    active_ensemble_id: int | None = None
 
     if latest_run is not None:
         bundle_id = latest_run.bundle_id
@@ -148,12 +149,18 @@ def _resolve_scheduler_context(session: Session) -> dict[str, Any]:
             policy_id = int(state_settings.get("active_policy_id"))
     except (TypeError, ValueError):
         policy_id = None
+    try:
+        if state_settings.get("active_ensemble_id") is not None:
+            active_ensemble_id = int(state_settings.get("active_ensemble_id"))
+    except (TypeError, ValueError):
+        active_ensemble_id = None
 
     return {
         "bundle_id": bundle_id,
         "timeframe": timeframe,
         "regime": regime,
         "policy_id": policy_id,
+        "active_ensemble_id": active_ensemble_id,
         "state": state,
         "state_settings": state_settings,
     }
@@ -195,6 +202,7 @@ def run_auto_operate_once(
     timeframe = str(context["timeframe"] or "1d")
     regime = str(context["regime"] or "TREND_UP")
     policy_id = context["policy_id"]
+    active_ensemble_id = context["active_ensemble_id"]
     if not is_trading_day(today, segment=segment, settings=settings):
         return False
 
@@ -364,8 +372,10 @@ def run_auto_operate_once(
         if (
             isinstance(bundle_id, int)
             and bundle_id > 0
-            and isinstance(policy_id, int)
-            and policy_id > 0
+            and (
+                (isinstance(policy_id, int) and policy_id > 0)
+                or (isinstance(active_ensemble_id, int) and active_ensemble_id > 0)
+            )
         ):
             queued_eval_id = _enqueue_job(
                 session=session,
@@ -376,6 +386,7 @@ def run_auto_operate_once(
                 payload={
                     "bundle_id": bundle_id,
                     "active_policy_id": policy_id,
+                    "active_ensemble_id": active_ensemble_id,
                     "timeframe": timeframe,
                     "lookback_trading_days": _safe_int(
                         state_settings.get(
@@ -406,6 +417,7 @@ def run_auto_operate_once(
                     "dedupe_key": dedupe_key,
                     "bundle_id": bundle_id,
                     "active_policy_id": policy_id,
+                    "active_ensemble_id": active_ensemble_id,
                 },
                 correlation_id=None,
             )
@@ -422,6 +434,7 @@ def run_auto_operate_once(
                     "bundle_id": bundle_id,
                     "timeframe": timeframe,
                     "active_policy_id": policy_id,
+                    "active_ensemble_id": active_ensemble_id,
                     "frequency": auto_eval_frequency,
                     "calendar_segment": segment,
                     "queued_job_id": queued_eval_id,

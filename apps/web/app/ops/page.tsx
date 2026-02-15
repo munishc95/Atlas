@@ -51,6 +51,9 @@ export default function OpsPage() {
     (healthQuery.data?.active_bundle_id as number | null | undefined) ??
     null;
   const activePolicyId = (statusQuery.data?.active_policy_id as number | null | undefined) ?? null;
+  const activeEnsembleId =
+    (statusQuery.data?.active_ensemble_id as number | null | undefined) ?? null;
+  const activeEnsemble = statusQuery.data?.active_ensemble ?? null;
   const activeTimeframe = String(healthQuery.data?.active_timeframe ?? "1d");
   const eventsQuery = useQuery({
     queryKey: qk.operateEvents(null, null, 20),
@@ -131,6 +134,7 @@ export default function OpsPage() {
         await atlasApi.operateAutoEvalRun({
           bundle_id: activeBundleId ?? undefined,
           active_policy_id: activePolicyId ?? undefined,
+          active_ensemble_id: activeEnsembleId ?? undefined,
           timeframe: activeTimeframe,
           asof_date: new Date().toISOString().slice(0, 10),
           seed: 7,
@@ -155,6 +159,20 @@ export default function OpsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not switch active policy");
+    },
+  });
+  const setActiveEnsembleMutation = useMutation({
+    mutationFn: async (ensembleId: number) => (await atlasApi.setActiveEnsemble(ensembleId)).data,
+    onSuccess: () => {
+      toast.success("Active ensemble switched");
+      queryClient.invalidateQueries({ queryKey: qk.settings });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.paperState });
+      queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
+      queryClient.invalidateQueries({ queryKey: qk.ensembles(1, 100, activeBundleId) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not switch active ensemble");
     },
   });
   const runUpdatesMutation = useMutation({
@@ -331,6 +349,15 @@ export default function OpsPage() {
   const fastModeEnabled = Boolean(
     healthQuery.data?.fast_mode_enabled ?? statusQuery.data?.fast_mode_enabled ?? false,
   );
+  const latestRunSummary =
+    ((statusQuery.data?.latest_run as Record<string, unknown> | null)?.summary_json as
+      | Record<string, unknown>
+      | undefined) ?? {};
+  const latestEnsembleSelectedCounts =
+    (latestRunSummary.ensemble_selected_counts_by_policy as Record<string, number> | undefined) ??
+    {};
+  const latestEnsembleRiskBudget =
+    (latestRunSummary.ensemble_risk_budget_by_policy as Record<string, number> | undefined) ?? {};
   const mappingMissingCount = Number(mappingStatusQuery.data?.missing_count ?? 0);
   const lastJobDurations = (healthQuery.data?.last_job_durations ??
     statusQuery.data?.last_job_durations ??
@@ -349,11 +376,20 @@ export default function OpsPage() {
     latestAutoEval?.recommended_action === "SWITCH" && typeof latestAutoEval.recommended_policy_id === "number"
       ? latestAutoEval.recommended_policy_id
       : null;
+  const recommendedEnsembleId =
+    latestAutoEval?.recommended_action === "SWITCH" &&
+    latestAutoEval.recommended_entity_type === "ensemble" &&
+    typeof latestAutoEval.recommended_ensemble_id === "number"
+      ? latestAutoEval.recommended_ensemble_id
+      : null;
   const canApplyRecommendedSwitch =
     !autoEvalAutoSwitch &&
-    recommendedPolicyId !== null &&
-    Number(recommendedPolicyId) > 0 &&
-    Number(activePolicyId ?? 0) !== Number(recommendedPolicyId);
+    ((recommendedPolicyId !== null &&
+      Number(recommendedPolicyId) > 0 &&
+      Number(activePolicyId ?? 0) !== Number(recommendedPolicyId)) ||
+      (recommendedEnsembleId !== null &&
+        Number(recommendedEnsembleId) > 0 &&
+        Number(activeEnsembleId ?? 0) !== Number(recommendedEnsembleId)));
 
   return (
     <div className="space-y-5">
@@ -367,12 +403,15 @@ export default function OpsPage() {
           </div>
           <span className={`badge ${badgeTone(mode)}`}>{mode}</span>
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Active bundle: {activeBundleId ?? "-"}
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Active policy: {activePolicyId ?? "-"}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Active ensemble: {activeEnsemble?.name ?? "-"}
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Timeframe: {activeTimeframe}
@@ -430,6 +469,51 @@ export default function OpsPage() {
           {calendarSession?.holiday_name ? ` - ${calendarSession.holiday_name}` : ""}
         </p>
       </section>
+
+      {activeEnsemble ? (
+        <section className="card p-4">
+          <h3 className="text-base font-semibold">Active Ensemble Allocation</h3>
+          <p className="mt-1 text-xs text-muted">
+            Last run contribution by member policy with weighted risk budgets.
+          </p>
+          <div className="mt-3 overflow-hidden rounded-xl border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface text-left text-muted">
+                <tr>
+                  <th className="px-3 py-2">Policy</th>
+                  <th className="px-3 py-2">Weight</th>
+                  <th className="px-3 py-2">Selected</th>
+                  <th className="px-3 py-2">Risk budget</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(activeEnsemble.members ?? []).length === 0 ? (
+                  <tr className="border-t border-border">
+                    <td className="px-3 py-3 text-xs text-muted" colSpan={4}>
+                      No members configured yet.
+                    </td>
+                  </tr>
+                ) : (
+                  (activeEnsemble.members ?? []).map((member) => (
+                    <tr key={`${member.ensemble_id}-${member.policy_id}`} className="border-t border-border">
+                      <td className="px-3 py-2">
+                        {member.policy_name ?? `Policy ${member.policy_id}`} (#{member.policy_id})
+                      </td>
+                      <td className="px-3 py-2">{(Number(member.weight) * 100).toFixed(1)}%</td>
+                      <td className="px-3 py-2">
+                        {Number(latestEnsembleSelectedCounts[String(member.policy_id)] ?? 0)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {Number(latestEnsembleRiskBudget[String(member.policy_id)] ?? 0).toFixed(6)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="card p-4">
@@ -574,7 +658,7 @@ export default function OpsPage() {
           <button
             type="button"
             onClick={() => autoEvalMutation.mutate()}
-            disabled={autoEvalMutation.isPending || !activeBundleId || !activePolicyId}
+            disabled={autoEvalMutation.isPending || !activeBundleId || (!activePolicyId && !activeEnsembleId)}
             className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
           >
             {autoEvalMutation.isPending ? "Queuing..." : "Run Evaluation Now"}
@@ -584,12 +668,22 @@ export default function OpsPage() {
             onClick={() => {
               if (recommendedPolicyId !== null) {
                 setActivePolicyMutation.mutate(recommendedPolicyId);
+                return;
+              }
+              if (recommendedEnsembleId !== null) {
+                setActiveEnsembleMutation.mutate(recommendedEnsembleId);
               }
             }}
-            disabled={!canApplyRecommendedSwitch || setActivePolicyMutation.isPending}
+            disabled={
+              !canApplyRecommendedSwitch ||
+              setActivePolicyMutation.isPending ||
+              setActiveEnsembleMutation.isPending
+            }
             className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted disabled:opacity-50"
           >
-            {setActivePolicyMutation.isPending ? "Applying..." : "Apply Recommended Switch"}
+            {setActivePolicyMutation.isPending || setActiveEnsembleMutation.isPending
+              ? "Applying..."
+              : "Apply Recommended Switch"}
           </button>
           <p className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
             Auto-switch: {autoEvalAutoSwitch ? "Enabled" : "Manual confirmation required"}
@@ -620,8 +714,10 @@ export default function OpsPage() {
               </span>
             </p>
             <p>
-              <span className="text-muted">Recommended policy:</span>{" "}
-              {latestAutoEval.recommended_policy_id ?? "-"}
+              <span className="text-muted">Recommended target:</span>{" "}
+              {latestAutoEval.recommended_entity_type === "ensemble"
+                ? `Ensemble #${latestAutoEval.recommended_ensemble_id ?? "-"}`
+                : `Policy #${latestAutoEval.recommended_policy_id ?? "-"}`}
             </p>
             <p>
               <span className="text-muted">Digest:</span> {latestAutoEval.digest}

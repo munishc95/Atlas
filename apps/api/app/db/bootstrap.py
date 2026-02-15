@@ -125,6 +125,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
                     "paper_mode": "strategy",
                     "active_policy_id": None,
+                    "active_ensemble_id": None,
+                    "active_ensemble_name": None,
                 },
             )
         )

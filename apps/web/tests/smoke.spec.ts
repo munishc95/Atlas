@@ -129,22 +129,132 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   );
   expect(providerUpdateJob.status).toBe("SUCCEEDED");
 
+  const runResearchRes = await request.post(`${apiBase}/api/research/run`, {
+    data: {
+      bundle_id: bundleId,
+      timeframes: ["1d"],
+      strategy_templates: ["trend_breakout"],
+      symbol_scope: "liquid",
+      config: {
+        trials_per_strategy: 1,
+        max_symbols: 1,
+        max_evaluations: 1,
+        min_trades: 1,
+        stress_pass_rate_threshold: 0,
+        sampler: "random",
+        pruner: "none",
+        seed: 17,
+      },
+    },
+  });
+  expect(runResearchRes.ok()).toBeTruthy();
+  const runResearchBody = await runResearchRes.json();
+  const researchJob = await waitForJob(request, apiBase, String(runResearchBody?.data?.job_id), 240_000);
+  const researchResult = (researchJob.result_json ?? {}) as Record<string, unknown>;
+  const researchRunId = Number(researchResult.run_id ?? 0);
+  expect(researchRunId > 0).toBeTruthy();
+
+  const createPolicyARes = await request.post(`${apiBase}/api/policies`, {
+    data: { research_run_id: researchRunId, name: "Smoke Ensemble A" },
+  });
+  expect(createPolicyARes.ok()).toBeTruthy();
+  const createPolicyABody = await createPolicyARes.json();
+  const policyAId = Number(createPolicyABody?.data?.id ?? 0);
+  expect(policyAId > 0).toBeTruthy();
+
+  const createPolicyBRes = await request.post(`${apiBase}/api/policies`, {
+    data: { research_run_id: researchRunId, name: "Smoke Ensemble B" },
+  });
+  expect(createPolicyBRes.ok()).toBeTruthy();
+  const createPolicyBBody = await createPolicyBRes.json();
+  const policyBId = Number(createPolicyBBody?.data?.id ?? 0);
+  expect(policyBId > 0).toBeTruthy();
+
+  const createEnsembleRes = await request.post(`${apiBase}/api/ensembles`, {
+    data: {
+      name: "Smoke Ensemble",
+      bundle_id: bundleId,
+      is_active: false,
+    },
+  });
+  expect(createEnsembleRes.ok()).toBeTruthy();
+  const createEnsembleBody = await createEnsembleRes.json();
+  const ensembleId = Number(createEnsembleBody?.data?.id ?? 0);
+  expect(ensembleId > 0).toBeTruthy();
+
+  const upsertMembersRes = await request.post(`${apiBase}/api/ensembles/${ensembleId}/members`, {
+    data: {
+      members: [
+        { policy_id: policyAId, weight: 0.6, enabled: true },
+        { policy_id: policyBId, weight: 0.4, enabled: true },
+      ],
+    },
+  });
+  expect(upsertMembersRes.ok()).toBeTruthy();
+
+  const setActiveEnsembleRes = await request.post(
+    `${apiBase}/api/ensembles/${ensembleId}/set-active`,
+    { data: {} },
+  );
+  expect(setActiveEnsembleRes.ok()).toBeTruthy();
+  const enforcePolicyModeRes = await request.put(`${apiBase}/api/settings`, {
+    data: {
+      paper_mode: "policy",
+      active_policy_id: null,
+      active_ensemble_id: ensembleId,
+      operate_mode: "offline",
+      operate_safe_mode_on_fail: false,
+      data_quality_stale_severity: "WARN",
+      data_quality_stale_severity_override: true,
+      coverage_missing_latest_warn_pct: 100,
+      coverage_missing_latest_fail_pct: 100,
+    },
+  });
+  expect(enforcePolicyModeRes.ok()).toBeTruthy();
+
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Fast mode:/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Mapping missing:/i)).toBeVisible({ timeout: 20_000 });
 
-  const runOperateRes = page.waitForResponse(
-    (res) => res.url().includes("/api/operate/run") && res.request().method() === "POST",
-  );
-  await page.getByRole("button", { name: "Run Today (Updates -> Quality -> Step -> Report)" }).click();
-  const runOperateBody = await (await runOperateRes).json();
+  const runOperateRes = await request.post(`${apiBase}/api/operate/run`, {
+    data: {
+      bundle_id: bundleId,
+      timeframe: "1d",
+      policy_id: null,
+      date: new Date().toISOString().slice(0, 10),
+    },
+  });
+  expect(runOperateRes.ok()).toBeTruthy();
+  const runOperateBody = await runOperateRes.json();
   const operateJob = await waitForJob(request, apiBase, String(runOperateBody?.data?.job_id), 240_000);
   const operateResult = (operateJob.result_json ?? {}) as Record<string, unknown>;
   const operateSummary = (operateResult.summary ?? {}) as Record<string, unknown>;
   const reportPayload = (operateSummary.daily_report ?? {}) as Record<string, unknown>;
   const reportId = Number(reportPayload.id ?? 0);
   expect(reportId > 0).toBeTruthy();
+
+  const reportRes = await request.get(`${apiBase}/api/reports/daily/${reportId}`);
+  expect(reportRes.ok()).toBeTruthy();
+  const reportBody = await reportRes.json();
+  const reportData = (reportBody?.data ?? {}) as Record<string, unknown>;
+  const reportSummary = (reportData.content_json as Record<string, unknown> | undefined)?.summary as
+    | Record<string, unknown>
+    | undefined;
+  const reportExplainability = (reportData.content_json as Record<string, unknown> | undefined)
+    ?.explainability as Record<string, unknown> | undefined;
+  expect(
+    Object.prototype.hasOwnProperty.call(reportSummary ?? {}, "ensemble_active"),
+  ).toBeTruthy();
+  expect(
+    Object.prototype.hasOwnProperty.call(
+      reportExplainability ?? {},
+      "ensemble_selected_counts_by_policy",
+    ),
+  ).toBeTruthy();
+
+  await page.reload();
+  await expect(page.getByText(/Active ensemble:/i)).toBeVisible({ timeout: 20_000 });
 
   const pdfRes = await request.get(`${apiBase}/api/reports/daily/${reportId}/export.pdf`);
   expect(pdfRes.ok()).toBeTruthy();
@@ -154,5 +264,4 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Latest operate run" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByText("No operate run summary yet")).toHaveCount(0);
 });

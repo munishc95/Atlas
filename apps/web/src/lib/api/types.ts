@@ -148,6 +148,7 @@ export type ApiPaperSignalPreview = {
   total_symbols?: number;
   signals: ApiPaperSignal[];
   skipped_signals?: Array<Record<string, unknown>>;
+  ensemble?: ApiPolicyEnsemble | null;
 };
 
 export type ApiPaperState = {
@@ -196,6 +197,25 @@ export type ApiPolicy = {
   created_at: string;
   definition_json: Record<string, unknown>;
   promoted_from_research_run_id?: number | null;
+};
+
+export type ApiPolicyEnsembleMember = {
+  id: number | null;
+  ensemble_id: number;
+  policy_id: number;
+  policy_name?: string | null;
+  weight: number;
+  enabled: boolean;
+  created_at: string;
+};
+
+export type ApiPolicyEnsemble = {
+  id: number;
+  name: string;
+  bundle_id: number;
+  is_active: boolean;
+  created_at: string;
+  members: ApiPolicyEnsembleMember[];
 };
 
 export type ApiPolicyHealthSnapshot = {
@@ -295,6 +315,9 @@ export type ApiOperateStatus = {
   next_auto_eval_run_ist?: string | null;
   active_policy_id?: number | null;
   active_policy_name?: string | null;
+  active_ensemble_id?: number | null;
+  active_ensemble_name?: string | null;
+  active_ensemble?: ApiPolicyEnsemble | null;
   active_bundle_id?: number | null;
   current_regime?: string | null;
   last_run_step_at?: string | null;
@@ -511,9 +534,12 @@ export type ApiAutoEvalRun = {
   id: number;
   ts: string;
   bundle_id: number;
-  active_policy_id: number;
+  active_policy_id?: number | null;
+  active_ensemble_id?: number | null;
   recommended_action: "KEEP" | "SWITCH" | "SHADOW_ONLY";
+  recommended_entity_type?: "policy" | "ensemble" | null;
   recommended_policy_id?: number | null;
+  recommended_ensemble_id?: number | null;
   reasons_json: string[];
   score_table_json: Record<string, unknown>;
   lookback_days: number;

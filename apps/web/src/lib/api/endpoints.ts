@@ -7,6 +7,7 @@ import type {
   ApiPaperPosition,
   ApiPaperSignalPreview,
   ApiPaperState,
+  ApiPolicyEnsemble,
   ApiPolicyHealthSnapshot,
   ApiPolicy,
   ApiDailyReport,
@@ -237,6 +238,36 @@ export const atlasApi = {
   policies: (page = 1, pageSize = 50) =>
     apiFetch<ApiPolicy[]>(`/api/policies?page=${page}&page_size=${pageSize}`),
   policyById: (id: number) => apiFetch<ApiPolicy>(`/api/policies/${id}`),
+  ensembles: (params?: { page?: number; page_size?: number; bundle_id?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    return apiFetch<ApiPolicyEnsemble[]>(
+      `/api/ensembles${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  ensembleById: (id: number) => apiFetch<ApiPolicyEnsemble>(`/api/ensembles/${id}`),
+  createEnsemble: (payload: { name: string; bundle_id: number; is_active?: boolean }) =>
+    apiFetch<ApiPolicyEnsemble>("/api/ensembles", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  upsertEnsembleMembers: (
+    id: number,
+    payload: { members: Array<{ policy_id: number; weight: number; enabled?: boolean }> },
+  ) =>
+    apiFetch<ApiPolicyEnsemble>(`/api/ensembles/${id}/members`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  setActiveEnsemble: (id: number) =>
+    apiFetch<{ status: string; ensemble_id: number; ensemble_name: string }>(
+      `/api/ensembles/${id}/set-active`,
+      {
+        method: "POST",
+      },
+    ),
   policyHealth: (id: number, windowDays: 20 | 60, refresh = true) =>
     apiFetch<ApiPolicyHealthSnapshot>(
       `/api/policies/${id}/health?window_days=${windowDays}&refresh=${String(refresh)}`,
@@ -307,7 +338,9 @@ export const atlasApi = {
   operateAutoEvalRun: (payload?: {
     bundle_id?: number;
     active_policy_id?: number;
+    active_ensemble_id?: number;
     challenger_policy_ids?: number[];
+    challenger_ensemble_ids?: number[];
     timeframe?: string;
     lookback_trading_days?: number;
     min_trades?: number;

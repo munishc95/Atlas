@@ -1,6 +1,6 @@
 from typing import Generator
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import get_settings
@@ -8,8 +8,23 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+is_sqlite = settings.database_url.startswith("sqlite")
+connect_args = (
+    {"check_same_thread": False, "timeout": 30}
+    if is_sqlite
+    else {}
+)
 engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=connect_args)
+
+
+if is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ANN001, ARG001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
 
 
 def init_db() -> None:
@@ -130,6 +145,12 @@ def _ensure_indexes_and_columns() -> None:
             conn.execute(
                 text("ALTER TABLE providerupdateitem ADD COLUMN bars_updated INTEGER DEFAULT 0")
             )
+    if not _has_column("autoevalrun", "active_ensemble_id"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE autoevalrun ADD COLUMN active_ensemble_id INTEGER"))
+    if not _has_column("autoevalrun", "recommended_ensemble_id"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE autoevalrun ADD COLUMN recommended_ensemble_id INTEGER"))
 
     with engine.begin() as conn:
         conn.execute(
@@ -251,8 +272,35 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_autoevalrun_active_ensemble_ts "
+                "ON autoevalrun (active_ensemble_id, ts)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_autoevalrun_reco_action_ts "
                 "ON autoevalrun (recommended_action, ts)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyensemble_bundle_active "
+                "ON policyensemble (bundle_id, is_active)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_policyensemble_created ON policyensemble (created_at)")
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_policyensemblemember_ensemble_policy "
+                "ON policyensemblemember (ensemble_id, policy_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyensemblemember_ensemble_enabled "
+                "ON policyensemblemember (ensemble_id, enabled)"
             )
         )
         conn.execute(

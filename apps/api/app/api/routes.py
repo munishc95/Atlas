@@ -48,6 +48,7 @@ from app.jobs.tasks import (
 from app.schemas.api import (
     AutoEvalRunRequest,
     BacktestRunRequest,
+    CreatePolicyEnsembleRequest,
     CreatePolicyRequest,
     DataQualityRunRequest,
     DataUpdatesRunRequest,
@@ -57,6 +58,7 @@ from app.schemas.api import (
     OperateRunRequest,
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
+    PolicyEnsembleMembersRequest,
     PolicyEvaluationRunRequest,
     PromoteStrategyRequest,
     ReplayRunRequest,
@@ -70,6 +72,15 @@ from app.services.auto_evaluation import (
     get_auto_eval_run,
     list_auto_eval_runs,
     list_policy_switch_events,
+)
+from app.services.ensembles import (
+    create_policy_ensemble,
+    get_active_policy_ensemble,
+    get_policy_ensemble,
+    list_policy_ensembles,
+    serialize_policy_ensemble,
+    set_active_policy_ensemble,
+    upsert_policy_ensemble_members,
 )
 from app.services.data_updates import (
     compute_data_coverage,
@@ -1058,6 +1069,109 @@ def create_policy(
     return _data(policy.model_dump())
 
 
+@router.post("/ensembles")
+def create_ensemble(
+    payload: CreatePolicyEnsembleRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    ensemble = create_policy_ensemble(
+        session,
+        name=payload.name,
+        bundle_id=int(payload.bundle_id),
+        is_active=bool(payload.is_active),
+    )
+    if payload.is_active:
+        state = get_or_create_paper_state(session, settings)
+        merged = dict(state.settings_json or {})
+        merged["paper_mode"] = "policy"
+        merged["active_policy_id"] = None
+        merged["active_policy_name"] = None
+        merged["active_ensemble_id"] = int(ensemble.id or 0)
+        merged["active_ensemble_name"] = ensemble.name
+        state.settings_json = merged
+        session.add(state)
+        session.commit()
+    return _data(serialize_policy_ensemble(session, ensemble, include_members=True))
+
+
+@router.get("/ensembles")
+def list_ensembles(
+    bundle_id: int | None = Query(default=None, ge=1),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_policy_ensembles(session, bundle_id=bundle_id)
+    start = (page - 1) * page_size
+    end = start + page_size
+    items = rows[start:end]
+    return _data(
+        [serialize_policy_ensemble(session, row, include_members=True) for row in items],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": len(rows),
+            "has_next": end < len(rows),
+        },
+    )
+
+
+@router.get("/ensembles/{ensemble_id}")
+def get_ensemble(
+    ensemble_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_policy_ensemble(session, ensemble_id)
+    return _data(serialize_policy_ensemble(session, row, include_members=True))
+
+
+@router.post("/ensembles/{ensemble_id}/members")
+def upsert_ensemble_members(
+    ensemble_id: int,
+    payload: PolicyEnsembleMembersRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    members = upsert_policy_ensemble_members(
+        session,
+        ensemble_id=ensemble_id,
+        members=[item.model_dump() for item in payload.members],
+    )
+    row = get_policy_ensemble(session, ensemble_id)
+    return _data(
+        {
+            **serialize_policy_ensemble(session, row, include_members=False),
+            "members": members,
+        }
+    )
+
+
+@router.post("/ensembles/{ensemble_id}/set-active")
+def set_active_ensemble(
+    ensemble_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = set_active_policy_ensemble(session, ensemble_id=ensemble_id)
+    state = get_or_create_paper_state(session, settings)
+    merged = dict(state.settings_json or {})
+    merged["paper_mode"] = "policy"
+    merged["active_policy_id"] = None
+    merged["active_policy_name"] = None
+    merged["active_ensemble_id"] = int(row.id or 0)
+    merged["active_ensemble_name"] = row.name
+    state.settings_json = merged
+    session.add(state)
+    session.commit()
+    return _data(
+        {
+            "status": "active_ensemble_set",
+            "ensemble_id": int(row.id or 0),
+            "ensemble_name": row.name,
+        }
+    )
+
+
 @router.get("/policies")
 def list_policies(
     page: int = Query(default=1, ge=1),
@@ -1224,15 +1338,36 @@ def operate_status(
     health_summary = get_operate_health_summary(session, settings)
     state_payload = get_paper_state_payload(session, settings)
     state = state_payload["state"]
-    active_policy_id = state.get("settings_json", {}).get("active_policy_id")
+    state_settings = state.get("settings_json", {})
+    active_policy_id = state_settings.get("active_policy_id")
     policy: Policy | None = None
     if isinstance(active_policy_id, int):
         policy = session.get(Policy, active_policy_id)
     latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    active_bundle_id = (
+        latest_run.bundle_id
+        if latest_run is not None and latest_run.bundle_id is not None
+        else health_summary.get("active_bundle_id")
+    )
+    preferred_ensemble_id: int | None = None
+    try:
+        if state_settings.get("active_ensemble_id") is not None:
+            preferred_ensemble_id = int(state_settings.get("active_ensemble_id"))
+    except (TypeError, ValueError):
+        preferred_ensemble_id = None
+    active_ensemble = get_active_policy_ensemble(
+        session,
+        bundle_id=int(active_bundle_id) if isinstance(active_bundle_id, int) else None,
+        preferred_ensemble_id=preferred_ensemble_id,
+    )
+    active_ensemble_payload = (
+        serialize_policy_ensemble(session, active_ensemble, include_members=True)
+        if active_ensemble is not None
+        else None
+    )
     health_short = None
     health_long = None
     if policy is not None:
-        state_settings = state.get("settings_json", {})
         short_window = int(
             state_settings.get("health_window_days_short", settings.health_window_days_short)
         )
@@ -1281,7 +1416,12 @@ def operate_status(
             "next_auto_eval_run_ist": health_summary.get("next_auto_eval_run_ist"),
             "active_policy_id": policy.id if policy is not None else None,
             "active_policy_name": policy.name if policy is not None else None,
-            "active_bundle_id": latest_run.bundle_id if latest_run is not None else None,
+            "active_ensemble_id": (
+                int(active_ensemble.id) if active_ensemble is not None and active_ensemble.id is not None else None
+            ),
+            "active_ensemble_name": active_ensemble.name if active_ensemble is not None else None,
+            "active_ensemble": active_ensemble_payload,
+            "active_bundle_id": active_bundle_id,
             "current_regime": latest_run.regime if latest_run is not None else None,
             "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
@@ -1786,6 +1926,8 @@ def get_settings_payload(
         "four_hour_bars": settings.four_hour_bars,
         "paper_mode": "strategy",
         "active_policy_id": None,
+        "active_ensemble_id": None,
+        "active_ensemble_name": None,
     }
     merged = {**defaults, **(state.settings_json or {})}
     return _data(merged)

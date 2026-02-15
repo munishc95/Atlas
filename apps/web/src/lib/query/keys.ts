@@ -22,6 +22,9 @@ export const qk = {
     ["researchCandidates", id, page, pageSize] as const,
   policies: (page: number, pageSize: number) => ["policies", page, pageSize] as const,
   policy: (id: number | null) => ["policy", id] as const,
+  ensembles: (page = 1, pageSize = 20, bundleId?: number | null) =>
+    ["ensembles", page, pageSize, bundleId ?? "all"] as const,
+  ensemble: (id: number | null) => ["ensemble", id] as const,
   policyHealth: (id: number | null, windowDays: number) =>
     ["policyHealth", id, windowDays] as const,
   policiesHealth: ["policiesHealth"] as const,

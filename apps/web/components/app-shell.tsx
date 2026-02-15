@@ -135,6 +135,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         label: "Go to Evaluations",
         keywords: ["champion", "challenger", "shadow"],
       },
+      {
+        id: "nav:ensembles",
+        label: "Go to Ensembles",
+        keywords: ["blend", "weights", "allocation"],
+      },
       { id: "nav:replay", label: "Go to Replay", keywords: ["deterministic", "reproduce"] },
       { id: "nav:reports", label: "Go to Reports", keywords: ["daily", "operate", "health"] },
       { id: "nav:ops", label: "Go to Ops", keywords: ["safe mode", "events", "data quality"] },
@@ -160,6 +165,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (id === "nav:walkforward") return router.push("/walk-forward");
     if (id === "nav:research") return router.push("/auto-research");
     if (id === "nav:evaluations") return router.push("/evaluations");
+    if (id === "nav:ensembles") return router.push("/ensembles");
     if (id === "nav:replay") return router.push("/replay");
     if (id === "nav:reports") return router.push("/reports");
     if (id === "nav:ops") return router.push("/ops");

@@ -183,6 +183,38 @@ class Policy(SQLModel, table=True):
     promoted_from_research_run_id: int | None = Field(default=None, foreign_key="researchrun.id")
 
 
+class PolicyEnsemble(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_policyensemble_bundle_active", "bundle_id", "is_active"),
+        Index("ix_policyensemble_created", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, max_length=128)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    is_active: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PolicyEnsembleMember(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_policyensemblemember_ensemble_policy",
+            "ensemble_id",
+            "policy_id",
+            unique=True,
+        ),
+        Index("ix_policyensemblemember_ensemble_enabled", "ensemble_id", "enabled"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    ensemble_id: int = Field(foreign_key="policyensemble.id", index=True)
+    policy_id: int = Field(foreign_key="policy.id", index=True)
+    weight: float = 1.0
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class PolicyHealthSnapshot(SQLModel, table=True):
     __table_args__ = (
         Index(
@@ -449,15 +481,26 @@ class AutoEvalRun(SQLModel, table=True):
         Index("ix_autoevalrun_ts", "ts"),
         Index("ix_autoevalrun_bundle_ts", "bundle_id", "ts"),
         Index("ix_autoevalrun_active_policy_ts", "active_policy_id", "ts"),
+        Index("ix_autoevalrun_active_ensemble_ts", "active_ensemble_id", "ts"),
         Index("ix_autoevalrun_reco_action_ts", "recommended_action", "ts"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     ts: datetime = Field(default_factory=utc_now, index=True)
     bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
-    active_policy_id: int = Field(foreign_key="policy.id", index=True)
+    active_policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    active_ensemble_id: int | None = Field(
+        default=None,
+        foreign_key="policyensemble.id",
+        index=True,
+    )
     recommended_action: str = Field(default="KEEP", index=True, max_length=32)
     recommended_policy_id: int | None = Field(default=None, foreign_key="policy.id", index=True)
+    recommended_ensemble_id: int | None = Field(
+        default=None,
+        foreign_key="policyensemble.id",
+        index=True,
+    )
     reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     score_table_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     lookback_days: int = 20

@@ -10,6 +10,7 @@ export const navItems: NavItem[] = [
   { href: "/walk-forward", label: "Walk-Forward" },
   { href: "/auto-research", label: "Auto Research" },
   { href: "/evaluations", label: "Evaluations" },
+  { href: "/ensembles", label: "Ensembles" },
   { href: "/replay", label: "Replay" },
   { href: "/reports", label: "Reports" },
   { href: "/ops", label: "Ops" },

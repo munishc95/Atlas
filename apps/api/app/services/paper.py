@@ -16,6 +16,7 @@ from app.db.models import (
     Dataset,
     DatasetBundle,
     Instrument,
+    PolicyEnsemble,
     PolicyHealthSnapshot,
     PaperRun,
     PaperOrder,
@@ -38,6 +39,11 @@ from app.services.data_quality import (
 )
 from app.services.data_store import DataStore
 from app.services.data_updates import inactive_symbols_for_selection
+from app.services.ensembles import (
+    get_active_policy_ensemble,
+    list_policy_ensemble_members,
+    serialize_policy_ensemble,
+)
 from app.services.fast_mode import (
     clamp_job_timeout_seconds,
     clamp_scan_symbols,
@@ -192,6 +198,8 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "risk_overlay_corr_reduce_factor": settings.risk_overlay_corr_reduce_factor,
             "paper_mode": "strategy",
             "active_policy_id": None,
+            "active_ensemble_id": None,
+            "active_ensemble_name": None,
         },
     )
     session.add(state)
@@ -1475,6 +1483,43 @@ def _run_paper_step_with_simulator_engine(
             )
         ),
     }
+    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    if ensemble_payload:
+        actual_counts: dict[str, int] = {}
+        for signal in executed_signals:
+            try:
+                source_policy_id = int(signal.get("source_policy_id") or 0)
+            except (TypeError, ValueError):
+                source_policy_id = 0
+            if source_policy_id <= 0:
+                continue
+            key = str(source_policy_id)
+            actual_counts[key] = int(actual_counts.get(key, 0)) + 1
+        ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
+    if ensemble_payload:
+        actual_counts: dict[str, int] = {}
+        for signal in executed_signals:
+            try:
+                source_policy_id = int(signal.get("source_policy_id") or 0)
+            except (TypeError, ValueError):
+                source_policy_id = 0
+            if source_policy_id <= 0:
+                continue
+            key = str(source_policy_id)
+            actual_counts[key] = int(actual_counts.get(key, 0)) + 1
+        ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
+    if ensemble_payload:
+        actual_counts: dict[str, int] = {}
+        for signal in executed_signals:
+            try:
+                source_policy_id = int(signal.get("source_policy_id") or 0)
+            except (TypeError, ValueError):
+                source_policy_id = 0
+            if source_policy_id <= 0:
+                continue
+            key = str(source_policy_id)
+            actual_counts[key] = int(actual_counts.get(key, 0)) + 1
+        ensemble_payload = {**ensemble_payload, "selected_counts_by_policy": actual_counts}
 
     run_summary = {
         "execution_mode": "LIVE",
@@ -1484,6 +1529,19 @@ def _run_paper_step_with_simulator_engine(
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
         "health_status": policy.get("health_status"),
+        "ensemble_active": bool(ensemble_payload),
+        "ensemble_id": ensemble_payload.get("id"),
+        "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_risk_budget_by_policy": dict(
+            ensemble_payload.get("risk_budget_by_policy", {})
+            if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
+            else {}
+        ),
+        "ensemble_selected_counts_by_policy": dict(
+            ensemble_payload.get("selected_counts_by_policy", {})
+            if isinstance(ensemble_payload.get("selected_counts_by_policy", {}), dict)
+            else {}
+        ),
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
@@ -1745,6 +1803,7 @@ def _run_paper_step_with_simulator_engine(
             "policy_status": policy.get("policy_status"),
             "policy_health_status": policy.get("health_status"),
             "policy_health_reasons": policy.get("health_reasons", []),
+            "ensemble": ensemble_payload,
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
@@ -1954,6 +2013,7 @@ def _run_paper_step_shadow_only(
             )
         ),
     }
+    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
 
     run_summary = {
         "execution_mode": "SHADOW",
@@ -1964,6 +2024,19 @@ def _run_paper_step_shadow_only(
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
         "health_status": policy.get("health_status"),
+        "ensemble_active": bool(ensemble_payload),
+        "ensemble_id": ensemble_payload.get("id"),
+        "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_risk_budget_by_policy": dict(
+            ensemble_payload.get("risk_budget_by_policy", {})
+            if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
+            else {}
+        ),
+        "ensemble_selected_counts_by_policy": dict(
+            ensemble_payload.get("selected_counts_by_policy", {})
+            if isinstance(ensemble_payload.get("selected_counts_by_policy", {}), dict)
+            else {}
+        ),
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
@@ -2143,6 +2216,7 @@ def _run_paper_step_shadow_only(
             "policy_status": policy.get("policy_status"),
             "policy_health_status": policy.get("health_status"),
             "policy_health_reasons": policy.get("health_reasons", []),
+            "ensemble": ensemble_payload,
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
@@ -2456,9 +2530,52 @@ def run_paper_step(
             },
         )
 
+    preferred_ensemble_id: int | None = None
+    active_ensemble: PolicyEnsemble | None = None
+    paper_mode_setting = str(state_settings.get("paper_mode", "strategy")).strip().lower()
+    explicit_policy_override: int | None = None
+    state_active_policy_id: int | None = None
+    try:
+        if payload.get("policy_id") is not None:
+            explicit_policy_override = int(payload.get("policy_id"))
+    except (TypeError, ValueError):
+        explicit_policy_override = None
+    try:
+        if state_settings.get("active_policy_id") is not None:
+            state_active_policy_id = int(state_settings.get("active_policy_id"))
+    except (TypeError, ValueError):
+        state_active_policy_id = None
+    use_ensemble_mode = (
+        paper_mode_setting == "policy"
+        and explicit_policy_override is None
+        and state_active_policy_id is None
+    )
+    if use_ensemble_mode:
+        try:
+            if state_settings.get("active_ensemble_id") is not None:
+                preferred_ensemble_id = int(state_settings.get("active_ensemble_id"))
+        except (TypeError, ValueError):
+            preferred_ensemble_id = None
+        active_ensemble = get_active_policy_ensemble(
+            session,
+            bundle_id=int(resolved_bundle_id) if isinstance(resolved_bundle_id, int) else None,
+            preferred_ensemble_id=preferred_ensemble_id,
+        )
+    ensemble_members = (
+        list_policy_ensemble_members(
+            session,
+            ensemble_id=int(active_ensemble.id or 0),
+            enabled_only=False,
+        )
+        if active_ensemble is not None
+        else []
+    )
+    ensemble_meta: dict[str, Any] | None = None
+    pre_skipped_signals: list[dict[str, Any]] = []
+
     auto_generate = bool(payload.get("auto_generate_signals", False))
     should_generate = auto_generate or (
-        policy.get("mode") == "policy" and len(provided_signals) == 0
+        (policy.get("mode") == "policy" or use_ensemble_mode) and len(provided_signals) == 0
     )
     if safe_mode_active and safe_mode_action == "exits_only":
         should_generate = False
@@ -2485,43 +2602,190 @@ def run_paper_step(
                 },
             )
         else:
-            generated_meta = generate_signals_for_policy(
-                session=session,
-                store=store,
-                dataset_id=resolved_dataset_id,
-                bundle_id=resolved_bundle_id,
-                asof=asof_dt,
-                timeframes=resolved_timeframes,
-                allowed_templates=policy.get("allowed_templates", []),
-                params_overrides=policy.get("params", {}),
-                max_symbols_scan=max_symbols_scan,
-                seed=seed,
-                mode="paper",
-                symbol_scope=symbol_scope,
-                ranking_weights=ranking_weights if isinstance(ranking_weights, dict) else None,
-                max_runtime_seconds=max_runtime_seconds,
-            )
-            provided_signals = list(generated_meta.signals)
-            generated_signals_count = len(provided_signals)
-            _log(
-                session,
-                "signals_generated",
-                {
-                    "mode": "policy_autopilot",
-                    "dataset_id": resolved_dataset_id,
-                    "bundle_id": resolved_bundle_id,
-                    "timeframes": resolved_timeframes,
-                    "symbol_scope": symbol_scope,
-                    "generated_count": generated_signals_count,
-                    "allowed_templates": policy.get("allowed_templates", []),
-                    "policy_id": policy.get("policy_id"),
-                    "policy_name": policy.get("policy_name"),
-                    "scan_truncated": generated_meta.scan_truncated,
-                    "scanned_symbols": generated_meta.scanned_symbols,
-                    "evaluated_candidates": generated_meta.evaluated_candidates,
-                    "total_symbols": generated_meta.total_symbols,
-                },
-            )
+            if active_ensemble is not None and ensemble_members:
+                enabled_members = [row for row in ensemble_members if bool(row.get("enabled", True))]
+                sorted_members = sorted(
+                    enabled_members,
+                    key=lambda row: int(row.get("policy_id") or 0),
+                )
+                positive_weights = {
+                    int(row.get("policy_id") or 0): max(0.0, float(row.get("weight") or 0.0))
+                    for row in sorted_members
+                    if int(row.get("policy_id") or 0) > 0
+                }
+                total_weight = float(sum(value for value in positive_weights.values() if value > 0))
+                normalized_weights = {
+                    policy_id: (value / total_weight if total_weight > 0 else 0.0)
+                    for policy_id, value in positive_weights.items()
+                }
+                aggregated_signals: list[dict[str, Any]] = []
+                scan_truncated_any = False
+                scanned_symbols_total = 0
+                evaluated_candidates_total = 0
+                total_symbols_max = 0
+                for member in sorted_members:
+                    source_policy_id = int(member.get("policy_id") or 0)
+                    if source_policy_id <= 0:
+                        continue
+                    source_policy_name = str(member.get("policy_name") or f"Policy {source_policy_id}")
+                    member_weight = float(member.get("weight") or 0.0)
+                    if member_weight <= 0:
+                        pre_skipped_signals.append(
+                            {
+                                "symbol": "",
+                                "underlying_symbol": "",
+                                "template": "",
+                                "side": "BUY",
+                                "instrument_kind": "EQUITY_CASH",
+                                "policy_mode": "ensemble",
+                                "policy_id": source_policy_id,
+                                "policy_name": source_policy_name,
+                                "source_policy_id": source_policy_id,
+                                "source_policy_name": source_policy_name,
+                                "reason": "ensemble_weight_zero",
+                            }
+                        )
+                        continue
+                    member_policy = _resolve_execution_policy(
+                        session,
+                        state,
+                        settings,
+                        regime,
+                        policy_override_id=source_policy_id,
+                        asof_date=asof_dt.date(),
+                    )
+                    allowed_templates = list(member_policy.get("allowed_templates") or [])
+                    if not allowed_templates:
+                        continue
+                    member_result = generate_signals_for_policy(
+                        session=session,
+                        store=store,
+                        dataset_id=resolved_dataset_id,
+                        bundle_id=resolved_bundle_id,
+                        asof=asof_dt,
+                        timeframes=resolved_timeframes,
+                        allowed_templates=allowed_templates,
+                        params_overrides=member_policy.get("params", {}),
+                        max_symbols_scan=max_symbols_scan,
+                        seed=int(seed) + (source_policy_id * 9973),
+                        mode="paper",
+                        symbol_scope=symbol_scope,
+                        ranking_weights=(
+                            member_policy.get("ranking_weights", {})
+                            if isinstance(member_policy.get("ranking_weights", {}), dict)
+                            else None
+                        ),
+                        max_runtime_seconds=max_runtime_seconds,
+                    )
+                    scan_truncated_any = scan_truncated_any or bool(member_result.scan_truncated)
+                    scanned_symbols_total += int(member_result.scanned_symbols)
+                    evaluated_candidates_total += int(member_result.evaluated_candidates)
+                    total_symbols_max = max(total_symbols_max, int(member_result.total_symbols))
+                    for signal in member_result.signals:
+                        row = dict(signal)
+                        row["source_policy_id"] = source_policy_id
+                        row["source_policy_name"] = source_policy_name
+                        row["ensemble_id"] = int(active_ensemble.id or 0)
+                        row["ensemble_name"] = active_ensemble.name
+                        row["ensemble_member_weight"] = float(normalized_weights.get(source_policy_id, 0.0))
+                        row["member_required_risk"] = max(
+                            0.0,
+                            float(member_policy.get("risk_per_trade", policy.get("risk_per_trade", base_risk_per_trade))),
+                        )
+                        aggregated_signals.append(row)
+                aggregated_signals.sort(
+                    key=lambda row: (
+                        int(row.get("source_policy_id") or 0),
+                        -float(row.get("signal_strength", 0.0)),
+                        str(row.get("symbol", "")),
+                        str(row.get("side", "BUY")),
+                        str(row.get("template", "")),
+                    )
+                )
+                provided_signals = aggregated_signals
+                generated_signals_count = len(provided_signals)
+                generated_meta = SignalGenerationResult(
+                    signals=provided_signals,
+                    scan_truncated=scan_truncated_any,
+                    scanned_symbols=scanned_symbols_total,
+                    evaluated_candidates=evaluated_candidates_total,
+                    total_symbols=total_symbols_max,
+                )
+                risk_budget_total = max(0.0, float(policy.get("risk_per_trade", base_risk_per_trade)))
+                risk_budget_by_policy = {
+                    str(policy_id): float(risk_budget_total * normalized_weights.get(policy_id, 0.0))
+                    for policy_id in sorted(normalized_weights)
+                }
+                ensemble_meta = {
+                    "id": int(active_ensemble.id or 0),
+                    "name": active_ensemble.name,
+                    "bundle_id": int(active_ensemble.bundle_id),
+                    "member_weights": {
+                        str(policy_id): float(normalized_weights.get(policy_id, 0.0))
+                        for policy_id in sorted(normalized_weights)
+                    },
+                    "risk_budget_by_policy": risk_budget_by_policy,
+                    "selected_counts_by_policy": {},
+                    "weights_sum": float(total_weight),
+                }
+                policy["ensemble"] = ensemble_meta
+                _log(
+                    session,
+                    "signals_generated",
+                    {
+                        "mode": "ensemble_autopilot",
+                        "dataset_id": resolved_dataset_id,
+                        "bundle_id": resolved_bundle_id,
+                        "timeframes": resolved_timeframes,
+                        "symbol_scope": symbol_scope,
+                        "generated_count": generated_signals_count,
+                        "ensemble_id": int(active_ensemble.id or 0),
+                        "ensemble_name": active_ensemble.name,
+                        "scan_truncated": generated_meta.scan_truncated,
+                        "scanned_symbols": generated_meta.scanned_symbols,
+                        "evaluated_candidates": generated_meta.evaluated_candidates,
+                        "total_symbols": generated_meta.total_symbols,
+                        "risk_budget_by_policy": risk_budget_by_policy,
+                    },
+                )
+            else:
+                generated_meta = generate_signals_for_policy(
+                    session=session,
+                    store=store,
+                    dataset_id=resolved_dataset_id,
+                    bundle_id=resolved_bundle_id,
+                    asof=asof_dt,
+                    timeframes=resolved_timeframes,
+                    allowed_templates=policy.get("allowed_templates", []),
+                    params_overrides=policy.get("params", {}),
+                    max_symbols_scan=max_symbols_scan,
+                    seed=seed,
+                    mode="paper",
+                    symbol_scope=symbol_scope,
+                    ranking_weights=ranking_weights if isinstance(ranking_weights, dict) else None,
+                    max_runtime_seconds=max_runtime_seconds,
+                )
+                provided_signals = list(generated_meta.signals)
+                generated_signals_count = len(provided_signals)
+                _log(
+                    session,
+                    "signals_generated",
+                    {
+                        "mode": "policy_autopilot",
+                        "dataset_id": resolved_dataset_id,
+                        "bundle_id": resolved_bundle_id,
+                        "timeframes": resolved_timeframes,
+                        "symbol_scope": symbol_scope,
+                        "generated_count": generated_signals_count,
+                        "allowed_templates": policy.get("allowed_templates", []),
+                        "policy_id": policy.get("policy_id"),
+                        "policy_name": policy.get("policy_name"),
+                        "scan_truncated": generated_meta.scan_truncated,
+                        "scanned_symbols": generated_meta.scanned_symbols,
+                        "evaluated_candidates": generated_meta.evaluated_candidates,
+                        "total_symbols": generated_meta.total_symbols,
+                    },
+                )
         signals_source = "generated"
 
     current_positions = list(positions_before)
@@ -2545,12 +2809,37 @@ def run_paper_step(
     skipped_signals: list[dict[str, Any]] = []
     selected_signals: list[dict[str, Any]] = []
     executed_signals: list[dict[str, Any]] = []
+    if pre_skipped_signals:
+        skipped_signals.extend(pre_skipped_signals)
 
-    candidates = sorted(
-        [dict(item) for item in provided_signals],
-        key=lambda item: float(item.get("signal_strength", 0.0)),
-        reverse=True,
-    )
+    risk_budget_by_policy: dict[int, float] = {}
+    if isinstance(ensemble_meta, dict):
+        raw_budget = ensemble_meta.get("risk_budget_by_policy", {})
+        if isinstance(raw_budget, dict):
+            for key, value in raw_budget.items():
+                try:
+                    risk_budget_by_policy[int(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+    member_budget_remaining = dict(risk_budget_by_policy)
+    selected_counts_by_policy: dict[int, int] = {}
+
+    if ensemble_meta is not None:
+        candidates = sorted(
+            [dict(item) for item in provided_signals],
+            key=lambda item: (
+                int(item.get("source_policy_id") or 0),
+                -float(item.get("signal_strength", 0.0)),
+                str(item.get("symbol", "")),
+                str(item.get("side", "BUY")),
+            ),
+        )
+    else:
+        candidates = sorted(
+            [dict(item) for item in provided_signals],
+            key=lambda item: float(item.get("signal_strength", 0.0)),
+            reverse=True,
+        )
     if safe_mode_active and safe_mode_action == "exits_only":
         for signal in candidates:
             skipped_signals.append(
@@ -2612,6 +2901,15 @@ def run_paper_step(
         symbol = str(signal.get("symbol", "")).upper()
         side = str(signal.get("side", "BUY")).upper()
         template = str(signal.get("template", "trend_breakout"))
+        source_policy_id = int(signal.get("source_policy_id") or 0)
+        source_policy_name = str(
+            signal.get("source_policy_name")
+            or (f"Policy {source_policy_id}" if source_policy_id > 0 else policy.get("policy_name", ""))
+        )
+        member_required_risk = max(
+            0.0,
+            float(signal.get("member_required_risk", policy.get("risk_per_trade", base_risk_per_trade))),
+        )
         requested_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
         underlying_symbol = str(signal.get("underlying_symbol", symbol)).upper()
         allowed_set: set[str] | None = None
@@ -2632,7 +2930,24 @@ def run_paper_step(
             "policy_mode": policy.get("mode"),
             "policy_id": policy.get("policy_id"),
             "policy_name": policy.get("policy_name"),
+            "source_policy_id": source_policy_id if source_policy_id > 0 else None,
+            "source_policy_name": source_policy_name if source_policy_id > 0 else None,
         }
+        if ensemble_meta is not None and source_policy_id > 0:
+            if source_policy_id not in member_budget_remaining:
+                skipped_signals.append({**base_meta, "reason": "ensemble_weight_zero"})
+                continue
+            if member_budget_remaining[source_policy_id] + 1e-12 < member_required_risk:
+                skipped_signals.append(
+                    {
+                        **base_meta,
+                        "reason": "ensemble_member_budget_exhausted",
+                        "member_required_risk": member_required_risk,
+                        "member_budget_remaining": float(member_budget_remaining[source_policy_id]),
+                    }
+                )
+                continue
+
         if symbol in inactive_symbols or underlying_symbol in inactive_symbols:
             skipped_signals.append({**base_meta, "reason": "inactive_symbol_data_gap"})
             continue
@@ -2790,9 +3105,26 @@ def run_paper_step(
             continue
 
         selected_signals.append(signal)
+        if ensemble_meta is not None and source_policy_id > 0 and source_policy_id in member_budget_remaining:
+            member_budget_remaining[source_policy_id] = max(
+                0.0,
+                float(member_budget_remaining[source_policy_id]) - member_required_risk,
+            )
+            selected_counts_by_policy[source_policy_id] = (
+                int(selected_counts_by_policy.get(source_policy_id, 0)) + 1
+            )
         selected_symbols.add(symbol)
         selected_underlyings.add(underlying_symbol)
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+    if ensemble_meta is not None:
+        ensemble_meta["selected_counts_by_policy"] = {
+            str(key): int(value) for key, value in sorted(selected_counts_by_policy.items())
+        }
+        ensemble_meta["remaining_risk_budget_by_policy"] = {
+            str(key): float(value) for key, value in sorted(member_budget_remaining.items())
+        }
+        policy["ensemble"] = ensemble_meta
 
     use_simulator_engine = bool(
         state_settings.get("paper_use_simulator_engine", settings.paper_use_simulator_engine)
@@ -3251,6 +3583,7 @@ def run_paper_step(
             )
         ),
     }
+    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
 
     run_summary = {
         "execution_mode": "LIVE",
@@ -3260,6 +3593,19 @@ def run_paper_step(
         "policy_selection_reason": policy.get("selection_reason"),
         "policy_status": policy.get("policy_status"),
         "health_status": policy.get("health_status"),
+        "ensemble_active": bool(ensemble_payload),
+        "ensemble_id": ensemble_payload.get("id"),
+        "ensemble_name": ensemble_payload.get("name"),
+        "ensemble_risk_budget_by_policy": dict(
+            ensemble_payload.get("risk_budget_by_policy", {})
+            if isinstance(ensemble_payload.get("risk_budget_by_policy", {}), dict)
+            else {}
+        ),
+        "ensemble_selected_counts_by_policy": dict(
+            ensemble_payload.get("selected_counts_by_policy", {})
+            if isinstance(ensemble_payload.get("selected_counts_by_policy", {}), dict)
+            else {}
+        ),
         "safe_mode_active": bool(safe_mode_active),
         "safe_mode_action": safe_mode_action,
         "safe_mode_reason": safe_mode_reason,
@@ -3509,6 +3855,7 @@ def run_paper_step(
             "policy_status": policy.get("policy_status"),
             "policy_health_status": policy.get("health_status"),
             "policy_health_reasons": policy.get("health_reasons", []),
+            "ensemble": ensemble_payload,
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
@@ -3614,21 +3961,141 @@ def preview_policy_signals(
     max_symbols_scan = _resolve_max_symbols_scan(payload, policy, state_settings, settings)
     max_runtime_seconds = _resolve_max_runtime_seconds(payload, state_settings, settings)
     seed = _resolve_seed(payload, policy, settings)
-    generated = generate_signals_for_policy(
-        session=session,
-        store=store,
-        dataset_id=dataset_id,
-        bundle_id=bundle_id,
-        asof=preview_asof,
-        timeframes=timeframes,
-        allowed_templates=policy.get("allowed_templates", []),
-        params_overrides=policy.get("params", {}),
-        max_symbols_scan=max_symbols_scan,
-        seed=seed,
-        mode="preview",
-        symbol_scope=symbol_scope,
-        ranking_weights=policy.get("ranking_weights", {}),
-        max_runtime_seconds=max_runtime_seconds,
+    preferred_ensemble_id: int | None = None
+    active_ensemble = None
+    paper_mode_setting = str(state_settings.get("paper_mode", "strategy")).strip().lower()
+    state_active_policy_id: int | None = None
+    try:
+        if state_settings.get("active_policy_id") is not None:
+            state_active_policy_id = int(state_settings.get("active_policy_id"))
+    except (TypeError, ValueError):
+        state_active_policy_id = None
+    use_ensemble_mode = (
+        paper_mode_setting == "policy"
+        and policy_override is None
+        and state_active_policy_id is None
+    )
+    if use_ensemble_mode:
+        try:
+            if state_settings.get("active_ensemble_id") is not None:
+                preferred_ensemble_id = int(state_settings.get("active_ensemble_id"))
+        except (TypeError, ValueError):
+            preferred_ensemble_id = None
+        active_ensemble = get_active_policy_ensemble(
+            session,
+            bundle_id=int(bundle_id) if isinstance(bundle_id, int) else None,
+            preferred_ensemble_id=preferred_ensemble_id,
+        )
+    ensemble_members = (
+        list_policy_ensemble_members(
+            session,
+            ensemble_id=int(active_ensemble.id or 0),
+            enabled_only=False,
+        )
+        if active_ensemble is not None
+        else []
+    )
+
+    generated = SignalGenerationResult(
+        signals=[],
+        scan_truncated=False,
+        scanned_symbols=0,
+        evaluated_candidates=0,
+        total_symbols=0,
+    )
+    if use_ensemble_mode and active_ensemble is not None and ensemble_members:
+        merged_signals: list[dict[str, Any]] = []
+        scan_truncated_any = False
+        scanned_symbols_total = 0
+        evaluated_candidates_total = 0
+        total_symbols_max = 0
+        for member in sorted(
+            [row for row in ensemble_members if bool(row.get("enabled", True))],
+            key=lambda row: int(row.get("policy_id") or 0),
+        ):
+            source_policy_id = int(member.get("policy_id") or 0)
+            if source_policy_id <= 0:
+                continue
+            member_weight = max(0.0, float(member.get("weight") or 0.0))
+            if member_weight <= 0:
+                continue
+            member_policy = _resolve_execution_policy(
+                session,
+                state,
+                settings,
+                regime,
+                policy_override_id=source_policy_id,
+                asof_date=preview_asof.date(),
+            )
+            allowed_templates = list(member_policy.get("allowed_templates") or [])
+            if not allowed_templates:
+                continue
+            member_generated = generate_signals_for_policy(
+                session=session,
+                store=store,
+                dataset_id=dataset_id,
+                bundle_id=bundle_id,
+                asof=preview_asof,
+                timeframes=timeframes,
+                allowed_templates=allowed_templates,
+                params_overrides=member_policy.get("params", {}),
+                max_symbols_scan=max_symbols_scan,
+                seed=int(seed) + (source_policy_id * 9973),
+                mode="preview",
+                symbol_scope=symbol_scope,
+                ranking_weights=member_policy.get("ranking_weights", {}),
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            scan_truncated_any = scan_truncated_any or bool(member_generated.scan_truncated)
+            scanned_symbols_total += int(member_generated.scanned_symbols)
+            evaluated_candidates_total += int(member_generated.evaluated_candidates)
+            total_symbols_max = max(total_symbols_max, int(member_generated.total_symbols))
+            for signal in member_generated.signals:
+                row = dict(signal)
+                row["source_policy_id"] = source_policy_id
+                row["source_policy_name"] = str(
+                    member.get("policy_name") or member_policy.get("policy_name") or f"Policy {source_policy_id}"
+                )
+                row["ensemble_id"] = int(active_ensemble.id or 0)
+                row["ensemble_name"] = active_ensemble.name
+                row["ensemble_member_weight"] = member_weight
+                merged_signals.append(row)
+        merged_signals.sort(
+            key=lambda row: (
+                int(row.get("source_policy_id") or 0),
+                -float(row.get("signal_strength", 0.0)),
+                str(row.get("symbol", "")),
+                str(row.get("side", "BUY")),
+            )
+        )
+        generated = SignalGenerationResult(
+            signals=merged_signals,
+            scan_truncated=scan_truncated_any,
+            scanned_symbols=scanned_symbols_total,
+            evaluated_candidates=evaluated_candidates_total,
+            total_symbols=total_symbols_max,
+        )
+    else:
+        generated = generate_signals_for_policy(
+            session=session,
+            store=store,
+            dataset_id=dataset_id,
+            bundle_id=bundle_id,
+            asof=preview_asof,
+            timeframes=timeframes,
+            allowed_templates=policy.get("allowed_templates", []),
+            params_overrides=policy.get("params", {}),
+            max_symbols_scan=max_symbols_scan,
+            seed=seed,
+            mode="preview",
+            symbol_scope=symbol_scope,
+            ranking_weights=policy.get("ranking_weights", {}),
+            max_runtime_seconds=max_runtime_seconds,
+        )
+    ensemble_payload = (
+        serialize_policy_ensemble(session, active_ensemble, include_members=True)
+        if active_ensemble is not None
+        else None
     )
 
     return {
@@ -3650,6 +4117,7 @@ def preview_policy_signals(
         "scanned_symbols": generated.scanned_symbols,
         "evaluated_candidates": generated.evaluated_candidates,
         "total_symbols": generated.total_symbols,
+        "ensemble": ensemble_payload,
     }
 
 
@@ -3694,6 +4162,8 @@ def activate_policy_mode(session: Session, settings: Settings, policy: Policy) -
     merged["paper_mode"] = "policy"
     merged["active_policy_id"] = policy.id
     merged["active_policy_name"] = policy.name
+    merged["active_ensemble_id"] = None
+    merged["active_ensemble_name"] = None
     state.settings_json = merged
     session.add(state)
     _log(

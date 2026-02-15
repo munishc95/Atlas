@@ -58,6 +58,22 @@ class CreatePolicyRequest(BaseModel):
     name: str
 
 
+class CreatePolicyEnsembleRequest(BaseModel):
+    name: str
+    bundle_id: int
+    is_active: bool = False
+
+
+class PolicyEnsembleMemberInput(BaseModel):
+    policy_id: int
+    weight: float = 1.0
+    enabled: bool = True
+
+
+class PolicyEnsembleMembersRequest(BaseModel):
+    members: list[PolicyEnsembleMemberInput] = Field(default_factory=list)
+
+
 class PaperRunStepRequest(BaseModel):
     regime: str = "TREND_UP"
     signals: list[dict[str, Any]] = Field(default_factory=list)
@@ -137,7 +153,9 @@ class OperateRunRequest(BaseModel):
 class AutoEvalRunRequest(BaseModel):
     bundle_id: int | None = None
     active_policy_id: int | None = None
+    active_ensemble_id: int | None = None
     challenger_policy_ids: list[int] | None = None
+    challenger_ensemble_ids: list[int] | None = None
     timeframe: str | None = None
     lookback_trading_days: int | None = None
     min_trades: int | None = None
@@ -204,6 +222,8 @@ class RuntimeSettingsRequest(BaseModel):
     four_hour_bars: str | None = None
     paper_mode: str | None = None
     active_policy_id: int | None = None
+    active_ensemble_id: int | None = None
+    active_ensemble_name: str | None = None
     cost_model_enabled: bool | None = None
     cost_mode: str | None = None
     brokerage_bps: float | None = None
