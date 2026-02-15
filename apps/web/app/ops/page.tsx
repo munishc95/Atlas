@@ -57,6 +57,18 @@ export default function OpsPage() {
     queryFn: async () => (await atlasApi.operateEvents({ limit: 20 })).data,
     refetchInterval: 8_000,
   });
+  const mappingStatusQuery = useQuery({
+    queryKey: qk.upstoxMappingStatus(activeBundleId, activeTimeframe, 20),
+    queryFn: async () =>
+      (
+        await atlasApi.upstoxMappingStatus({
+          bundle_id: activeBundleId ?? undefined,
+          timeframe: activeTimeframe,
+          sample_limit: 20,
+        })
+      ).data,
+    refetchInterval: 8_000,
+  });
   const autoEvalHistoryQuery = useQuery({
     queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId),
     queryFn: async () =>
@@ -252,6 +264,7 @@ export default function OpsPage() {
         queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
         queryClient.invalidateQueries({ queryKey: ["dataUpdatesLatest"] });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(activeBundleId, activeTimeframe) });
+        queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(activeBundleId, activeTimeframe, 20) });
         queryClient.invalidateQueries({ queryKey: ["dataCoverage"] });
       }
       toast.success("Ops action complete");
@@ -318,6 +331,7 @@ export default function OpsPage() {
   const fastModeEnabled = Boolean(
     healthQuery.data?.fast_mode_enabled ?? statusQuery.data?.fast_mode_enabled ?? false,
   );
+  const mappingMissingCount = Number(mappingStatusQuery.data?.missing_count ?? 0);
   const lastJobDurations = (healthQuery.data?.last_job_durations ??
     statusQuery.data?.last_job_durations ??
     {}) as Record<string, { duration_seconds?: number; status?: string; ts?: string }>;
@@ -373,6 +387,11 @@ export default function OpsPage() {
             {fastModeEnabled ? "Enabled" : "Disabled"}
           </span>
         </p>
+        {mappingMissingCount > 0 ? (
+          <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+            Mapping health warning: {mappingMissingCount} symbol(s) missing Upstox instrument mapping.
+          </p>
+        ) : null}
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Auto-run: {autoRunEnabled ? "Enabled" : "Disabled"} ({autoRunTimeIst} IST)
@@ -539,6 +558,7 @@ export default function OpsPage() {
                 {latestProviderUpdate?.status ?? "Not run"}
               </span>
             </p>
+            <p>Mapping missing: {mappingMissingCount}</p>
             <p>API calls: {Number(latestProviderUpdate?.api_calls ?? 0)}</p>
             <p>Duration: {Number(latestProviderUpdate?.duration_seconds ?? 0).toFixed(2)}s</p>
           </div>

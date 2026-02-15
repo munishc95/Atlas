@@ -216,17 +216,23 @@ def run_auto_operate_once(
             settings.data_updates_provider_enabled,
         )
     )
-    provider_timeframe_token = str(
-        state_settings.get(
-            "data_updates_provider_timeframe_enabled",
-            settings.data_updates_provider_timeframe_enabled,
+    raw_provider_timeframes = state_settings.get("data_updates_provider_timeframes")
+    if isinstance(raw_provider_timeframes, list):
+        provider_timeframes = {
+            str(item).strip().lower() for item in raw_provider_timeframes if str(item).strip()
+        }
+    else:
+        provider_timeframe_token = str(
+            state_settings.get(
+                "data_updates_provider_timeframe_enabled",
+                settings.data_updates_provider_timeframe_enabled,
+            )
         )
-    )
-    provider_timeframes = {
-        str(item).strip().lower()
-        for item in provider_timeframe_token.split(",")
-        if str(item).strip()
-    }
+        provider_timeframes = {
+            str(item).strip().lower()
+            for item in provider_timeframe_token.split(",")
+            if str(item).strip()
+        }
     provider_timeframe_allowed = str(timeframe).strip().lower() in provider_timeframes
     run_time = parse_time_hhmm(
         str(state_settings.get("operate_auto_run_time_ist", settings.operate_auto_run_time_ist)),

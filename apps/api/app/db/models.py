@@ -41,6 +41,29 @@ class InstrumentMap(SQLModel, table=True):
     metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
 
 
+class MappingImportRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_mappingimportrun_provider_created", "provider", "created_at"),
+        Index("ix_mappingimportrun_status_created", "status", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    provider: str = Field(default="UPSTOX", index=True, max_length=32)
+    mode: str = Field(default="UPSERT", max_length=16)
+    source_path: str = Field(default="", max_length=1024)
+    file_hash: str = Field(default="", max_length=128)
+    status: str = Field(default="SUCCEEDED", index=True, max_length=16)
+    mapped_count: int = 0
+    missing_count: int = 0
+    inserted_count: int = 0
+    updated_count: int = 0
+    removed_count: int = 0
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    duration_seconds: float = 0.0
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class DatasetBundle(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True, max_length=128)
@@ -309,6 +332,9 @@ class ProviderUpdateRun(SQLModel, table=True):
     symbols_succeeded: int = 0
     symbols_failed: int = 0
     bars_added: int = 0
+    repaired_days_used: int = 0
+    missing_days_detected: int = 0
+    backfill_truncated: bool = False
     api_calls: int = 0
     duration_seconds: float = 0.0
     warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
@@ -335,6 +361,7 @@ class ProviderUpdateItem(SQLModel, table=True):
     symbol: str = Field(default="", index=True, max_length=64)
     status: str = Field(default="PENDING", index=True, max_length=16)
     bars_added: int = 0
+    bars_updated: int = 0
     api_calls: int = 0
     start_ts: datetime | None = Field(default=None)
     end_ts: datetime | None = Field(default=None)

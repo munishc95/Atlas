@@ -28,7 +28,7 @@ from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
 from app.services.walkforward import execute_walkforward
-from app.db.models import DatasetBundle, PaperRun, PaperState
+from app.db.models import DatasetBundle, PaperRun, PaperState, ProviderUpdateItem
 
 
 def _store() -> DataStore:
@@ -506,6 +506,12 @@ def _provider_updates_result(
         end=payload.get("end"),
         correlation_id=job_id,
     )
+    bars_updated_total = 0
+    if row.id is not None:
+        items = session.exec(
+            select(ProviderUpdateItem).where(ProviderUpdateItem.run_id == int(row.id))
+        ).all()
+        bars_updated_total = int(sum(int(item.bars_updated or 0) for item in items))
     return {
         "id": int(row.id) if row.id is not None else None,
         "bundle_id": row.bundle_id,
@@ -516,6 +522,10 @@ def _provider_updates_result(
         "symbols_succeeded": row.symbols_succeeded,
         "symbols_failed": row.symbols_failed,
         "bars_added": row.bars_added,
+        "bars_updated": bars_updated_total,
+        "repaired_days_used": row.repaired_days_used,
+        "missing_days_detected": row.missing_days_detected,
+        "backfill_truncated": bool(row.backfill_truncated),
         "api_calls": row.api_calls,
         "duration_seconds": row.duration_seconds,
         "warnings_json": row.warnings_json,
@@ -720,17 +730,23 @@ def _operate_run_result(
     provider_enabled = bool(
         state_settings.get("data_updates_provider_enabled", settings.data_updates_provider_enabled)
     )
-    provider_timeframe_token = str(
-        state_settings.get(
-            "data_updates_provider_timeframe_enabled",
-            settings.data_updates_provider_timeframe_enabled,
+    raw_provider_timeframes = state_settings.get("data_updates_provider_timeframes")
+    if isinstance(raw_provider_timeframes, list):
+        provider_timeframes = {
+            str(item).strip().lower() for item in raw_provider_timeframes if str(item).strip()
+        }
+    else:
+        provider_timeframe_token = str(
+            state_settings.get(
+                "data_updates_provider_timeframe_enabled",
+                settings.data_updates_provider_timeframe_enabled,
+            )
         )
-    )
-    provider_timeframes = {
-        str(item).strip().lower()
-        for item in provider_timeframe_token.split(",")
-        if str(item).strip()
-    }
+        provider_timeframes = {
+            str(item).strip().lower()
+            for item in provider_timeframe_token.split(",")
+            if str(item).strip()
+        }
     provider_stage_enabled = include_data_updates and (
         (str(timeframe).strip().lower() in provider_timeframes) if provider_enabled else False
     )
@@ -767,6 +783,16 @@ def _operate_run_result(
                 end=payload.get("provider_end"),
                 correlation_id=job_id,
             )
+            provider_items = (
+                session.exec(
+                    select(ProviderUpdateItem).where(
+                        ProviderUpdateItem.run_id == int(provider_row.id)
+                    )
+                ).all()
+                if provider_row.id is not None
+                else []
+            )
+            bars_updated_total = int(sum(int(item.bars_updated or 0) for item in provider_items))
             provider_payload = {
                 "status": str(provider_row.status),
                 "run_id": int(provider_row.id) if provider_row.id is not None else None,
@@ -775,6 +801,10 @@ def _operate_run_result(
                 "symbols_succeeded": int(provider_row.symbols_succeeded),
                 "symbols_failed": int(provider_row.symbols_failed),
                 "bars_added": int(provider_row.bars_added),
+                "bars_updated": bars_updated_total,
+                "repaired_days_used": int(provider_row.repaired_days_used),
+                "missing_days_detected": int(provider_row.missing_days_detected),
+                "backfill_truncated": bool(provider_row.backfill_truncated),
                 "api_calls": int(provider_row.api_calls),
             }
         else:

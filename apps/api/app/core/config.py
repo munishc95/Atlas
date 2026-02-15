@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     fast_mode_seed: int = 7
     fast_mode_job_timeout_seconds: int = 1_200
     fast_mode_job_poll_seconds: float = 0.25
+    fast_mode_provider_intraday_max_symbols: int = 3
+    fast_mode_provider_intraday_max_days: int = 2
 
     risk_per_trade: float = 0.005
     max_positions: int = 3
@@ -98,6 +100,10 @@ class Settings(BaseSettings):
     data_updates_provider_max_symbols_per_run: int = 120
     data_updates_provider_max_calls_per_run: int = 400
     data_updates_provider_timeframe_enabled: str = "1d"
+    data_updates_provider_timeframes: list[str] = Field(default_factory=lambda: ["1d"])
+    data_updates_provider_repair_last_n_trading_days: int = 3
+    data_updates_provider_backfill_max_days: int = 30
+    data_updates_provider_allow_partial_4h_ish: bool = False
     coverage_missing_latest_warn_pct: float = 10.0
     coverage_missing_latest_fail_pct: float = 25.0
     coverage_inactive_after_missing_days: int = 3
@@ -141,6 +147,7 @@ class Settings(BaseSettings):
     upstox_retry_backoff_seconds: float = 1.0
     upstox_throttle_seconds: float = 0.15
     upstox_symbol_map_json: str | None = None
+    upstox_intraday_interval: str = "15minute"
     optuna_storage_url: str | None = None
     optuna_default_trials: int = 150
     optuna_default_timeout_seconds: int | None = None

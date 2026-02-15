@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import DataUpdateFile, DataUpdateRun, PaperState
+from app.db.models import DataUpdateFile, PaperState
 from app.db.session import engine, init_db
 from app.main import app
 from app.services.data_store import DataStore

@@ -106,6 +106,16 @@ export default function SettingsPage() {
         ),
         data_updates_provider_max_calls_per_run: Number(form.data_updates_provider_max_calls_per_run),
         data_updates_provider_timeframe_enabled: form.data_updates_provider_timeframe_enabled,
+        data_updates_provider_timeframes: String(form.data_updates_provider_timeframes ?? "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+        data_updates_provider_repair_last_n_trading_days: Number(
+          form.data_updates_provider_repair_last_n_trading_days,
+        ),
+        data_updates_provider_backfill_max_days: Number(form.data_updates_provider_backfill_max_days),
+        data_updates_provider_allow_partial_4h_ish:
+          form.data_updates_provider_allow_partial_4h_ish === "true",
         coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
         coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
         coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
@@ -220,6 +230,22 @@ export default function SettingsPage() {
       {
         key: "data_updates_provider_timeframe_enabled",
         label: "Provider updates enabled timeframes (comma-separated)",
+      },
+      {
+        key: "data_updates_provider_timeframes",
+        label: "Provider update timeframes list (comma-separated, e.g. 1d,4h_ish)",
+      },
+      {
+        key: "data_updates_provider_repair_last_n_trading_days",
+        label: "Provider repair last N trading days",
+      },
+      {
+        key: "data_updates_provider_backfill_max_days",
+        label: "Provider backfill max trading days",
+      },
+      {
+        key: "data_updates_provider_allow_partial_4h_ish",
+        label: "Allow partial 4h_ish bars (true/false)",
       },
       { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
       { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },

@@ -105,6 +105,31 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("paperorder", "qty_lots"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE paperorder ADD COLUMN qty_lots INTEGER DEFAULT 1"))
+    if not _has_column("providerupdaterun", "repaired_days_used"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdaterun ADD COLUMN repaired_days_used INTEGER DEFAULT 0")
+            )
+    if not _has_column("providerupdaterun", "missing_days_detected"):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE providerupdaterun ADD COLUMN missing_days_detected INTEGER DEFAULT 0"
+                )
+            )
+    if not _has_column("providerupdaterun", "backfill_truncated"):
+        bool_type = "INTEGER" if is_sqlite else "BOOLEAN"
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE providerupdaterun ADD COLUMN backfill_truncated {bool_type} DEFAULT 0"
+                )
+            )
+    if not _has_column("providerupdateitem", "bars_updated"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN bars_updated INTEGER DEFAULT 0")
+            )
 
     with engine.begin() as conn:
         conn.execute(
@@ -318,6 +343,18 @@ def _ensure_indexes_and_columns() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_providerupdateitem_status_created "
                 "ON providerupdateitem (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_mappingimportrun_provider_created "
+                "ON mappingimportrun (provider, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_mappingimportrun_status_created "
+                "ON mappingimportrun (status, created_at)"
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))

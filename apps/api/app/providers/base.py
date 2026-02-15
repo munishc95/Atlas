@@ -46,6 +46,9 @@ class BaseProvider(ABC):
     def api_calls_made(self) -> int:
         return int(self._api_calls_made)
 
+    def missing_mapped_symbols(self, symbols: list[str]) -> set[str]:
+        return set()
+
     @abstractmethod
     def list_symbols(self, bundle_id: int) -> list[str]:
         raise NotImplementedError

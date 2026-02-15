@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
@@ -92,9 +92,26 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       data_updates_provider_timeframe_enabled: "1d",
       data_updates_provider_max_symbols_per_run: 5,
       data_updates_provider_max_calls_per_run: 20,
+      data_updates_provider_timeframes: ["1d"],
+      data_updates_provider_repair_last_n_trading_days: 2,
+      data_updates_provider_backfill_max_days: 5,
     },
   });
   expect(settingsRes.ok()).toBeTruthy();
+
+  const mappingDir = path.resolve(__dirname, "../../../data/inbox/_metadata");
+  mkdirSync(mappingDir, { recursive: true });
+  const mappingPath = path.resolve(mappingDir, "upstox_instruments.csv");
+  writeFileSync(mappingPath, "symbol,instrument_key\nNIFTY500,NSE_EQ|NIFTY500\n", "utf-8");
+
+  const mappingImportRes = await request.post(`${apiBase}/api/providers/upstox/mapping/import`, {
+    data: {
+      path: mappingPath,
+      mode: "UPSERT",
+    },
+    params: { bundle_id: bundleId },
+  });
+  expect(mappingImportRes.ok()).toBeTruthy();
 
   const providerUpdateRes = await request.post(`${apiBase}/api/data/provider-updates/run`, {
     data: {
@@ -115,6 +132,7 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Fast mode:/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Mapping missing:/i)).toBeVisible({ timeout: 20_000 });
 
   const runOperateRes = page.waitForResponse(
     (res) => res.url().includes("/api/operate/run") && res.request().method() === "POST",

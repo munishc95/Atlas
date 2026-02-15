@@ -418,6 +418,44 @@ Scheduler/operate order with provider enabled:
 4. paper run-step
 5. daily report
 
+## Instrument Map Manager + Provider Repair/Backfill + Optional 4H-ish (v2.8)
+
+Atlas now adds local-first mapping management and self-healing provider updates:
+
+- Instrument map manager (no env JSON editing required):
+  - import mappings from local file (`csv`/`json`) via API
+  - recommended drop-folder path:
+    - `data/inbox/_metadata/upstox_instruments.csv`
+  - persisted import audit model:
+    - `MappingImportRun`
+  - mapping health status:
+    - mapped count, missing count, sample missing symbols
+- Provider update repair/backfill:
+  - calendar-aware missing trading-day detection
+  - deterministic repair of last `N` trading days each run
+  - backfill truncation guardrail (`provider_backfill_max_days`)
+  - missing map symbols are skipped with explicit reason:
+    - `missing_instrument_map`
+  - run summary includes:
+    - `repaired_days_used`
+    - `missing_days_detected`
+    - `backfill_truncated`
+  - per-symbol item includes:
+    - `bars_added`
+    - `bars_updated`
+- Optional provider `4h_ish` support:
+  - intraday fetch + resample to fixed windows:
+    - `09:15-13:15`
+    - `13:15-15:30`
+  - incomplete-day guardrail:
+    - warns and skips partial day by default
+    - optional override via `data_updates_provider_allow_partial_4h_ish`
+- Fast mode guardrails for intraday provider runs:
+  - aggressive symbol/day caps for deterministic quick smoke checks
+  - defaults:
+    - `fast_mode_provider_intraday_max_symbols=3`
+    - `fast_mode_provider_intraday_max_days=2`
+
 ## Portfolio Risk Overlay + One-Button Operate (v2.4)
 
 Atlas now supports a portfolio-level risk overlay on top of per-trade sizing:
@@ -538,6 +576,9 @@ A configurable cost model is available for both backtester and paper execution:
 - `POST /api/data/provider-updates/run`
 - `GET /api/data/provider-updates/latest?bundle_id=&timeframe=`
 - `GET /api/data/provider-updates/history?bundle_id=&timeframe=&days=`
+- `POST /api/providers/upstox/mapping/import`
+- `GET /api/providers/upstox/mapping/status?bundle_id=&timeframe=&sample_limit=`
+- `GET /api/providers/upstox/mapping/missing?bundle_id=&timeframe=&limit=`
 - `GET /api/data/coverage?bundle_id=&timeframe=&top_n=`
 - `GET /api/paper/state`
 - `GET /api/settings`

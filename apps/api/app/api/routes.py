@@ -62,6 +62,7 @@ from app.schemas.api import (
     ReplayRunRequest,
     ResearchRunRequest,
     RuntimeSettingsRequest,
+    UpstoxMappingImportRequest,
     WalkForwardRunRequest,
 )
 from app.services.data_store import DataStore
@@ -78,6 +79,11 @@ from app.services.data_updates import (
 from app.services.provider_updates import (
     get_latest_provider_update_run,
     list_provider_update_history,
+)
+from app.services.provider_mapping import (
+    get_upstox_mapping_status,
+    import_upstox_mapping_file,
+    list_upstox_missing_symbols,
 )
 from app.services.data_quality import (
     get_latest_data_quality_report,
@@ -460,6 +466,73 @@ def provider_updates_history(
         days=days,
     )
     return _data([row.model_dump() for row in rows])
+
+
+@router.post("/providers/upstox/mapping/import")
+def import_upstox_mapping(
+    payload: UpstoxMappingImportRequest,
+    bundle_id: int | None = Query(default=None, ge=1),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    row = import_upstox_mapping_file(
+        session=session,
+        settings=settings,
+        store=store,
+        path=payload.path,
+        mode=payload.mode,
+        bundle_id=bundle_id,
+    )
+    status = get_upstox_mapping_status(
+        session=session,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe="1d",
+    )
+    return _data(
+        {
+            "run": row.model_dump(),
+            "status": status,
+        }
+    )
+
+
+@router.get("/providers/upstox/mapping/status")
+def upstox_mapping_status(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str = Query(default="1d"),
+    sample_limit: int = Query(default=20, ge=1, le=200),
+    session: Session = Depends(get_session),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    return _data(
+        get_upstox_mapping_status(
+            session=session,
+            store=store,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+            sample_limit=sample_limit,
+        )
+    )
+
+
+@router.get("/providers/upstox/mapping/missing")
+def upstox_mapping_missing(
+    limit: int = Query(default=50, ge=1, le=500),
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str = Query(default="1d"),
+    session: Session = Depends(get_session),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    symbols = list_upstox_missing_symbols(
+        session=session,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    return _data({"symbols": symbols, "count": len(symbols)})
 
 
 @router.get("/data/coverage")
@@ -1676,6 +1749,10 @@ def get_settings_payload(
         "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
         "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
         "data_updates_provider_timeframe_enabled": settings.data_updates_provider_timeframe_enabled,
+        "data_updates_provider_timeframes": settings.data_updates_provider_timeframes,
+        "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
+        "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
+        "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
         "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,

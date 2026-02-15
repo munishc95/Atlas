@@ -25,6 +25,9 @@ export default function UniverseDataPage() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | "provider" | null>(null);
   const [showCoverageDrawer, setShowCoverageDrawer] = useState(false);
+  const [showMappingDrawer, setShowMappingDrawer] = useState(false);
+  const [mappingPath, setMappingPath] = useState("data/inbox/_metadata/upstox_instruments.csv");
+  const [mappingMode, setMappingMode] = useState<"UPSERT" | "REPLACE">("UPSERT");
 
   const universeQuery = useQuery({
     queryKey: qk.universe,
@@ -88,6 +91,30 @@ export default function UniverseDataPage() {
       return (await atlasApi.dataCoverage(bundleId, coverageTimeframe, 100)).data;
     },
     refetchInterval: 15_000,
+  });
+  const mappingStatusQuery = useQuery({
+    queryKey: qk.upstoxMappingStatus(bundleId, coverageTimeframe, 20),
+    queryFn: async () =>
+      (
+        await atlasApi.upstoxMappingStatus({
+          bundle_id: bundleId ?? undefined,
+          timeframe: coverageTimeframe,
+          sample_limit: 20,
+        })
+      ).data,
+    refetchInterval: 15_000,
+  });
+  const mappingMissingQuery = useQuery({
+    queryKey: qk.upstoxMappingMissing(bundleId, coverageTimeframe, 120),
+    queryFn: async () =>
+      (
+        await atlasApi.upstoxMappingMissing({
+          bundle_id: bundleId ?? undefined,
+          timeframe: coverageTimeframe,
+          limit: 120,
+        })
+      ).data,
+    enabled: showMappingDrawer,
   });
 
   useEffect(() => {
@@ -184,6 +211,24 @@ export default function UniverseDataPage() {
       toast.error(error.message || "Could not save provider setting");
     },
   });
+  const mappingImportMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.importUpstoxMapping({
+          path: mappingPath,
+          mode: mappingMode,
+          bundle_id: bundleId ?? undefined,
+        })
+      ).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(bundleId, coverageTimeframe, 20) });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxMappingMissing(bundleId, coverageTimeframe, 120) });
+      toast.success("Mapping import completed");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not import mapping file");
+    },
+  });
 
   const stream = useJobStream(activeJobId);
 
@@ -200,6 +245,8 @@ export default function UniverseDataPage() {
         queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
+        queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(bundleId, coverageTimeframe, 20) });
+        queryClient.invalidateQueries({ queryKey: qk.upstoxMappingMissing(bundleId, coverageTimeframe, 120) });
       }
       if (activeJobKind === "updates") {
         toast.success("Data updates completed");
@@ -460,6 +507,12 @@ export default function UniverseDataPage() {
               </span>
             </p>
             <p>Bars added: {providerUpdatesLatestQuery.data?.bars_added ?? 0}</p>
+            <p>Repair days used: {providerUpdatesLatestQuery.data?.repaired_days_used ?? 0}</p>
+            <p>Missing days detected: {providerUpdatesLatestQuery.data?.missing_days_detected ?? 0}</p>
+            <p>
+              Backfill truncated:{" "}
+              {providerUpdatesLatestQuery.data?.backfill_truncated ? "Yes" : "No"}
+            </p>
             <p>API calls: {providerUpdatesLatestQuery.data?.api_calls ?? 0}</p>
             <button
               type="button"
@@ -481,6 +534,62 @@ export default function UniverseDataPage() {
             >
               {providerUpdatesMutation.isPending ? "Queuing..." : "Run Provider Update"}
             </button>
+          </div>
+          <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p className="mb-1">
+              Instrument map:{" "}
+              <span
+                className={`badge ${
+                  Number(mappingStatusQuery.data?.missing_count ?? 0) > 0
+                    ? "bg-warning/15 text-warning"
+                    : "bg-success/15 text-success"
+                }`}
+              >
+                {mappingStatusQuery.data?.missing_count ?? 0} missing
+              </span>
+            </p>
+            <p>Mapped symbols: {mappingStatusQuery.data?.mapped_count ?? 0}</p>
+            <p>Total symbols: {mappingStatusQuery.data?.total_symbols ?? 0}</p>
+            <p>
+              Last import: {mappingStatusQuery.data?.last_import_at ?? "Not imported"}
+            </p>
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[11px] text-muted">Mapping file path</span>
+              <input
+                value={mappingPath}
+                onChange={(event) => setMappingPath(event.target.value)}
+                className="focus-ring w-full rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+                placeholder="data/inbox/_metadata/upstox_instruments.csv"
+              />
+            </label>
+            <div className="mt-2 flex gap-2">
+              <select
+                value={mappingMode}
+                onChange={(event) => setMappingMode(event.target.value as "UPSERT" | "REPLACE")}
+                className="focus-ring rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+              >
+                <option value="UPSERT">UPSERT</option>
+                <option value="REPLACE">REPLACE</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => mappingImportMutation.mutate()}
+                disabled={mappingImportMutation.isPending}
+                className="focus-ring rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
+              >
+                {mappingImportMutation.isPending ? "Importing..." : "Import Mapping"}
+              </button>
+              <button
+                type="button"
+                className="focus-ring rounded-lg border border-border px-2 py-1 text-xs text-muted"
+                onClick={() => setShowMappingDrawer(true)}
+              >
+                View missing
+              </button>
+            </div>
+            <p className="mt-2 text-[11px]">
+              Place file in <code className="rounded bg-surface px-1 py-0.5">data/inbox/_metadata/upstox_instruments.csv</code>
+            </p>
           </div>
         </article>
       </section>
@@ -524,6 +633,31 @@ export default function UniverseDataPage() {
                   </p>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+      </DetailsDrawer>
+
+      <DetailsDrawer
+        open={showMappingDrawer}
+        onClose={() => setShowMappingDrawer(false)}
+        title="Missing Instrument Mapping"
+      >
+        {mappingMissingQuery.isLoading ? (
+          <LoadingState label="Loading missing symbols" />
+        ) : mappingMissingQuery.isError ? (
+          <ErrorState
+            title="Could not load missing symbols"
+            action="Retry mapping status query."
+            onRetry={() => void mappingMissingQuery.refetch()}
+          />
+        ) : (
+          <div className="space-y-2 text-sm">
+            <p>
+              Missing count: <span className="font-semibold">{mappingStatusQuery.data?.missing_count ?? 0}</span>
+            </p>
+            <div className="max-h-64 overflow-auto rounded-lg border border-border p-2 text-xs text-muted">
+              {(mappingMissingQuery.data?.symbols ?? []).join(", ") || "No missing symbols."}
             </div>
           </div>
         )}

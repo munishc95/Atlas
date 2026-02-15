@@ -361,12 +361,45 @@ export type ApiProviderUpdateRun = {
   symbols_succeeded: number;
   symbols_failed: number;
   bars_added: number;
+  repaired_days_used: number;
+  missing_days_detected: number;
+  backfill_truncated: boolean;
   api_calls: number;
   duration_seconds: number;
   warnings_json: Array<Record<string, unknown>>;
   errors_json: Array<Record<string, unknown>>;
   created_at: string;
   ended_at?: string | null;
+};
+
+export type ApiUpstoxMappingStatus = {
+  provider: string;
+  bundle_id?: number | null;
+  timeframe: string;
+  mapped_count: number;
+  missing_count: number;
+  total_symbols: number;
+  sample_missing_symbols: string[];
+  last_import_at?: string | null;
+  last_import_id?: number | null;
+};
+
+export type ApiMappingImportRun = {
+  id: number;
+  provider: string;
+  mode: string;
+  source_path: string;
+  file_hash: string;
+  status: string;
+  mapped_count: number;
+  missing_count: number;
+  inserted_count: number;
+  updated_count: number;
+  removed_count: number;
+  warnings_json: Array<Record<string, unknown>>;
+  errors_json: Array<Record<string, unknown>>;
+  duration_seconds: number;
+  created_at: string;
 };
 
 export type ApiDataCoverage = {

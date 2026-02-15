@@ -19,8 +19,10 @@ import type {
   ApiOperateRunSummary,
   ApiOperateStatus,
   ApiAutoEvalRun,
+  ApiMappingImportRun,
   ApiPolicySwitchEvent,
   ApiMonthlyReport,
+  ApiUpstoxMappingStatus,
   ApiResearchCandidate,
   ApiResearchRun,
   ApiPolicyEvaluation,
@@ -92,6 +94,40 @@ export const atlasApi = {
     if (params?.days) search.set("days", String(params.days));
     return apiFetch<ApiProviderUpdateRun[]>(
       `/api/data/provider-updates/history${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  upstoxMappingStatus: (params?: { bundle_id?: number; timeframe?: string; sample_limit?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (typeof params?.sample_limit === "number") {
+      search.set("sample_limit", String(params.sample_limit));
+    }
+    return apiFetch<ApiUpstoxMappingStatus>(
+      `/api/providers/upstox/mapping/status${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  upstoxMappingMissing: (params?: { bundle_id?: number; timeframe?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (typeof params?.limit === "number") search.set("limit", String(params.limit));
+    return apiFetch<{ symbols: string[]; count: number }>(
+      `/api/providers/upstox/mapping/missing${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  importUpstoxMapping: (payload: { path: string; mode?: "UPSERT" | "REPLACE"; bundle_id?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof payload.bundle_id === "number") search.set("bundle_id", String(payload.bundle_id));
+    return apiFetch<{ run: ApiMappingImportRun; status: ApiUpstoxMappingStatus }>(
+      `/api/providers/upstox/mapping/import${search.toString() ? `?${search.toString()}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          path: payload.path,
+          mode: payload.mode ?? "UPSERT",
+        }),
+      },
     );
   },
   dataCoverage: (bundleId: number, timeframe = "1d", topN = 50) =>

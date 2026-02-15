@@ -55,6 +55,10 @@ export const qk = {
     ["providerUpdatesLatest", bundleId ?? "all", timeframe ?? "all"] as const,
   providerUpdatesHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>
     ["providerUpdatesHistory", bundleId ?? "all", timeframe ?? "all", days] as const,
+  upstoxMappingStatus: (bundleId?: number | null, timeframe?: string | null, sampleLimit = 20) =>
+    ["upstoxMappingStatus", bundleId ?? "all", timeframe ?? "all", sampleLimit] as const,
+  upstoxMappingMissing: (bundleId?: number | null, timeframe?: string | null, limit = 50) =>
+    ["upstoxMappingMissing", bundleId ?? "all", timeframe ?? "all", limit] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>

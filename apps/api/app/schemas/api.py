@@ -113,6 +113,11 @@ class ProviderUpdatesRunRequest(BaseModel):
     end: str | None = None
 
 
+class UpstoxMappingImportRequest(BaseModel):
+    path: str = "data/inbox/_metadata/upstox_instruments.csv"
+    mode: str = "UPSERT"
+
+
 class OperateRunRequest(BaseModel):
     bundle_id: int | None = None
     timeframe: str | None = None
@@ -254,6 +259,10 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_max_symbols_per_run: int | None = None
     data_updates_provider_max_calls_per_run: int | None = None
     data_updates_provider_timeframe_enabled: str | None = None
+    data_updates_provider_timeframes: list[str] | None = None
+    data_updates_provider_repair_last_n_trading_days: int | None = None
+    data_updates_provider_backfill_max_days: int | None = None
+    data_updates_provider_allow_partial_4h_ish: bool | None = None
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None
