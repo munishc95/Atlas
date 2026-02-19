@@ -102,7 +102,16 @@ from app.services.provider_mapping import (
     list_upstox_missing_symbols,
 )
 from app.services.upstox_auth import (
+    build_fake_access_token,
     build_authorization_url,
+    delete_provider_credential,
+    get_provider_access_token,
+    get_provider_credential,
+    mark_verified_now,
+    save_provider_credential,
+    store_oauth_state,
+    token_status,
+    token_timestamps_from_payload,
     exchange_authorization_code,
     extract_access_token,
     mask_token,
@@ -110,6 +119,7 @@ from app.services.upstox_auth import (
     resolve_client_id,
     resolve_client_secret,
     resolve_redirect_uri,
+    validate_oauth_state,
     verify_access_token,
 )
 from app.services.data_quality import (
@@ -118,7 +128,7 @@ from app.services.data_quality import (
 )
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
-from app.services.operate_events import get_operate_health_summary, list_operate_events
+from app.services.operate_events import emit_operate_event, get_operate_health_summary, list_operate_events
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.paper import (
     activate_policy_mode,
@@ -499,11 +509,22 @@ def provider_updates_history(
 def upstox_auth_url(
     redirect_uri: str | None = Query(default=None),
     state: str | None = Query(default=None),
+    session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    client_id = resolve_client_id(settings)
+    if settings.fast_mode_enabled:
+        client_id = str(settings.upstox_client_id or settings.upstox_api_key or "ATLAS_FASTMODE")
+    else:
+        client_id = resolve_client_id(settings)
     resolved_redirect = resolve_redirect_uri(settings=settings, redirect_uri=redirect_uri)
     resolved_state = str(state).strip() if state else secrets.token_urlsafe(16)
+    expires_at = store_oauth_state(
+        session,
+        settings=settings,
+        state=resolved_state,
+        redirect_uri=resolved_redirect,
+        ttl_seconds=settings.upstox_oauth_state_ttl_seconds,
+    )
     auth_url = build_authorization_url(
         client_id=client_id,
         redirect_uri=resolved_redirect,
@@ -515,6 +536,7 @@ def upstox_auth_url(
             "auth_url": auth_url,
             "state": resolved_state,
             "redirect_uri": resolved_redirect,
+            "state_expires_at": expires_at.isoformat(),
             "client_id_hint": f"{client_id[:6]}...",
         }
     )
@@ -523,25 +545,54 @@ def upstox_auth_url(
 @router.post("/providers/upstox/token/exchange")
 def upstox_token_exchange(
     payload: UpstoxTokenExchangeRequest,
+    session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    client_id = resolve_client_id(settings)
-    client_secret = resolve_client_secret(settings)
     resolved_redirect = resolve_redirect_uri(
         settings=settings,
         redirect_uri=payload.redirect_uri,
     )
-    raw = exchange_authorization_code(
-        code=payload.code,
-        client_id=client_id,
-        client_secret=client_secret,
+    validate_oauth_state(
+        session,
+        settings=settings,
+        state=payload.state,
         redirect_uri=resolved_redirect,
-        base_url=settings.upstox_base_url,
-        timeout_seconds=settings.upstox_timeout_seconds,
     )
+
+    is_fast_stub = settings.fast_mode_enabled and str(payload.code).strip() == str(
+        settings.upstox_e2e_fake_code
+    ).strip()
+    if is_fast_stub:
+        fake_token = build_fake_access_token()
+        raw = {
+            "status": "success",
+            "data": {
+                "access_token": fake_token,
+                "issued_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+    else:
+        client_id = resolve_client_id(settings)
+        client_secret = resolve_client_secret(settings)
+        raw = exchange_authorization_code(
+            code=payload.code,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=resolved_redirect,
+            base_url=settings.upstox_base_url,
+            timeout_seconds=settings.upstox_timeout_seconds,
+        )
     token = extract_access_token(raw)
+    issued_at, expires_at = token_timestamps_from_payload(token=token, payload=raw)
+    saved = save_provider_credential(
+        session,
+        settings=settings,
+        access_token=token,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
     persisted_paths: list[str] = []
-    if payload.persist_token:
+    if payload.persist_token and bool(settings.upstox_persist_env_fallback):
         persisted_paths = persist_access_token(access_token=token)
         get_settings.cache_clear()
     verification = verify_access_token(
@@ -549,40 +600,100 @@ def upstox_token_exchange(
         base_url=settings.upstox_base_url,
         timeout_seconds=settings.upstox_timeout_seconds,
     )
+    if bool(verification.get("valid")):
+        mark_verified_now(session, settings=settings)
     return _data(
         {
             "token_masked": mask_token(token),
+            "connected": True,
+            "expires_at": saved.expires_at.isoformat() if saved.expires_at is not None else None,
+            "last_verified_at": saved.last_verified_at.isoformat()
+            if saved.last_verified_at is not None
+            else None,
             "persisted_paths": persisted_paths,
             "verification": verification,
+            "token_source": "encrypted_store",
             "note": (
-                "Upstox access token rotation is required when token expires. "
-                "Atlas stores the new token locally when persist_token=true."
+                "Upstox access tokens still rotate periodically. Atlas stores token encrypted locally. "
+                "Env persistence is optional and disabled by default."
             ),
         }
     )
 
 
+@router.get("/providers/upstox/token/status")
+def upstox_token_status(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(
+        token_status(
+            session,
+            settings=settings,
+            allow_env_fallback=True,
+        )
+    )
+
+
 @router.get("/providers/upstox/token/verify")
-def upstox_token_verify(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    token = str(settings.upstox_access_token or "").strip()
+def upstox_token_verify(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    token = get_provider_access_token(
+        session,
+        settings=settings,
+        allow_env_fallback=True,
+    )
     if not token:
         raise APIError(
             code="upstox_token_missing",
-            message="Set ATLAS_UPSTOX_ACCESS_TOKEN before verification.",
+            message="Connect Upstox first before verification.",
             status_code=400,
         )
     verification = verify_access_token(
-        access_token=token,
+        access_token=str(token),
         base_url=settings.upstox_base_url,
         timeout_seconds=settings.upstox_timeout_seconds,
     )
+    if bool(verification.get("valid")):
+        row = get_provider_credential(session)
+        if row is not None:
+            mark_verified_now(session, settings=settings)
+            session.refresh(row)
+    status_payload = token_status(
+        session,
+        settings=settings,
+        allow_env_fallback=True,
+    )
     return _data(
         {
-            "token_configured": True,
-            "token_masked": mask_token(token),
+            "token_configured": bool(status_payload.get("connected")),
+            "token_masked": status_payload.get("token_masked"),
+            "expires_at": status_payload.get("expires_at"),
+            "is_expired": status_payload.get("is_expired"),
+            "expires_soon": status_payload.get("expires_soon"),
+            "last_verified_at": status_payload.get("last_verified_at"),
             "verification": verification,
         }
     )
+
+
+@router.post("/providers/upstox/disconnect")
+def upstox_disconnect(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    deleted = delete_provider_credential(session)
+    emit_operate_event(
+        session,
+        severity="WARN",
+        category="SYSTEM",
+        message="upstox_disconnected",
+        details={"provider_kind": "UPSTOX", "deleted": bool(deleted)},
+        commit=True,
+    )
+    return _data({"disconnected": bool(deleted)})
 
 
 @router.post("/providers/upstox/mapping/import")
@@ -1569,6 +1680,7 @@ def operate_status(
             "latest_data_quality": health_summary.get("latest_data_quality"),
             "latest_data_update": health_summary.get("latest_data_update"),
             "latest_provider_update": health_summary.get("latest_provider_update"),
+            "upstox_token_status": health_summary.get("upstox_token_status"),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "fast_mode_enabled": health_summary.get("fast_mode_enabled"),
             "last_job_durations": health_summary.get("last_job_durations"),
@@ -2034,6 +2146,7 @@ def get_settings_payload(
         "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
         "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
         "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
+        "upstox_persist_env_fallback": settings.upstox_persist_env_fallback,
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
         "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,

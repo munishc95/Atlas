@@ -64,6 +64,30 @@ class MappingImportRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ProviderCredential(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    provider_kind: str = Field(default="UPSTOX", index=True, unique=True, max_length=32)
+    access_token_encrypted: str = Field(default="", max_length=8192)
+    user_id: str | None = Field(default=None, max_length=128)
+    issued_at: datetime | None = Field(default=None)
+    expires_at: datetime | None = Field(default=None, index=True)
+    last_verified_at: datetime | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
+class OAuthState(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
+    state: str = Field(index=True, unique=True, max_length=256)
+    redirect_uri: str = Field(default="", max_length=1024)
+    expires_at: datetime = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    consumed_at: datetime | None = Field(default=None, index=True)
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
 class DatasetBundle(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True, max_length=128)

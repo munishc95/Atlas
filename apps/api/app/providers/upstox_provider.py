@@ -10,9 +10,11 @@ import pandas as pd
 from sqlmodel import Session, select
 
 from app.core.config import Settings
+from app.core.exceptions import APIError
 from app.db.models import InstrumentMap
 from app.providers.base import BaseProvider
 from app.services.data_store import DataStore
+from app.services.upstox_auth import get_provider_access_token, token_status
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
 
@@ -48,6 +50,7 @@ class UpstoxProvider(BaseProvider):
         self.session = session
         self.settings = settings
         self.store = store
+        self._token_cache: str | None = None
 
     def supports_timeframes(self) -> set[str]:
         return {"1d", "4h_ish", "4h_ish_resampled"}
@@ -186,7 +189,32 @@ class UpstoxProvider(BaseProvider):
             ),
             "Accept-Language": "en-US,en;q=0.9",
         }
-        token = str(self.settings.upstox_access_token or "").strip()
+        status = token_status(
+            self.session,
+            settings=self.settings,
+            allow_env_fallback=True,
+        )
+        if not bool(status.get("connected")):
+            raise APIError(
+                code="provider_token_missing",
+                message="Upstox provider token not configured.",
+                status_code=400,
+            )
+        if bool(status.get("is_expired")):
+            raise APIError(
+                code="provider_token_expired",
+                message="Upstox provider token expired. Reconnect Upstox.",
+                status_code=400,
+            )
+        token = self._token_cache
+        if not token:
+            token = get_provider_access_token(
+                self.session,
+                settings=self.settings,
+                allow_env_fallback=True,
+            )
+            self._token_cache = str(token or "").strip() or None
+        token = str(token or "").strip()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         max_retries = max(0, int(self.settings.upstox_retry_max))

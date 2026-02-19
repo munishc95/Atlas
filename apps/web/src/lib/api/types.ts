@@ -331,6 +331,7 @@ export type ApiOperateStatus = {
   latest_data_quality?: ApiDataQualityReport | null;
   latest_data_update?: ApiDataUpdateRun | null;
   latest_provider_update?: ApiProviderUpdateRun | null;
+  upstox_token_status?: ApiUpstoxTokenStatus | null;
   recent_event_counts_24h?: Record<string, number>;
   fast_mode_enabled?: boolean;
   last_job_durations?: Record<
@@ -411,6 +412,27 @@ export type ApiUpstoxMappingStatus = {
   sample_missing_symbols: string[];
   last_import_at?: string | null;
   last_import_id?: number | null;
+};
+
+export type ApiUpstoxAuthUrl = {
+  auth_url: string;
+  state: string;
+  redirect_uri: string;
+  state_expires_at?: string | null;
+  client_id_hint?: string | null;
+};
+
+export type ApiUpstoxTokenStatus = {
+  provider_kind: string;
+  connected: boolean;
+  token_masked?: string | null;
+  token_source?: string | null;
+  issued_at?: string | null;
+  expires_at?: string | null;
+  is_expired: boolean;
+  expires_soon: boolean;
+  last_verified_at?: string | null;
+  user_id?: string | null;
 };
 
 export type ApiMappingImportRun = {
@@ -505,6 +527,7 @@ export type ApiOperateHealth = {
   latest_data_quality?: ApiDataQualityReport | null;
   latest_data_update?: ApiDataUpdateRun | null;
   latest_provider_update?: ApiProviderUpdateRun | null;
+  upstox_token_status?: ApiUpstoxTokenStatus | null;
   latest_paper_run_id?: number | null;
   current_regime?: string | null;
   no_trade?: Record<string, unknown>;

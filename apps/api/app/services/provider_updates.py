@@ -17,6 +17,7 @@ from app.services.data_store import DataStore
 from app.services.fast_mode import clamp_scan_symbols, fast_mode_enabled
 from app.services.operate_events import emit_operate_event
 from app.services.trading_calendar import is_trading_day, list_trading_days, previous_trading_day
+from app.services.upstox_auth import token_status
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
 
@@ -369,6 +370,12 @@ def run_provider_updates(
     session.add(run)
     session.commit()
     session.refresh(run)
+    if provider is not None and str(getattr(provider, "kind", "")).strip():
+        kind = str(getattr(provider, "kind")).strip().upper()
+        run.provider_kind = kind
+        session.add(run)
+        session.commit()
+        session.refresh(run)
 
     warnings: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -398,6 +405,81 @@ def run_provider_updates(
         session.commit()
         session.refresh(run)
         return run
+
+    if kind == "UPSTOX" and (provider is None or str(getattr(provider, "kind", "")).strip().upper() == "UPSTOX"):
+        upstox_status = token_status(
+            session,
+            settings=settings,
+            allow_env_fallback=True,
+        )
+        if not bool(upstox_status.get("connected")):
+            errors.append(
+                {
+                    "code": "provider_token_missing",
+                    "message": "Upstox token not connected. Reconnect Upstox from Settings.",
+                }
+            )
+            run.status = "FAILED"
+            run.errors_json = errors
+            run.warnings_json = warnings
+            run.ended_at = datetime.now(UTC)
+            session.add(run)
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="DATA",
+                message="provider_updates_token_missing",
+                details={
+                    "run_id": run.id,
+                    "provider_kind": kind,
+                    "bundle_id": bundle_id,
+                    "timeframe": tf,
+                    "reason": "provider_token_missing",
+                },
+                correlation_id=correlation_id,
+            )
+            session.commit()
+            session.refresh(run)
+            return run
+        if bool(upstox_status.get("is_expired")):
+            errors.append(
+                {
+                    "code": "provider_token_expired",
+                    "message": "Upstox token expired. Reconnect Upstox from Settings.",
+                    "details": {"expires_at": upstox_status.get("expires_at")},
+                }
+            )
+            run.status = "FAILED"
+            run.errors_json = errors
+            run.warnings_json = warnings
+            run.ended_at = datetime.now(UTC)
+            session.add(run)
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="DATA",
+                message="provider_updates_token_expired",
+                details={
+                    "run_id": run.id,
+                    "provider_kind": kind,
+                    "bundle_id": bundle_id,
+                    "timeframe": tf,
+                    "reason": "provider_token_expired",
+                    "expires_at": upstox_status.get("expires_at"),
+                },
+                correlation_id=correlation_id,
+            )
+            session.commit()
+            session.refresh(run)
+            return run
+        if bool(upstox_status.get("expires_soon")):
+            warnings.append(
+                {
+                    "code": "provider_token_expires_soon",
+                    "message": "Upstox token expires soon; reconnect recommended.",
+                    "details": {"expires_at": upstox_status.get("expires_at")},
+                }
+            )
 
     selected_provider = provider or build_provider(
         kind=kind,

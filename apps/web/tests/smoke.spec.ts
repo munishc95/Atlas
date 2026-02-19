@@ -65,6 +65,7 @@ async function ensureSampleImport(
 test("@smoke fast operate run + report pdf + ops health", async ({ page, request }) => {
   test.setTimeout(240_000);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+  const webBase = process.env.NEXT_PUBLIC_WEB_BASE_URL ?? "http://localhost:3000";
 
   await ensureSampleImport(request, apiBase, "NIFTY500");
 
@@ -104,6 +105,27 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
     },
   });
   expect(settingsRes.ok()).toBeTruthy();
+
+  const callbackRedirect = `${webBase}/providers/upstox/callback`;
+  const authUrlRes = await request.get(`${apiBase}/api/providers/upstox/auth-url`, {
+    params: { redirect_uri: callbackRedirect },
+  });
+  expect(authUrlRes.ok()).toBeTruthy();
+  const authUrlBody = await authUrlRes.json();
+  const oauthState = String(authUrlBody?.data?.state ?? "");
+  expect(oauthState.length).toBeGreaterThan(0);
+  const exchangeRes = await request.post(`${apiBase}/api/providers/upstox/token/exchange`, {
+    data: {
+      code: process.env.ATLAS_UPSTOX_E2E_FAKE_CODE ?? "ATLAS_E2E_FAKE_CODE",
+      state: oauthState,
+      redirect_uri: callbackRedirect,
+      persist_token: false,
+    },
+  });
+  expect(exchangeRes.ok()).toBeTruthy();
+  const statusRes = await request.get(`${apiBase}/api/providers/upstox/token/status`);
+  expect(statusRes.ok()).toBeTruthy();
+  expect(Boolean((await statusRes.json())?.data?.connected)).toBeTruthy();
 
   const mappingDir = path.resolve(__dirname, "../../../data/inbox/_metadata");
   mkdirSync(mappingDir, { recursive: true });
@@ -217,6 +239,11 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
     },
   });
   expect(enforcePolicyModeRes.ok()).toBeTruthy();
+
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Providers - Upstox")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Connected")).toBeVisible({ timeout: 20_000 });
 
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });

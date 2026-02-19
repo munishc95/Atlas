@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     calendar_data_root: str = "data/calendars"
     data_inbox_root: str = "data/inbox"
     sample_data_root: str = "data/sample"
+    secrets_root: str = "data/secrets"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "atlas"
     jobs_inline: bool = False
@@ -152,7 +153,7 @@ class Settings(BaseSettings):
     # Backward-friendly aliases for client credentials.
     upstox_api_key: str | None = None
     upstox_api_secret: str | None = None
-    upstox_redirect_uri: str | None = None
+    upstox_redirect_uri: str = "http://localhost:3000/providers/upstox/callback"
     upstox_base_url: str = "https://api.upstox.com"
     upstox_timeout_seconds: float = 12.0
     upstox_retry_max: int = 2
@@ -160,6 +161,12 @@ class Settings(BaseSettings):
     upstox_throttle_seconds: float = 0.15
     upstox_symbol_map_json: str | None = None
     upstox_intraday_interval: str = "15minute"
+    upstox_oauth_state_ttl_seconds: int = 600
+    upstox_expires_soon_seconds: int = 21_600
+    upstox_persist_env_fallback: bool = False
+    upstox_e2e_fake_code: str = "ATLAS_E2E_FAKE_CODE"
+    cred_key: str | None = None
+    cred_key_path: str = "data/secrets/atlas_cred.key"
     optuna_storage_url: str | None = None
     optuna_default_trials: int = 150
     optuna_default_timeout_seconds: int | None = None
@@ -174,6 +181,8 @@ class Settings(BaseSettings):
         Path(self.feature_cache_root).mkdir(parents=True, exist_ok=True)
         Path(self.calendar_data_root).mkdir(parents=True, exist_ok=True)
         Path(self.data_inbox_root).mkdir(parents=True, exist_ok=True)
+        Path(self.secrets_root).mkdir(parents=True, exist_ok=True)
+        Path(self.cred_key_path).parent.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

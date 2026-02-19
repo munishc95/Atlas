@@ -22,6 +22,7 @@ from app.services.trading_calendar import (
     next_trading_day,
     previous_trading_day,
 )
+from app.services.upstox_auth import token_status as upstox_token_status
 
 
 ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
@@ -226,6 +227,11 @@ def get_operate_health_summary(
         bundle_id=target_bundle_id,
         timeframe=target_timeframe,
     )
+    provider_token = upstox_token_status(
+        session,
+        settings=settings,
+        allow_env_fallback=True,
+    )
     state = session.get(PaperState, 1)
     state_settings = dict(state.settings_json or {}) if state is not None else {}
     safe_mode_on_fail = bool(
@@ -370,6 +376,7 @@ def get_operate_health_summary(
         "latest_provider_update": (
             latest_provider_update.model_dump() if latest_provider_update is not None else None
         ),
+        "upstox_token_status": provider_token,
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,

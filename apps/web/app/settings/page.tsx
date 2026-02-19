@@ -28,6 +28,11 @@ export default function SettingsPage() {
     queryFn: async () => (await atlasApi.ensembleById(Number(activeEnsembleId))).data,
     enabled: activeEnsembleId !== null,
   });
+  const upstoxStatusQuery = useQuery({
+    queryKey: qk.upstoxTokenStatus,
+    queryFn: async () => (await atlasApi.upstoxTokenStatus()).data,
+    refetchInterval: 15_000,
+  });
 
   const [form, setForm] = useState<Record<string, string>>({});
   const [regimeWeightsText, setRegimeWeightsText] = useState("{}");
@@ -139,6 +144,7 @@ export default function SettingsPage() {
         data_updates_provider_backfill_max_days: Number(form.data_updates_provider_backfill_max_days),
         data_updates_provider_allow_partial_4h_ish:
           form.data_updates_provider_allow_partial_4h_ish === "true",
+        upstox_persist_env_fallback: form.upstox_persist_env_fallback === "true",
         coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
         coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
         coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
@@ -201,6 +207,47 @@ export default function SettingsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not save regime weights");
+    },
+  });
+  const connectUpstoxMutation = useMutation({
+    mutationFn: async () => {
+      if (typeof window === "undefined") {
+        throw new Error("Connect action requires browser context.");
+      }
+      const redirectUri = `${window.location.origin}/providers/upstox/callback`;
+      return (await atlasApi.upstoxAuthUrl({ redirect_uri: redirectUri })).data;
+    },
+    onSuccess: (data) => {
+      if (typeof window !== "undefined") {
+        window.location.href = data.auth_url;
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not start Upstox connect flow");
+    },
+  });
+  const verifyUpstoxMutation = useMutation({
+    mutationFn: async () => (await atlasApi.upstoxTokenVerify()).data,
+    onSuccess: () => {
+      toast.success("Upstox token verified");
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Upstox token verification failed");
+    },
+  });
+  const disconnectUpstoxMutation = useMutation({
+    mutationFn: async () => (await atlasApi.upstoxDisconnect()).data,
+    onSuccess: () => {
+      toast.success("Upstox disconnected");
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not disconnect Upstox");
     },
   });
 
@@ -307,6 +354,10 @@ export default function SettingsPage() {
         key: "data_updates_provider_allow_partial_4h_ish",
         label: "Allow partial 4h_ish bars (true/false)",
       },
+      {
+        key: "upstox_persist_env_fallback",
+        label: "Upstox fallback: persist token to .env (true/false)",
+      },
       { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
       { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },
       {
@@ -334,6 +385,31 @@ export default function SettingsPage() {
     ],
     [],
   );
+
+  const upstoxExpiryLabel = useMemo(() => {
+    const expiresAt = upstoxStatusQuery.data?.expires_at;
+    if (!expiresAt) {
+      return "-";
+    }
+    return expiresAt;
+  }, [upstoxStatusQuery.data?.expires_at]);
+  const upstoxExpiresInLabel = useMemo(() => {
+    const expiresAt = upstoxStatusQuery.data?.expires_at;
+    if (!expiresAt) {
+      return "-";
+    }
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    if (!Number.isFinite(ms)) {
+      return "-";
+    }
+    if (ms <= 0) {
+      return "expired";
+    }
+    const totalMinutes = Math.floor(ms / 60_000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }, [upstoxStatusQuery.data?.expires_at]);
 
   return (
     <div className="space-y-5">
@@ -417,6 +493,77 @@ export default function SettingsPage() {
         >
           {saveRegimeWeightsMutation.isPending ? "Saving..." : "Save Regime Weights"}
         </button>
+      </section>
+      <section className="card p-4">
+        <h3 className="text-base font-semibold">Providers - Upstox</h3>
+        <p className="mt-1 text-sm text-muted">
+          Connect Upstox for automated provider updates. Token is stored encrypted locally.
+        </p>
+        {upstoxStatusQuery.isLoading ? (
+          <div className="mt-3">
+            <LoadingState label="Loading Upstox status" />
+          </div>
+        ) : upstoxStatusQuery.isError ? (
+          <div className="mt-3">
+            <ErrorState
+              title="Could not load Upstox status"
+              action="Retry to fetch token status."
+              onRetry={() => void upstoxStatusQuery.refetch()}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Status:{" "}
+                <span
+                  className={`badge ${
+                    upstoxStatusQuery.data?.connected
+                      ? "bg-success/15 text-success"
+                      : "bg-danger/15 text-danger"
+                  }`}
+                >
+                  {upstoxStatusQuery.data?.connected ? "Connected" : "Disconnected"}
+                </span>
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Expires at: {upstoxExpiryLabel}
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Expires in: {upstoxExpiresInLabel}
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Last verified: {upstoxStatusQuery.data?.last_verified_at ?? "-"}
+              </p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => connectUpstoxMutation.mutate()}
+                disabled={connectUpstoxMutation.isPending}
+                className="focus-ring rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white"
+              >
+                {connectUpstoxMutation.isPending ? "Redirecting..." : "Connect"}
+              </button>
+              <button
+                type="button"
+                onClick={() => verifyUpstoxMutation.mutate()}
+                disabled={verifyUpstoxMutation.isPending || !upstoxStatusQuery.data?.connected}
+                className="focus-ring rounded-xl border border-border px-4 py-2 text-sm text-muted"
+              >
+                {verifyUpstoxMutation.isPending ? "Verifying..." : "Verify"}
+              </button>
+              <button
+                type="button"
+                onClick={() => disconnectUpstoxMutation.mutate()}
+                disabled={disconnectUpstoxMutation.isPending || !upstoxStatusQuery.data?.connected}
+                className="focus-ring rounded-xl border border-border px-4 py-2 text-sm text-muted"
+              >
+                {disconnectUpstoxMutation.isPending ? "Disconnecting..." : "Disconnect"}
+              </button>
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

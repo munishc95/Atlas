@@ -6,10 +6,10 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.config import Settings, get_settings
-from app.db.models import DatasetBundle, PaperState
+from app.db.models import DatasetBundle, PaperState, ProviderCredential
 from app.db.session import engine, init_db
 from app.providers.base import BaseProvider
 from app.services.data_store import DataStore
@@ -240,3 +240,50 @@ def test_fast_mode_caps_provider_symbol_scan() -> None:
         assert row.status == "SUCCEEDED"
         assert row.symbols_attempted == 10
         assert len(provider.seen_symbols) == 10
+
+
+def test_provider_updates_fail_when_upstox_token_missing() -> None:
+    init_db()
+    settings = Settings(
+        redis_url="redis://127.0.0.1:1/0",
+        data_updates_provider_enabled=True,
+        data_updates_provider_kind="UPSTOX",
+        upstox_access_token="",
+    )
+    store = _store()
+    unique = uuid4().hex[:8].upper()
+
+    with Session(engine) as session:
+        for row in session.exec(select(ProviderCredential)).all():
+            session.delete(row)
+        session.commit()
+
+        bundle = DatasetBundle(
+            name=f"bundle-upstox-token-{unique}",
+            provider="upstox",
+            symbols_json=[f"UPX_{unique}"],
+            supported_timeframes_json=["1d"],
+        )
+        session.add(bundle)
+        session.commit()
+        session.refresh(bundle)
+        assert bundle.id is not None
+
+        row = run_provider_updates(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=int(bundle.id),
+            timeframe="1d",
+            overrides={
+                "data_updates_provider_enabled": True,
+                "data_updates_provider_kind": "UPSTOX",
+                "data_updates_provider_timeframe_enabled": "1d",
+            },
+        )
+        assert row.status == "FAILED"
+        assert any(
+            str(item.get("code", "")).strip() == "provider_token_missing"
+            for item in (row.errors_json or [])
+            if isinstance(item, dict)
+        )

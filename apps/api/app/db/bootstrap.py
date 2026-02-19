@@ -107,6 +107,7 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
                     "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
                     "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
+                    "upstox_persist_env_fallback": settings.upstox_persist_env_fallback,
                     "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
                     "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
                     "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,

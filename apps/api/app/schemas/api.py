@@ -140,8 +140,9 @@ class UpstoxMappingImportRequest(BaseModel):
 
 class UpstoxTokenExchangeRequest(BaseModel):
     code: str
+    state: str
     redirect_uri: str | None = None
-    persist_token: bool = True
+    persist_token: bool = False
 
 
 class OperateRunRequest(BaseModel):
@@ -293,6 +294,7 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_repair_last_n_trading_days: int | None = None
     data_updates_provider_backfill_max_days: int | None = None
     data_updates_provider_allow_partial_4h_ish: bool | None = None
+    upstox_persist_env_fallback: bool | None = None
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None

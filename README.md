@@ -418,16 +418,24 @@ Scheduler/operate order with provider enabled:
 4. paper run-step
 5. daily report
 
-### Upstox token helper (OAuth exchange)
+### Connect Upstox (OAuth)
 
-Atlas now includes a local helper for Upstox OAuth code exchange.
+Atlas now provides a first-class **Connect Upstox** flow in UI:
 
-Set credentials in `.env` (either naming style works):
+1. Open `Settings` -> `Providers - Upstox`.
+2. Click **Connect** (redirects to Upstox auth page).
+3. After approval, Upstox redirects to:
+   - `http://localhost:3000/providers/upstox/callback`
+4. Atlas exchanges the code and stores token securely.
+
+#### Required `.env` values
+
+Either naming style works:
 
 ```env
 ATLAS_UPSTOX_CLIENT_ID=...
 ATLAS_UPSTOX_CLIENT_SECRET=...
-ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/callback
+ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/providers/upstox/callback
 ```
 
 or:
@@ -435,28 +443,39 @@ or:
 ```env
 ATLAS_UPSTOX_API_KEY=...
 ATLAS_UPSTOX_API_SECRET=...
-ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/callback
+ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/providers/upstox/callback
 ```
 
-CLI flow:
+#### Token storage (secure local default)
 
-```powershell
-python -m app.tools.upstox_auth auth-url
-python -m app.tools.upstox_auth exchange --code <AUTHORIZATION_CODE>
-python -m app.tools.upstox_auth verify
-```
+- Primary storage: encrypted local credential store (`ProviderCredential` table).
+- Encryption key source:
+  - `ATLAS_CRED_KEY`, or
+  - auto-generated `data/secrets/atlas_cred.key` (gitignored).
+- Optional fallback write to `.env`:
+  - controlled by `ATLAS_UPSTOX_PERSIST_ENV_FALLBACK` (default `false`).
 
-API flow:
+#### Token lifecycle
 
-1. `GET /api/providers/upstox/auth-url`
-2. Authorize in browser and copy code from redirect URL.
-3. `POST /api/providers/upstox/token/exchange` with `{ "code": "...", "persist_token": true }`
-4. `GET /api/providers/upstox/token/verify`
+- Upstox access tokens expire; Atlas exposes expiry and verification status.
+- No refresh-token flow is implemented in Atlas currently.
+- Reconnect when expired or nearing expiry.
+- Future enhancement: Upstox Access Token Request API mode (requires notifier URL setup).
 
-Notes:
+#### API endpoints
 
-- Upstox access tokens still require periodic rotation (no refresh-token flow in Atlas yet).
-- `persist_token=true` updates local `.env` files with `ATLAS_UPSTOX_ACCESS_TOKEN`.
+- `GET /api/providers/upstox/auth-url`
+- `POST /api/providers/upstox/token/exchange`
+- `GET /api/providers/upstox/token/status`
+- `GET /api/providers/upstox/token/verify`
+- `POST /api/providers/upstox/disconnect`
+
+#### Safety integration
+
+- Provider updates fail gracefully when token missing/expired:
+  - `provider_token_missing`
+  - `provider_token_expired`
+- Operate pipeline logs warning events and continues inbox/data-quality/report stages.
 
 ## Instrument Map Manager + Provider Repair/Backfill + Optional 4H-ish (v2.8)
 

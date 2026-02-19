@@ -423,6 +423,30 @@ def _ensure_indexes_and_columns() -> None:
                 "ON mappingimportrun (status, created_at)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_providercredential_provider_kind "
+                "ON providercredential (provider_kind)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_providercredential_expires_at "
+                "ON providercredential (expires_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_oauthstate_provider_state "
+                "ON oauthstate (provider_kind, state)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_oauthstate_expires_at "
+                "ON oauthstate (expires_at)"
+            )
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))
         conn.execute(
             text(

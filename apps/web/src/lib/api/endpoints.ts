@@ -24,6 +24,8 @@ import type {
   ApiPolicySwitchEvent,
   ApiMonthlyReport,
   ApiUpstoxMappingStatus,
+  ApiUpstoxAuthUrl,
+  ApiUpstoxTokenStatus,
   ApiResearchCandidate,
   ApiResearchRun,
   ApiPolicyEvaluation,
@@ -131,6 +133,49 @@ export const atlasApi = {
       },
     );
   },
+  upstoxAuthUrl: (params?: { redirect_uri?: string; state?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.redirect_uri) search.set("redirect_uri", params.redirect_uri);
+    if (params?.state) search.set("state", params.state);
+    return apiFetch<ApiUpstoxAuthUrl>(
+      `/api/providers/upstox/auth-url${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  upstoxTokenExchange: (payload: {
+    code: string;
+    state: string;
+    redirect_uri?: string;
+    persist_token?: boolean;
+  }) =>
+    apiFetch<{
+      token_masked?: string | null;
+      connected: boolean;
+      expires_at?: string | null;
+      last_verified_at?: string | null;
+      token_source?: string | null;
+      verification?: Record<string, unknown>;
+      persisted_paths?: string[];
+      note?: string;
+    }>("/api/providers/upstox/token/exchange", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  upstoxTokenStatus: () => apiFetch<ApiUpstoxTokenStatus>("/api/providers/upstox/token/status"),
+  upstoxTokenVerify: () =>
+    apiFetch<{
+      token_configured: boolean;
+      token_masked?: string | null;
+      expires_at?: string | null;
+      is_expired?: boolean;
+      expires_soon?: boolean;
+      last_verified_at?: string | null;
+      verification?: Record<string, unknown>;
+    }>("/api/providers/upstox/token/verify"),
+  upstoxDisconnect: () =>
+    apiFetch<{ disconnected: boolean }>("/api/providers/upstox/disconnect", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   dataCoverage: (bundleId: number, timeframe = "1d", topN = 50) =>
     apiFetch<ApiDataCoverage>(
       `/api/data/coverage?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&top_n=${topN}`,

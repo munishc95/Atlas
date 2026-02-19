@@ -22,6 +22,7 @@ __pycache__/
 data/parquet/
 data/features/
 data/inbox/
+data/secrets/
 apps/api/.atlas/
 
 # IDE

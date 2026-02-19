@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -375,6 +376,16 @@ export default function OpsPage() {
   const latestEnsembleRiskBudget =
     (latestRunSummary.ensemble_risk_budget_by_policy as Record<string, number> | undefined) ?? {};
   const mappingMissingCount = Number(mappingStatusQuery.data?.missing_count ?? 0);
+  const providerEnabled = Boolean(paperStateSettings.data_updates_provider_enabled ?? false);
+  const providerKind = String(paperStateSettings.data_updates_provider_kind ?? "UPSTOX").toUpperCase();
+  const upstoxTokenStatus =
+    (statusQuery.data?.upstox_token_status as Record<string, unknown> | null | undefined) ??
+    (healthQuery.data?.upstox_token_status as Record<string, unknown> | null | undefined) ??
+    null;
+  const upstoxTokenConnected = Boolean(upstoxTokenStatus?.connected);
+  const upstoxTokenExpired = Boolean(upstoxTokenStatus?.is_expired);
+  const showUpstoxReconnectBanner =
+    providerEnabled && providerKind === "UPSTOX" && (!upstoxTokenConnected || upstoxTokenExpired);
   const lastJobDurations = (healthQuery.data?.last_job_durations ??
     statusQuery.data?.last_job_durations ??
     {}) as Record<string, { duration_seconds?: number; status?: string; ts?: string }>;
@@ -465,6 +476,20 @@ export default function OpsPage() {
           <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
             Mapping health warning: {mappingMissingCount} symbol(s) missing Upstox instrument mapping.
           </p>
+        ) : null}
+        {showUpstoxReconnectBanner ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <span>
+              Provider updates are enabled but Upstox token is{" "}
+              {upstoxTokenExpired ? "expired" : "missing"}.
+            </span>
+            <Link
+              href="/settings"
+              className="focus-ring rounded-md border border-warning/40 px-2 py-1 text-warning"
+            >
+              Reconnect Upstox
+            </Link>
+          </div>
         ) : null}
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
