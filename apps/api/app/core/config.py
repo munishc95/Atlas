@@ -147,6 +147,12 @@ class Settings(BaseSettings):
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     upstox_access_token: str | None = None
+    upstox_client_id: str | None = None
+    upstox_client_secret: str | None = None
+    # Backward-friendly aliases for client credentials.
+    upstox_api_key: str | None = None
+    upstox_api_secret: str | None = None
+    upstox_redirect_uri: str | None = None
     upstox_base_url: str = "https://api.upstox.com"
     upstox_timeout_seconds: float = 12.0
     upstox_retry_max: int = 2

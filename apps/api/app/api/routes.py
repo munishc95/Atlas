@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import secrets
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -65,6 +66,7 @@ from app.schemas.api import (
     ReplayRunRequest,
     ResearchRunRequest,
     RuntimeSettingsRequest,
+    UpstoxTokenExchangeRequest,
     UpstoxMappingImportRequest,
     WalkForwardRunRequest,
 )
@@ -80,7 +82,6 @@ from app.services.ensembles import (
     get_policy_ensemble,
     list_policy_ensemble_members,
     list_policy_ensembles,
-    list_policy_ensemble_regime_weights,
     serialize_policy_ensemble,
     set_active_policy_ensemble,
     upsert_policy_ensemble_regime_weights,
@@ -99,6 +100,17 @@ from app.services.provider_mapping import (
     get_upstox_mapping_status,
     import_upstox_mapping_file,
     list_upstox_missing_symbols,
+)
+from app.services.upstox_auth import (
+    build_authorization_url,
+    exchange_authorization_code,
+    extract_access_token,
+    mask_token,
+    persist_access_token,
+    resolve_client_id,
+    resolve_client_secret,
+    resolve_redirect_uri,
+    verify_access_token,
 )
 from app.services.data_quality import (
     get_latest_data_quality_report,
@@ -481,6 +493,96 @@ def provider_updates_history(
         days=days,
     )
     return _data([row.model_dump() for row in rows])
+
+
+@router.get("/providers/upstox/auth-url")
+def upstox_auth_url(
+    redirect_uri: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    client_id = resolve_client_id(settings)
+    resolved_redirect = resolve_redirect_uri(settings=settings, redirect_uri=redirect_uri)
+    resolved_state = str(state).strip() if state else secrets.token_urlsafe(16)
+    auth_url = build_authorization_url(
+        client_id=client_id,
+        redirect_uri=resolved_redirect,
+        state=resolved_state,
+        base_url=settings.upstox_base_url,
+    )
+    return _data(
+        {
+            "auth_url": auth_url,
+            "state": resolved_state,
+            "redirect_uri": resolved_redirect,
+            "client_id_hint": f"{client_id[:6]}...",
+        }
+    )
+
+
+@router.post("/providers/upstox/token/exchange")
+def upstox_token_exchange(
+    payload: UpstoxTokenExchangeRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    client_id = resolve_client_id(settings)
+    client_secret = resolve_client_secret(settings)
+    resolved_redirect = resolve_redirect_uri(
+        settings=settings,
+        redirect_uri=payload.redirect_uri,
+    )
+    raw = exchange_authorization_code(
+        code=payload.code,
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=resolved_redirect,
+        base_url=settings.upstox_base_url,
+        timeout_seconds=settings.upstox_timeout_seconds,
+    )
+    token = extract_access_token(raw)
+    persisted_paths: list[str] = []
+    if payload.persist_token:
+        persisted_paths = persist_access_token(access_token=token)
+        get_settings.cache_clear()
+    verification = verify_access_token(
+        access_token=token,
+        base_url=settings.upstox_base_url,
+        timeout_seconds=settings.upstox_timeout_seconds,
+    )
+    return _data(
+        {
+            "token_masked": mask_token(token),
+            "persisted_paths": persisted_paths,
+            "verification": verification,
+            "note": (
+                "Upstox access token rotation is required when token expires. "
+                "Atlas stores the new token locally when persist_token=true."
+            ),
+        }
+    )
+
+
+@router.get("/providers/upstox/token/verify")
+def upstox_token_verify(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    token = str(settings.upstox_access_token or "").strip()
+    if not token:
+        raise APIError(
+            code="upstox_token_missing",
+            message="Set ATLAS_UPSTOX_ACCESS_TOKEN before verification.",
+            status_code=400,
+        )
+    verification = verify_access_token(
+        access_token=token,
+        base_url=settings.upstox_base_url,
+        timeout_seconds=settings.upstox_timeout_seconds,
+    )
+    return _data(
+        {
+            "token_configured": True,
+            "token_masked": mask_token(token),
+            "verification": verification,
+        }
+    )
 
 
 @router.post("/providers/upstox/mapping/import")

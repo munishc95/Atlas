@@ -178,6 +178,13 @@ class UpstoxProvider(BaseProvider):
         url = f"{base}{path}"
         headers = {
             "Accept": "application/json",
+            # Cloudflare may block the default urllib signature; use a browser-like UA.
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
         }
         token = str(self.settings.upstox_access_token or "").strip()
         if token:

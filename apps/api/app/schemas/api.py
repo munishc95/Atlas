@@ -138,6 +138,12 @@ class UpstoxMappingImportRequest(BaseModel):
     mode: str = "UPSERT"
 
 
+class UpstoxTokenExchangeRequest(BaseModel):
+    code: str
+    redirect_uri: str | None = None
+    persist_token: bool = True
+
+
 class OperateRunRequest(BaseModel):
     bundle_id: int | None = None
     timeframe: str | None = None

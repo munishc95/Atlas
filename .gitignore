@@ -12,6 +12,9 @@ __pycache__/
 .mypy_cache/
 .coverage
 .venv/
+.env
+.env.*
+!.env.example
 
 # Data and local state
 *.duckdb

@@ -418,6 +418,46 @@ Scheduler/operate order with provider enabled:
 4. paper run-step
 5. daily report
 
+### Upstox token helper (OAuth exchange)
+
+Atlas now includes a local helper for Upstox OAuth code exchange.
+
+Set credentials in `.env` (either naming style works):
+
+```env
+ATLAS_UPSTOX_CLIENT_ID=...
+ATLAS_UPSTOX_CLIENT_SECRET=...
+ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/callback
+```
+
+or:
+
+```env
+ATLAS_UPSTOX_API_KEY=...
+ATLAS_UPSTOX_API_SECRET=...
+ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/callback
+```
+
+CLI flow:
+
+```powershell
+python -m app.tools.upstox_auth auth-url
+python -m app.tools.upstox_auth exchange --code <AUTHORIZATION_CODE>
+python -m app.tools.upstox_auth verify
+```
+
+API flow:
+
+1. `GET /api/providers/upstox/auth-url`
+2. Authorize in browser and copy code from redirect URL.
+3. `POST /api/providers/upstox/token/exchange` with `{ "code": "...", "persist_token": true }`
+4. `GET /api/providers/upstox/token/verify`
+
+Notes:
+
+- Upstox access tokens still require periodic rotation (no refresh-token flow in Atlas yet).
+- `persist_token=true` updates local `.env` files with `ATLAS_UPSTOX_ACCESS_TOKEN`.
+
 ## Instrument Map Manager + Provider Repair/Backfill + Optional 4H-ish (v2.8)
 
 Atlas now adds local-first mapping management and self-healing provider updates:
