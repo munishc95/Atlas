@@ -332,6 +332,13 @@ export type ApiOperateStatus = {
   latest_data_update?: ApiDataUpdateRun | null;
   latest_provider_update?: ApiProviderUpdateRun | null;
   upstox_token_status?: ApiUpstoxTokenStatus | null;
+  upstox_token_request_latest?: ApiUpstoxTokenRequestRun | null;
+  upstox_auto_renew_enabled?: boolean;
+  upstox_auto_renew_time_ist?: string;
+  upstox_auto_renew_if_expires_within_hours?: number;
+  operate_last_upstox_auto_renew_date?: string | null;
+  next_upstox_auto_renew_ist?: string | null;
+  upstox_token_expires_within_hours?: number | null;
   recent_event_counts_24h?: Record<string, number>;
   fast_mode_enabled?: boolean;
   last_job_durations?: Record<
@@ -433,6 +440,31 @@ export type ApiUpstoxTokenStatus = {
   expires_soon: boolean;
   last_verified_at?: string | null;
   user_id?: string | null;
+  auto_renew?: {
+    enabled: boolean;
+    time_ist?: string;
+    if_expires_within_hours?: number;
+    only_when_provider_enabled?: boolean;
+    last_run_date?: string | null;
+    next_scheduled_run_ist?: string | null;
+    expires_within_hours?: number | null;
+  } | null;
+};
+
+export type ApiUpstoxTokenRequestRun = {
+  id: string;
+  provider_kind: string;
+  status: "REQUESTED" | "APPROVED" | "REJECTED" | "EXPIRED" | "FAILED";
+  requested_at?: string | null;
+  authorization_expiry?: string | null;
+  approved_at?: string | null;
+  notifier_url?: string | null;
+  client_id?: string | null;
+  user_id?: string | null;
+  correlation_nonce?: string | null;
+  last_error?: Record<string, unknown> | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type ApiMappingImportRun = {
@@ -528,6 +560,13 @@ export type ApiOperateHealth = {
   latest_data_update?: ApiDataUpdateRun | null;
   latest_provider_update?: ApiProviderUpdateRun | null;
   upstox_token_status?: ApiUpstoxTokenStatus | null;
+  upstox_token_request_latest?: ApiUpstoxTokenRequestRun | null;
+  upstox_auto_renew_enabled?: boolean;
+  upstox_auto_renew_time_ist?: string;
+  upstox_auto_renew_if_expires_within_hours?: number;
+  operate_last_upstox_auto_renew_date?: string | null;
+  next_upstox_auto_renew_ist?: string | null;
+  upstox_token_expires_within_hours?: number | null;
   latest_paper_run_id?: number | null;
   current_regime?: string | null;
   no_trade?: Record<string, unknown>;

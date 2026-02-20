@@ -33,6 +33,22 @@ export default function SettingsPage() {
     queryFn: async () => (await atlasApi.upstoxTokenStatus()).data,
     refetchInterval: 15_000,
   });
+  const upstoxTokenRequestLatestQuery = useQuery({
+    queryKey: qk.upstoxTokenRequestLatest,
+    queryFn: async () => {
+      try {
+        return (await atlasApi.upstoxTokenRequestLatest()).data;
+      } catch {
+        return null;
+      }
+    },
+    refetchInterval: 15_000,
+  });
+  const upstoxTokenRequestHistoryQuery = useQuery({
+    queryKey: qk.upstoxTokenRequestHistory(1, 10),
+    queryFn: async () => (await atlasApi.upstoxTokenRequestHistory(1, 10)).data,
+    refetchInterval: 15_000,
+  });
 
   const [form, setForm] = useState<Record<string, string>>({});
   const [regimeWeightsText, setRegimeWeightsText] = useState("{}");
@@ -145,6 +161,13 @@ export default function SettingsPage() {
         data_updates_provider_allow_partial_4h_ish:
           form.data_updates_provider_allow_partial_4h_ish === "true",
         upstox_persist_env_fallback: form.upstox_persist_env_fallback === "true",
+        upstox_auto_renew_enabled: form.upstox_auto_renew_enabled === "true",
+        upstox_auto_renew_time_ist: form.upstox_auto_renew_time_ist,
+        upstox_auto_renew_if_expires_within_hours: Number(
+          form.upstox_auto_renew_if_expires_within_hours,
+        ),
+        upstox_auto_renew_only_when_provider_enabled:
+          form.upstox_auto_renew_only_when_provider_enabled === "true",
         coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
         coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
         coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
@@ -248,6 +271,50 @@ export default function SettingsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not disconnect Upstox");
+    },
+  });
+  const requestUpstoxTokenMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.upstoxTokenRequest({
+          source: "settings_manual",
+        })
+      ).data,
+    onSuccess: (payload) => {
+      const dedupeTag = payload.deduplicated ? " (reused pending request)" : "";
+      toast.success(`Upstox token request submitted${dedupeTag}`);
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestLatest });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestHistory(1, 10) });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not request Upstox token");
+    },
+  });
+  const saveUpstoxAutoRenewMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.updateSettings({
+          upstox_auto_renew_enabled: form.upstox_auto_renew_enabled === "true",
+          upstox_auto_renew_time_ist: String(form.upstox_auto_renew_time_ist || "06:30"),
+          upstox_auto_renew_if_expires_within_hours: Number(
+            form.upstox_auto_renew_if_expires_within_hours || 12,
+          ),
+          upstox_auto_renew_only_when_provider_enabled:
+            form.upstox_auto_renew_only_when_provider_enabled === "true",
+        })
+      ).data,
+    onSuccess: () => {
+      toast.success("Upstox auto-renew settings saved");
+      queryClient.invalidateQueries({ queryKey: qk.settings });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not save Upstox auto-renew settings");
     },
   });
 
@@ -358,6 +425,16 @@ export default function SettingsPage() {
         key: "upstox_persist_env_fallback",
         label: "Upstox fallback: persist token to .env (true/false)",
       },
+      { key: "upstox_auto_renew_enabled", label: "Upstox auto-renew enabled (true/false)" },
+      { key: "upstox_auto_renew_time_ist", label: "Upstox auto-renew time IST (HH:mm)" },
+      {
+        key: "upstox_auto_renew_if_expires_within_hours",
+        label: "Upstox auto-renew if expires within hours",
+      },
+      {
+        key: "upstox_auto_renew_only_when_provider_enabled",
+        label: "Upstox auto-renew only when provider updates enabled (true/false)",
+      },
       { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
       { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },
       {
@@ -410,6 +487,8 @@ export default function SettingsPage() {
     const minutes = totalMinutes % 60;
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   }, [upstoxStatusQuery.data?.expires_at]);
+  const requestHistory = upstoxTokenRequestHistoryQuery.data ?? [];
+  const latestRequestRun = upstoxTokenRequestLatestQuery.data ?? null;
 
   return (
     <div className="space-y-5">
@@ -535,6 +614,12 @@ export default function SettingsPage() {
               <p className="rounded-xl border border-border px-3 py-2 text-sm">
                 Last verified: {upstoxStatusQuery.data?.last_verified_at ?? "-"}
               </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Last request status: {latestRequestRun?.status ?? "-"}
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Request auth window: {latestRequestRun?.authorization_expiry ?? "-"}
+              </p>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
@@ -561,6 +646,144 @@ export default function SettingsPage() {
               >
                 {disconnectUpstoxMutation.isPending ? "Disconnecting..." : "Disconnect"}
               </button>
+            </div>
+            <div className="mt-4 rounded-xl border border-border p-3">
+              <h4 className="text-sm font-semibold">Auto-Renew</h4>
+              <p className="mt-1 text-xs text-muted">
+                Atlas can request a new Upstox token approval before expiry. Approval still happens in Upstox.
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="text-sm text-muted">
+                  Enable auto-renew (true/false)
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.upstox_auto_renew_enabled ?? "false"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        upstox_auto_renew_enabled: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm text-muted">
+                  Auto-renew time IST (HH:mm)
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.upstox_auto_renew_time_ist ?? "06:30"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        upstox_auto_renew_time_ist: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm text-muted">
+                  Request when expiring within hours
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.upstox_auto_renew_if_expires_within_hours ?? "12"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        upstox_auto_renew_if_expires_within_hours: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm text-muted">
+                  Only when provider updates enabled (true/false)
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.upstox_auto_renew_only_when_provider_enabled ?? "true"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        upstox_auto_renew_only_when_provider_enabled: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => saveUpstoxAutoRenewMutation.mutate()}
+                  disabled={saveUpstoxAutoRenewMutation.isPending}
+                  className="focus-ring rounded-xl border border-border px-4 py-2 text-sm text-muted"
+                >
+                  {saveUpstoxAutoRenewMutation.isPending ? "Saving..." : "Save Auto-Renew"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestUpstoxTokenMutation.mutate()}
+                  disabled={requestUpstoxTokenMutation.isPending}
+                  className="focus-ring rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white"
+                >
+                  {requestUpstoxTokenMutation.isPending ? "Requesting..." : "Request token now"}
+                </button>
+              </div>
+              <details className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+                <summary className="cursor-pointer font-medium text-foreground">How it works</summary>
+                <p className="mt-2">1. Atlas requests approval from Upstox.</p>
+                <p className="mt-1">2. You approve the request in Upstox.</p>
+                <p className="mt-1">3. Atlas receives the token via notifier webhook.</p>
+              </details>
+              <div className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+                <p>Latest notifier endpoint:</p>
+                <p className="mt-1 break-all">
+                  {latestRequestRun?.notifier_url ??
+                    "Run \"Request token now\" to generate a nonce-specific notifier URL."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl border border-border p-3">
+              <h4 className="text-sm font-semibold">Token Request History</h4>
+              {upstoxTokenRequestHistoryQuery.isLoading ? (
+                <div className="mt-2">
+                  <LoadingState label="Loading token request history" />
+                </div>
+              ) : upstoxTokenRequestHistoryQuery.isError ? (
+                <div className="mt-2">
+                  <ErrorState
+                    title="Could not load token request history"
+                    action="Retry to refresh request runs."
+                    onRetry={() => void upstoxTokenRequestHistoryQuery.refetch()}
+                  />
+                </div>
+              ) : requestHistory.length === 0 ? (
+                <div className="mt-2">
+                  <EmptyState
+                    title="No token requests yet"
+                    action='Click "Request token now" to start approval.'
+                  />
+                </div>
+              ) : (
+                <div className="mt-2 overflow-hidden rounded-xl border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-surface text-left text-muted">
+                      <tr>
+                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2">Requested</th>
+                        <th className="px-3 py-2">Auth expiry</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {requestHistory.map((run) => (
+                        <tr key={run.id} className="border-t border-border">
+                          <td className="px-3 py-2">{run.status}</td>
+                          <td className="px-3 py-2">{run.requested_at ?? "-"}</td>
+                          <td className="px-3 py-2">{run.authorization_expiry ?? "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-muted">
+                Pending approval: approve in Upstox app and keep your notifier tunnel running.
+              </p>
             </div>
           </>
         )}

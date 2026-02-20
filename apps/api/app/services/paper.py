@@ -185,6 +185,11 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
             "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
             "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,
+            "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,
+            "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
+            "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
+            "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+            "operate_last_upstox_auto_renew_date": None,
             "risk_overlay_enabled": (
                 True if str(settings.operate_mode).strip().lower() == "live" else False
             ),
@@ -1492,7 +1497,9 @@ def _run_paper_step_with_simulator_engine(
             )
         ),
     }
-    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    ensemble_payload = (
+        policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    )
     if ensemble_payload:
         actual_counts: dict[str, int] = {}
         for signal in executed_signals:
@@ -2005,7 +2012,9 @@ def _run_paper_step_shadow_only(
             )
         ),
     }
-    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    ensemble_payload = (
+        policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    )
 
     run_summary = {
         "execution_mode": "SHADOW",
@@ -2639,7 +2648,9 @@ def run_paper_step(
             )
         else:
             if active_ensemble is not None and ensemble_members:
-                enabled_members = [row for row in ensemble_members if bool(row.get("enabled", True))]
+                enabled_members = [
+                    row for row in ensemble_members if bool(row.get("enabled", True))
+                ]
                 sorted_members = sorted(
                     enabled_members,
                     key=lambda row: int(row.get("policy_id") or 0),
@@ -2691,7 +2702,9 @@ def run_paper_step(
                     source_policy_id = int(member.get("policy_id") or 0)
                     if source_policy_id <= 0:
                         continue
-                    source_policy_name = str(member.get("policy_name") or f"Policy {source_policy_id}")
+                    source_policy_name = str(
+                        member.get("policy_name") or f"Policy {source_policy_id}"
+                    )
                     member_weight = float(member.get("weight") or 0.0)
                     if member_weight <= 0:
                         pre_skipped_signals.append(
@@ -2751,10 +2764,17 @@ def run_paper_step(
                         row["source_policy_name"] = source_policy_name
                         row["ensemble_id"] = int(active_ensemble.id or 0)
                         row["ensemble_name"] = active_ensemble.name
-                        row["ensemble_member_weight"] = float(normalized_weights.get(source_policy_id, 0.0))
+                        row["ensemble_member_weight"] = float(
+                            normalized_weights.get(source_policy_id, 0.0)
+                        )
                         row["member_required_risk"] = max(
                             0.0,
-                            float(member_policy.get("risk_per_trade", policy.get("risk_per_trade", base_risk_per_trade))),
+                            float(
+                                member_policy.get(
+                                    "risk_per_trade",
+                                    policy.get("risk_per_trade", base_risk_per_trade),
+                                )
+                            ),
                         )
                         aggregated_signals.append(row)
                 aggregated_signals.sort(
@@ -2775,9 +2795,13 @@ def run_paper_step(
                     evaluated_candidates=evaluated_candidates_total,
                     total_symbols=total_symbols_max,
                 )
-                risk_budget_total = max(0.0, float(policy.get("risk_per_trade", base_risk_per_trade)))
+                risk_budget_total = max(
+                    0.0, float(policy.get("risk_per_trade", base_risk_per_trade))
+                )
                 risk_budget_by_policy = {
-                    str(policy_id): float(risk_budget_total * normalized_weights.get(policy_id, 0.0))
+                    str(policy_id): float(
+                        risk_budget_total * normalized_weights.get(policy_id, 0.0)
+                    )
                     for policy_id in sorted(normalized_weights)
                 }
                 ensemble_meta = {
@@ -3007,11 +3031,19 @@ def run_paper_step(
         source_policy_id = int(signal.get("source_policy_id") or 0)
         source_policy_name = str(
             signal.get("source_policy_name")
-            or (f"Policy {source_policy_id}" if source_policy_id > 0 else policy.get("policy_name", ""))
+            or (
+                f"Policy {source_policy_id}"
+                if source_policy_id > 0
+                else policy.get("policy_name", "")
+            )
         )
         member_required_risk = max(
             0.0,
-            float(signal.get("member_required_risk", policy.get("risk_per_trade", base_risk_per_trade))),
+            float(
+                signal.get(
+                    "member_required_risk", policy.get("risk_per_trade", base_risk_per_trade)
+                )
+            ),
         )
         requested_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
         underlying_symbol = str(signal.get("underlying_symbol", symbol)).upper()
@@ -3208,7 +3240,11 @@ def run_paper_step(
             continue
 
         selected_signals.append(signal)
-        if ensemble_meta is not None and source_policy_id > 0 and source_policy_id in member_budget_remaining:
+        if (
+            ensemble_meta is not None
+            and source_policy_id > 0
+            and source_policy_id in member_budget_remaining
+        ):
             member_budget_remaining[source_policy_id] = max(
                 0.0,
                 float(member_budget_remaining[source_policy_id]) - member_required_risk,
@@ -3688,7 +3724,9 @@ def run_paper_step(
             )
         ),
     }
-    ensemble_payload = policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    ensemble_payload = (
+        policy.get("ensemble", {}) if isinstance(policy.get("ensemble"), dict) else {}
+    )
 
     run_summary = {
         "execution_mode": "LIVE",
@@ -4193,7 +4231,9 @@ def preview_policy_signals(
                 row = dict(signal)
                 row["source_policy_id"] = source_policy_id
                 row["source_policy_name"] = str(
-                    member.get("policy_name") or member_policy.get("policy_name") or f"Policy {source_policy_id}"
+                    member.get("policy_name")
+                    or member_policy.get("policy_name")
+                    or f"Policy {source_policy_id}"
                 )
                 row["ensemble_id"] = int(active_ensemble.id or 0)
                 row["ensemble_name"] = active_ensemble.name

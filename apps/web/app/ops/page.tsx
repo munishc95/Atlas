@@ -384,6 +384,17 @@ export default function OpsPage() {
     null;
   const upstoxTokenConnected = Boolean(upstoxTokenStatus?.connected);
   const upstoxTokenExpired = Boolean(upstoxTokenStatus?.is_expired);
+  const upstoxLastVerified = String(upstoxTokenStatus?.last_verified_at ?? "-");
+  const upstoxTokenRequestLatest =
+    (statusQuery.data?.upstox_token_request_latest as Record<string, unknown> | null | undefined) ??
+    (healthQuery.data?.upstox_token_request_latest as Record<string, unknown> | null | undefined) ??
+    null;
+  const upstoxAutoRenewEnabled = Boolean(
+    statusQuery.data?.upstox_auto_renew_enabled ?? healthQuery.data?.upstox_auto_renew_enabled ?? false,
+  );
+  const upstoxNextAutoRenew = String(
+    statusQuery.data?.next_upstox_auto_renew_ist ?? healthQuery.data?.next_upstox_auto_renew_ist ?? "-",
+  );
   const showUpstoxReconnectBanner =
     providerEnabled && providerKind === "UPSTOX" && (!upstoxTokenConnected || upstoxTokenExpired);
   const lastJobDurations = (healthQuery.data?.last_job_durations ??
@@ -500,6 +511,25 @@ export default function OpsPage() {
             Next scheduled run: {nextScheduledRun}
           </p>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Upstox auto-renew: {upstoxAutoRenewEnabled ? "Enabled" : "Disabled"}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Next renew check: {upstoxNextAutoRenew}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Last verified token: {upstoxLastVerified}
+          </p>
+        </div>
+        <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+          Last token request:{" "}
+          {upstoxTokenRequestLatest
+            ? `${String(upstoxTokenRequestLatest.status ?? "-")} @ ${String(
+                upstoxTokenRequestLatest.requested_at ?? "-",
+              )}`
+            : "-"}
+        </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Auto-eval: {autoEvalEnabled ? "Enabled" : "Disabled"} ({autoEvalFrequency} @ {autoEvalTimeIst} IST)

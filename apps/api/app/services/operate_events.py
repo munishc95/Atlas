@@ -14,6 +14,7 @@ from app.db.models import (
     PaperRun,
     PaperState,
     ProviderUpdateRun,
+    UpstoxTokenRequestRun,
 )
 from app.services.trading_calendar import (
     compute_next_scheduled_run_ist,
@@ -28,6 +29,34 @@ from app.services.upstox_auth import token_status as upstox_token_status
 ALLOWED_SEVERITIES = {"INFO", "WARN", "ERROR"}
 ALLOWED_CATEGORIES = {"DATA", "EXECUTION", "POLICY", "SYSTEM"}
 IST_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _serialize_token_request(row: UpstoxTokenRequestRun) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "provider_kind": row.provider_kind,
+        "status": row.status,
+        "requested_at": row.requested_at.isoformat() if row.requested_at is not None else None,
+        "authorization_expiry": (
+            row.authorization_expiry.isoformat() if row.authorization_expiry is not None else None
+        ),
+        "approved_at": row.approved_at.isoformat() if row.approved_at is not None else None,
+        "notifier_url": row.notifier_url,
+        "client_id": row.client_id,
+        "user_id": row.user_id,
+        "correlation_nonce": row.correlation_nonce,
+        "last_error": row.last_error,
+        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at is not None else None,
+    }
+
+
+def _latest_token_request_run(session: Session) -> UpstoxTokenRequestRun | None:
+    return session.exec(
+        select(UpstoxTokenRequestRun)
+        .where(UpstoxTokenRequestRun.provider_kind == "UPSTOX")
+        .order_by(UpstoxTokenRequestRun.requested_at.desc(), UpstoxTokenRequestRun.id.desc())
+    ).first()
 
 
 def _weekly_eval_day_for_week(
@@ -296,6 +325,47 @@ def get_operate_health_summary(
         segment=calendar_segment,
         settings=settings,
     )
+    upstox_auto_renew_enabled = bool(
+        state_settings.get("upstox_auto_renew_enabled", settings.upstox_auto_renew_enabled)
+    )
+    upstox_auto_renew_time_ist = str(
+        state_settings.get("upstox_auto_renew_time_ist", settings.upstox_auto_renew_time_ist)
+    )
+    upstox_auto_renew_threshold = max(
+        1,
+        int(
+            state_settings.get(
+                "upstox_auto_renew_if_expires_within_hours",
+                settings.upstox_auto_renew_if_expires_within_hours,
+            )
+        ),
+    )
+    last_upstox_auto_renew_date = state_settings.get("operate_last_upstox_auto_renew_date")
+    next_upstox_auto_renew_ist = compute_next_scheduled_run_ist(
+        auto_run_enabled=upstox_auto_renew_enabled,
+        auto_run_time_ist=upstox_auto_renew_time_ist,
+        last_run_date=(
+            str(last_upstox_auto_renew_date)
+            if isinstance(last_upstox_auto_renew_date, str)
+            else None
+        ),
+        segment=calendar_segment,
+        settings=settings,
+    )
+    expires_within_hours: float | None = None
+    try:
+        expires_at = str(provider_token.get("expires_at") or "").strip()
+        if expires_at:
+            expiry_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry_dt.tzinfo is None:
+                expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+            expires_within_hours = round(
+                (expiry_dt - datetime.now(timezone.utc)).total_seconds() / 3600.0,
+                3,
+            )
+    except ValueError:
+        expires_within_hours = None
+    latest_token_request = _latest_token_request_run(session)
     today_ist = datetime.now(IST_ZONE).date()
     today_is_trading_day = is_trading_day(today_ist, segment=calendar_segment, settings=settings)
     today_session = calendar_get_session(today_ist, segment=calendar_segment, settings=settings)
@@ -377,6 +447,17 @@ def get_operate_health_summary(
             latest_provider_update.model_dump() if latest_provider_update is not None else None
         ),
         "upstox_token_status": provider_token,
+        "upstox_token_request_latest": (
+            _serialize_token_request(latest_token_request)
+            if latest_token_request is not None
+            else None
+        ),
+        "upstox_auto_renew_enabled": upstox_auto_renew_enabled,
+        "upstox_auto_renew_time_ist": upstox_auto_renew_time_ist,
+        "upstox_auto_renew_if_expires_within_hours": upstox_auto_renew_threshold,
+        "operate_last_upstox_auto_renew_date": last_upstox_auto_renew_date,
+        "next_upstox_auto_renew_ist": next_upstox_auto_renew_ist,
+        "upstox_token_expires_within_hours": expires_within_hours,
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,

@@ -63,6 +63,9 @@ export const qk = {
   upstoxMappingMissing: (bundleId?: number | null, timeframe?: string | null, limit = 50) =>
     ["upstoxMappingMissing", bundleId ?? "all", timeframe ?? "all", limit] as const,
   upstoxTokenStatus: ["upstoxTokenStatus"] as const,
+  upstoxTokenRequestLatest: ["upstoxTokenRequestLatest"] as const,
+  upstoxTokenRequestHistory: (page = 1, pageSize = 10) =>
+    ["upstoxTokenRequestHistory", page, pageSize] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>

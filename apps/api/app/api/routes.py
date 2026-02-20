@@ -7,7 +7,7 @@ import secrets
 from datetime import date, datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from redis.exceptions import RedisError
 from rq import Retry
@@ -67,6 +67,7 @@ from app.schemas.api import (
     ResearchRunRequest,
     RuntimeSettingsRequest,
     UpstoxTokenExchangeRequest,
+    UpstoxTokenRequestCreateRequest,
     UpstoxMappingImportRequest,
     WalkForwardRunRequest,
 )
@@ -122,13 +123,26 @@ from app.services.upstox_auth import (
     validate_oauth_state,
     verify_access_token,
 )
+from app.services.upstox_token_request import (
+    auto_renew_meta,
+    latest_request_run,
+    list_request_runs,
+    process_notifier_payload,
+    recommended_notifier_endpoint,
+    request_token_run,
+    serialize_request_run,
+)
 from app.services.data_quality import (
     get_latest_data_quality_report,
     list_data_quality_history,
 )
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
-from app.services.operate_events import emit_operate_event, get_operate_health_summary, list_operate_events
+from app.services.operate_events import (
+    emit_operate_event,
+    get_operate_health_summary,
+    list_operate_events,
+)
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.paper import (
     activate_policy_mode,
@@ -559,9 +573,10 @@ def upstox_token_exchange(
         redirect_uri=resolved_redirect,
     )
 
-    is_fast_stub = settings.fast_mode_enabled and str(payload.code).strip() == str(
-        settings.upstox_e2e_fake_code
-    ).strip()
+    is_fast_stub = (
+        settings.fast_mode_enabled
+        and str(payload.code).strip() == str(settings.upstox_e2e_fake_code).strip()
+    )
     if is_fast_stub:
         fake_token = build_fake_access_token()
         raw = {
@@ -626,12 +641,114 @@ def upstox_token_status(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    return _data(
-        token_status(
-            session,
+    state = get_or_create_paper_state(session, settings)
+    state_settings = dict(state.settings_json or {})
+    status_payload = token_status(
+        session,
+        settings=settings,
+        allow_env_fallback=True,
+    )
+    status_payload["auto_renew"] = auto_renew_meta(
+        settings=settings,
+        state_settings=state_settings,
+        expires_at=(status_payload.get("expires_at") if isinstance(status_payload, dict) else None),
+    )
+    return _data(status_payload)
+
+
+@router.post("/providers/upstox/token/request")
+def upstox_token_request(
+    payload: UpstoxTokenRequestCreateRequest | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    run, deduped = request_token_run(
+        session,
+        settings=settings,
+        correlation_id=None,
+        source=str((payload.source if payload is not None else None) or "manual"),
+    )
+    guidance = {
+        "notifier_url_in_myapps": (
+            "Set your notifier webhook in Upstox My Apps to the recommended notifier endpoint."
+        ),
+        "recommended_notifier_endpoint": recommended_notifier_endpoint(
             settings=settings,
-            allow_env_fallback=True,
-        )
+            nonce=str(run.correlation_nonce or ""),
+        ),
+    }
+    return _data(
+        {
+            "run": serialize_request_run(run),
+            "deduplicated": bool(deduped),
+            "guidance": guidance,
+        }
+    )
+
+
+@router.post("/providers/upstox/notifier")
+async def upstox_notifier(
+    request: Request,
+    nonce: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload: dict[str, Any] | None = None
+    try:
+        raw = await request.body()
+        if raw:
+            parsed = json.loads(raw.decode("utf-8", errors="replace"))
+            payload = parsed if isinstance(parsed, dict) else None
+    except Exception:  # noqa: BLE001
+        payload = None
+    result = process_notifier_payload(
+        session,
+        settings=settings,
+        payload=(payload if isinstance(payload, dict) else {}),
+        nonce=nonce,
+        correlation_id=None,
+        source="webhook",
+    )
+    return _data(
+        {
+            "acknowledged": True,
+            "matched": bool(result.get("matched")),
+            "accepted": bool(result.get("accepted")),
+            "reason": result.get("reason"),
+            "run_id": result.get("run_id"),
+        }
+    )
+
+
+@router.get("/providers/upstox/token/requests/latest")
+def upstox_token_request_latest(
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = latest_request_run(session)
+    if row is None:
+        raise APIError(code="not_found", message="No Upstox token requests found", status_code=404)
+    return _data(serialize_request_run(row))
+
+
+@router.get("/providers/upstox/token/requests/history")
+def upstox_token_request_history(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows, total = list_request_runs(
+        session,
+        page=page,
+        page_size=page_size,
+    )
+    return _data(
+        [serialize_request_run(row) for row in rows],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_next": page * page_size < total,
+        },
     )
 
 
@@ -1664,7 +1781,9 @@ def operate_status(
             "active_policy_id": policy.id if policy is not None else None,
             "active_policy_name": policy.name if policy is not None else None,
             "active_ensemble_id": (
-                int(active_ensemble.id) if active_ensemble is not None and active_ensemble.id is not None else None
+                int(active_ensemble.id)
+                if active_ensemble is not None and active_ensemble.id is not None
+                else None
             ),
             "active_ensemble_name": active_ensemble.name if active_ensemble is not None else None,
             "active_ensemble": active_ensemble_payload,
@@ -1681,6 +1800,19 @@ def operate_status(
             "latest_data_update": health_summary.get("latest_data_update"),
             "latest_provider_update": health_summary.get("latest_provider_update"),
             "upstox_token_status": health_summary.get("upstox_token_status"),
+            "upstox_token_request_latest": health_summary.get("upstox_token_request_latest"),
+            "upstox_auto_renew_enabled": health_summary.get("upstox_auto_renew_enabled"),
+            "upstox_auto_renew_time_ist": health_summary.get("upstox_auto_renew_time_ist"),
+            "upstox_auto_renew_if_expires_within_hours": health_summary.get(
+                "upstox_auto_renew_if_expires_within_hours"
+            ),
+            "operate_last_upstox_auto_renew_date": health_summary.get(
+                "operate_last_upstox_auto_renew_date"
+            ),
+            "next_upstox_auto_renew_ist": health_summary.get("next_upstox_auto_renew_ist"),
+            "upstox_token_expires_within_hours": health_summary.get(
+                "upstox_token_expires_within_hours"
+            ),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "fast_mode_enabled": health_summary.get("fast_mode_enabled"),
             "last_job_durations": health_summary.get("last_job_durations"),
@@ -2147,6 +2279,11 @@ def get_settings_payload(
         "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
         "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
         "upstox_persist_env_fallback": settings.upstox_persist_env_fallback,
+        "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,
+        "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
+        "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
+        "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+        "operate_last_upstox_auto_renew_date": None,
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
         "coverage_inactive_after_missing_days": settings.coverage_inactive_after_missing_days,

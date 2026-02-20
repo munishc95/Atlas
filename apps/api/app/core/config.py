@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     upstox_expires_soon_seconds: int = 21_600
     upstox_persist_env_fallback: bool = False
     upstox_e2e_fake_code: str = "ATLAS_E2E_FAKE_CODE"
+    upstox_auto_renew_enabled: bool = False
+    upstox_auto_renew_time_ist: str = "06:30"
+    upstox_auto_renew_if_expires_within_hours: int = 12
+    upstox_auto_renew_only_when_provider_enabled: bool = True
+    upstox_notifier_base_url: str = "http://127.0.0.1:8000"
     cred_key: str | None = None
     cred_key_path: str = "data/secrets/atlas_cred.key"
     optuna_storage_url: str | None = None

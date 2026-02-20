@@ -330,12 +330,16 @@ def token_timestamps_from_payload(
     return (issued_at or issued_from_jwt), (expires_at or expires_from_jwt)
 
 
-def build_fake_access_token(*, issued_at: datetime | None = None, expires_in_seconds: int = 43_200) -> str:
+def build_fake_access_token(
+    *, issued_at: datetime | None = None, expires_in_seconds: int = 43_200
+) -> str:
     now = _to_utc_datetime(issued_at) or _utc_now()
     exp_ts = int((now + timedelta(seconds=max(300, int(expires_in_seconds)))).timestamp())
     payload = {"sub": "ATLAS_E2E", "iat": int(now.timestamp()), "exp": exp_ts}
     header = {"typ": "JWT", "alg": "HS256"}
-    header_b64 = base64.urlsafe_b64encode(json.dumps(header).encode("utf-8")).decode("utf-8").rstrip("=")
+    header_b64 = (
+        base64.urlsafe_b64encode(json.dumps(header).encode("utf-8")).decode("utf-8").rstrip("=")
+    )
     payload_b64 = (
         base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
     )
@@ -452,8 +456,12 @@ def get_provider_access_token(
 ) -> str | None:
     row = get_provider_credential(session, provider_kind=provider_kind)
     if row is not None:
-        token = decrypt_token(settings=settings, ciphertext=row.access_token_encrypted)
-        return str(token).strip() or None
+        try:
+            token = decrypt_token(settings=settings, ciphertext=row.access_token_encrypted)
+            return str(token).strip() or None
+        except APIError:
+            if not allow_env_fallback:
+                return None
     if allow_env_fallback:
         fallback = str(settings.upstox_access_token or "").strip()
         if fallback:
@@ -479,7 +487,11 @@ def token_status(
     user_id: str | None = None
     if row is not None:
         source = "encrypted_store"
-        token = decrypt_token(settings=settings, ciphertext=row.access_token_encrypted)
+        try:
+            token = decrypt_token(settings=settings, ciphertext=row.access_token_encrypted)
+        except APIError:
+            token = None
+            source = "encrypted_store_error"
         issued_at = _to_utc_datetime(row.issued_at)
         expires_at = _to_utc_datetime(row.expires_at)
         last_verified_at = _to_utc_datetime(row.last_verified_at)

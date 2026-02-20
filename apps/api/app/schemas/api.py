@@ -145,6 +145,10 @@ class UpstoxTokenExchangeRequest(BaseModel):
     persist_token: bool = False
 
 
+class UpstoxTokenRequestCreateRequest(BaseModel):
+    source: str | None = None
+
+
 class OperateRunRequest(BaseModel):
     bundle_id: int | None = None
     timeframe: str | None = None
@@ -295,6 +299,11 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_backfill_max_days: int | None = None
     data_updates_provider_allow_partial_4h_ish: bool | None = None
     upstox_persist_env_fallback: bool | None = None
+    upstox_auto_renew_enabled: bool | None = None
+    upstox_auto_renew_time_ist: str | None = None
+    upstox_auto_renew_if_expires_within_hours: int | None = None
+    upstox_auto_renew_only_when_provider_enabled: bool | None = None
+    operate_last_upstox_auto_renew_date: str | None = None
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None

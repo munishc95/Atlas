@@ -27,6 +27,7 @@ from app.services.paper import run_paper_step
 from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
+from app.services.upstox_token_request import request_token_run, serialize_request_run
 from app.services.walkforward import execute_walkforward
 from app.db.models import DatasetBundle, PaperRun, PaperState, ProviderUpdateItem
 
@@ -430,6 +431,63 @@ def run_provider_updates_job(
                 session,
                 job_id=job_id,
                 job_kind="provider_updates",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
+            )
+
+
+def run_upstox_token_request_job(
+    job_id: str,
+    payload: dict[str, Any] | None = None,
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    started = time.perf_counter()
+    safe_payload = payload if isinstance(payload, dict) else {}
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Upstox token request started")
+            run, deduped = _execute_with_retry(
+                fn=lambda: request_token_run(
+                    session,
+                    settings=settings,
+                    correlation_id=job_id,
+                    source=str(safe_payload.get("source") or "scheduler"),
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="upstox_token_request",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            result_payload = {
+                "run": serialize_request_run(run),
+                "deduplicated": bool(deduped),
+            }
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result_payload)
+            append_job_log(session, job_id, "Upstox token request finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="upstox_token_request",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Upstox token request failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="upstox_token_request", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "upstox_token_request_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="upstox_token_request",
                 duration_seconds=time.perf_counter() - started,
                 status="FAILED",
             )

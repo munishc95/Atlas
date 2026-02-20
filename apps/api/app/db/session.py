@@ -9,15 +9,12 @@ from app.core.config import get_settings
 settings = get_settings()
 
 is_sqlite = settings.database_url.startswith("sqlite")
-connect_args = (
-    {"check_same_thread": False, "timeout": 30}
-    if is_sqlite
-    else {}
-)
+connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
 engine = create_engine(settings.database_url, pool_pre_ping=True, connect_args=connect_args)
 
 
 if is_sqlite:
+
     @event.listens_for(engine, "connect")
     def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ANN001, ARG001
         cursor = dbapi_connection.cursor()
@@ -123,7 +120,9 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("providerupdaterun", "repaired_days_used"):
         with engine.begin() as conn:
             conn.execute(
-                text("ALTER TABLE providerupdaterun ADD COLUMN repaired_days_used INTEGER DEFAULT 0")
+                text(
+                    "ALTER TABLE providerupdaterun ADD COLUMN repaired_days_used INTEGER DEFAULT 0"
+                )
             )
     if not _has_column("providerupdaterun", "missing_days_detected"):
         with engine.begin() as conn:
@@ -307,7 +306,9 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_policyensemble_created ON policyensemble (created_at)")
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_policyensemble_created ON policyensemble (created_at)"
+            )
         )
         conn.execute(
             text(
@@ -442,9 +443,24 @@ def _ensure_indexes_and_columns() -> None:
             )
         )
         conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_oauthstate_expires_at ON oauthstate (expires_at)")
+        )
+        conn.execute(
             text(
-                "CREATE INDEX IF NOT EXISTS ix_oauthstate_expires_at "
-                "ON oauthstate (expires_at)"
+                "CREATE INDEX IF NOT EXISTS ix_upstoxtokenrequestrun_provider_status "
+                "ON upstoxtokenrequestrun (provider_kind, status)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxtokenrequestrun_requested_at "
+                "ON upstoxtokenrequestrun (requested_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxtokenrequestrun_authorization_expiry "
+                "ON upstoxtokenrequestrun (authorization_expiry)"
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))

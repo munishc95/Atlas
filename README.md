@@ -459,13 +459,54 @@ ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/providers/upstox/callback
 
 - Upstox access tokens expire; Atlas exposes expiry and verification status.
 - No refresh-token flow is implemented in Atlas currently.
-- Reconnect when expired or nearing expiry.
-- Future enhancement: Upstox Access Token Request API mode (requires notifier URL setup).
+- Atlas v3.3 adds **Auto-Renew via Access Token Request + Notifier Webhook**:
+  1. Atlas requests a token approval window from Upstox.
+  2. You approve in Upstox.
+  3. Upstox posts the access token to Atlas notifier webhook.
+- Reconnect flow is still available, but auto-renew reduces daily manual code-exchange friction.
+
+#### Upstox Auto-Renew (Webhook)
+
+- Settings page now includes:
+  - auto-renew toggle
+  - auto-renew time in IST
+  - expiry threshold (request when token expires within N hours)
+  - **Request token now** button
+  - request history/status
+- New token-request endpoints:
+  - `POST /api/providers/upstox/token/request`
+  - `GET /api/providers/upstox/token/requests/latest`
+  - `GET /api/providers/upstox/token/requests/history?page=&page_size=`
+  - `POST /api/providers/upstox/notifier`
+- `GET /api/providers/upstox/token/status` now includes `auto_renew` metadata.
+
+Local-first notifier setup for development:
+
+1. Start API locally on `http://127.0.0.1:8000`.
+2. Open a tunnel:
+   - `ngrok http 8000`
+   - or `cloudflared tunnel --url http://127.0.0.1:8000`
+3. In Upstox My Apps, set notifier URL to:
+   - `https://<public-host>/api/providers/upstox/notifier?nonce=<nonce>`
+4. In Atlas Settings, click **Request token now** to generate latest nonce + pending request.
+5. Keep tunnel running during approval.
+
+Optional CLI helper:
+
+```powershell
+$env:PYTHONPATH=\"apps/api\"
+python -m app.tools.upstox_auto_renew status
+python -m app.tools.upstox_auto_renew request --source cli
+```
 
 #### API endpoints
 
 - `GET /api/providers/upstox/auth-url`
 - `POST /api/providers/upstox/token/exchange`
+- `POST /api/providers/upstox/token/request`
+- `POST /api/providers/upstox/notifier`
+- `GET /api/providers/upstox/token/requests/latest`
+- `GET /api/providers/upstox/token/requests/history`
 - `GET /api/providers/upstox/token/status`
 - `GET /api/providers/upstox/token/verify`
 - `POST /api/providers/upstox/disconnect`

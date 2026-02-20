@@ -1,5 +1,6 @@
 from datetime import date as dt_date, datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import JSON, Column, Index
 from sqlmodel import Field, SQLModel
@@ -86,6 +87,36 @@ class OAuthState(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     consumed_at: datetime | None = Field(default=None, index=True)
     metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
+class UpstoxTokenRequestRun(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_upstoxtokenrequestrun_provider_status",
+            "provider_kind",
+            "status",
+        ),
+        Index("ix_upstoxtokenrequestrun_requested_at", "requested_at"),
+        Index(
+            "ix_upstoxtokenrequestrun_authorization_expiry",
+            "authorization_expiry",
+        ),
+    )
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, max_length=64)
+    provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
+    status: str = Field(default="REQUESTED", index=True, max_length=16)
+    requested_at: datetime = Field(default_factory=utc_now)
+    authorization_expiry: datetime | None = Field(default=None)
+    approved_at: datetime | None = Field(default=None, index=True)
+    notifier_url: str | None = Field(default=None, max_length=2048)
+    client_id: str = Field(default="", max_length=256)
+    user_id: str | None = Field(default=None, max_length=128)
+    correlation_nonce: str = Field(default="", max_length=256)
+    last_error: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
 class DatasetBundle(SQLModel, table=True):

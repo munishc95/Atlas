@@ -25,6 +25,7 @@ import type {
   ApiMonthlyReport,
   ApiUpstoxMappingStatus,
   ApiUpstoxAuthUrl,
+  ApiUpstoxTokenRequestRun,
   ApiUpstoxTokenStatus,
   ApiResearchCandidate,
   ApiResearchRun,
@@ -161,6 +162,24 @@ export const atlasApi = {
       body: JSON.stringify(payload),
     }),
   upstoxTokenStatus: () => apiFetch<ApiUpstoxTokenStatus>("/api/providers/upstox/token/status"),
+  upstoxTokenRequest: (payload?: { source?: string }) =>
+    apiFetch<{
+      run: ApiUpstoxTokenRequestRun;
+      deduplicated: boolean;
+      guidance: {
+        notifier_url_in_myapps: string;
+        recommended_notifier_endpoint: string;
+      };
+    }>("/api/providers/upstox/token/request", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  upstoxTokenRequestLatest: () =>
+    apiFetch<ApiUpstoxTokenRequestRun>("/api/providers/upstox/token/requests/latest"),
+  upstoxTokenRequestHistory: (page = 1, pageSize = 10) =>
+    apiFetch<ApiUpstoxTokenRequestRun[]>(
+      `/api/providers/upstox/token/requests/history?page=${page}&page_size=${pageSize}`,
+    ),
   upstoxTokenVerify: () =>
     apiFetch<{
       token_configured: boolean;

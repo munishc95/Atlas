@@ -165,6 +165,8 @@ def test_scheduler_queues_provider_updates_before_inbox_updates() -> None:
             "operate_auto_run_include_data_updates": True,
             "data_updates_provider_enabled": True,
             "data_updates_provider_timeframe_enabled": "1d",
+            "upstox_auto_renew_enabled": False,
+            "operate_last_upstox_auto_renew_date": None,
             "active_policy_id": None,
         }
         session.add(state)

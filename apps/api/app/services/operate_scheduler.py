@@ -14,6 +14,7 @@ from app.db.models import DatasetBundle, PaperRun, PaperState
 from app.db.session import engine
 from app.services.jobs import create_job
 from app.services.operate_events import emit_operate_event
+from app.services.upstox_auth import token_status as upstox_token_status
 from app.services.trading_calendar import (
     compute_next_scheduled_run_ist as calendar_next_scheduled_run_ist,
     get_session as calendar_get_session,
@@ -247,6 +248,105 @@ def run_auto_operate_once(
         default=settings.operate_auto_run_time_ist,
     )
     last_run_date = state_settings.get("operate_last_auto_run_date")
+    auto_renew_enabled = bool(
+        state_settings.get("upstox_auto_renew_enabled", settings.upstox_auto_renew_enabled)
+    )
+    auto_renew_only_when_provider_enabled = bool(
+        state_settings.get(
+            "upstox_auto_renew_only_when_provider_enabled",
+            settings.upstox_auto_renew_only_when_provider_enabled,
+        )
+    )
+    auto_renew_time = parse_time_hhmm(
+        str(state_settings.get("upstox_auto_renew_time_ist", settings.upstox_auto_renew_time_ist)),
+        default=settings.upstox_auto_renew_time_ist,
+    )
+    auto_renew_threshold_hours = max(
+        1,
+        _safe_int(
+            state_settings.get(
+                "upstox_auto_renew_if_expires_within_hours",
+                settings.upstox_auto_renew_if_expires_within_hours,
+            ),
+            settings.upstox_auto_renew_if_expires_within_hours,
+        ),
+    )
+    last_auto_renew_date = state_settings.get("operate_last_upstox_auto_renew_date")
+    if (
+        auto_renew_enabled
+        and now.time() >= auto_renew_time
+        and not (
+            isinstance(last_auto_renew_date, str) and last_auto_renew_date == today.isoformat()
+        )
+        and (provider_updates_enabled or not auto_renew_only_when_provider_enabled)
+    ):
+        token = upstox_token_status(
+            session,
+            settings=settings,
+            allow_env_fallback=True,
+        )
+        should_request = False
+        reason = "token_valid"
+        if not bool(token.get("connected")):
+            should_request = True
+            reason = "token_missing"
+        elif bool(token.get("is_expired")):
+            should_request = True
+            reason = "token_expired"
+        else:
+            expiry_raw = token.get("expires_at")
+            if isinstance(expiry_raw, str) and expiry_raw.strip():
+                try:
+                    expiry_ts = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                    if expiry_ts.tzinfo is None:
+                        expiry_ts = expiry_ts.replace(tzinfo=ZoneInfo("UTC"))
+                    hours_left = (
+                        expiry_ts - now.astimezone(ZoneInfo("UTC"))
+                    ).total_seconds() / 3600.0
+                    if hours_left <= float(auto_renew_threshold_hours):
+                        should_request = True
+                        reason = "token_expires_soon"
+                except ValueError:
+                    pass
+        if should_request:
+            try:
+                queued_id = _enqueue_job(
+                    session=session,
+                    queue=queue,
+                    settings=settings,
+                    job_type="upstox_token_request",
+                    task_path="app.jobs.tasks.run_upstox_token_request_job",
+                    payload={"source": "scheduler_auto_renew"},
+                )
+                emit_operate_event(
+                    session,
+                    severity="INFO",
+                    category="SYSTEM",
+                    message="upstox_auto_renew_triggered",
+                    details={
+                        "date": today.isoformat(),
+                        "reason": reason,
+                        "threshold_hours": auto_renew_threshold_hours,
+                        "queued_job_id": queued_id,
+                    },
+                    correlation_id=queued_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                emit_operate_event(
+                    session,
+                    severity="WARN",
+                    category="SYSTEM",
+                    message="upstox_auto_renew_failed",
+                    details={
+                        "date": today.isoformat(),
+                        "reason": reason,
+                        "error": str(exc),
+                    },
+                    correlation_id=None,
+                )
+        merged["operate_last_upstox_auto_renew_date"] = today.isoformat()
+        triggered = True
+
     if auto_run_enabled and now.time() >= run_time:
         if not (isinstance(last_run_date, str) and last_run_date == today.isoformat()):
             queued_jobs: dict[str, str] = {}

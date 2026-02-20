@@ -65,7 +65,6 @@ async function ensureSampleImport(
 test("@smoke fast operate run + report pdf + ops health", async ({ page, request }) => {
   test.setTimeout(240_000);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-  const webBase = process.env.NEXT_PUBLIC_WEB_BASE_URL ?? "http://localhost:3000";
 
   await ensureSampleImport(request, apiBase, "NIFTY500");
 
@@ -94,6 +93,10 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       data_updates_provider_max_symbols_per_run: 5,
       data_updates_provider_max_calls_per_run: 20,
       data_updates_provider_timeframes: ["1d"],
+      upstox_auto_renew_enabled: true,
+      upstox_auto_renew_time_ist: "06:30",
+      upstox_auto_renew_if_expires_within_hours: 12,
+      upstox_auto_renew_only_when_provider_enabled: true,
       data_updates_provider_repair_last_n_trading_days: 2,
       data_updates_provider_backfill_max_days: 5,
       no_trade_enabled: true,
@@ -106,23 +109,14 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   expect(settingsRes.ok()).toBeTruthy();
 
-  const callbackRedirect = `${webBase}/providers/upstox/callback`;
-  const authUrlRes = await request.get(`${apiBase}/api/providers/upstox/auth-url`, {
-    params: { redirect_uri: callbackRedirect },
-  });
-  expect(authUrlRes.ok()).toBeTruthy();
-  const authUrlBody = await authUrlRes.json();
-  const oauthState = String(authUrlBody?.data?.state ?? "");
-  expect(oauthState.length).toBeGreaterThan(0);
-  const exchangeRes = await request.post(`${apiBase}/api/providers/upstox/token/exchange`, {
+  const tokenRequestRes = await request.post(`${apiBase}/api/providers/upstox/token/request`, {
     data: {
-      code: process.env.ATLAS_UPSTOX_E2E_FAKE_CODE ?? "ATLAS_E2E_FAKE_CODE",
-      state: oauthState,
-      redirect_uri: callbackRedirect,
-      persist_token: false,
+      source: "e2e_smoke",
     },
   });
-  expect(exchangeRes.ok()).toBeTruthy();
+  expect(tokenRequestRes.ok()).toBeTruthy();
+  const tokenRequestBody = await tokenRequestRes.json();
+  expect(String(tokenRequestBody?.data?.run?.status ?? "")).toMatch(/REQUESTED|APPROVED/);
   const statusRes = await request.get(`${apiBase}/api/providers/upstox/token/status`);
   expect(statusRes.ok()).toBeTruthy();
   expect(Boolean((await statusRes.json())?.data?.connected)).toBeTruthy();
@@ -249,6 +243,7 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Fast mode:/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Mapping missing:/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Provider updates are enabled but Upstox token is/i)).toHaveCount(0);
 
   const runOperateRes = await request.post(`${apiBase}/api/operate/run`, {
     data: {
