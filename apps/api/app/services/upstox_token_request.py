@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 import hashlib
 import json
 import secrets
@@ -13,7 +14,12 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, select
 
 from app.core.config import Settings
-from app.db.models import PaperState, UpstoxNotifierEvent, UpstoxTokenRequestRun
+from app.db.models import (
+    PaperState,
+    UpstoxNotifierEvent,
+    UpstoxNotifierPingEvent,
+    UpstoxTokenRequestRun,
+)
 from app.services.fast_mode import fast_mode_enabled
 from app.services.operate_events import emit_operate_event
 from app.services.upstox_auth import (
@@ -45,6 +51,15 @@ REASON_TOKEN_STORE_FAILED = "token_store_failed"
 
 VALID_MESSAGE_TYPES = {"access_token", "token_issued"}
 IST_ZONE = ZoneInfo("Asia/Kolkata")
+PING_STATUS_SENT = "SENT"
+PING_STATUS_RECEIVED = "RECEIVED"
+PING_STATUS_EXPIRED = "EXPIRED"
+
+_NOTIFIER_RATE_LIMIT_PER_MINUTE = 30
+_NOTIFIER_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_LOGGED_TTL_SECONDS = 55.0
+_notifier_rate_limit_buckets: dict[str, deque[float]] = defaultdict(deque)
+_notifier_rate_limit_logged_at: dict[str, float] = {}
 
 
 def _utc_now() -> datetime:
@@ -299,6 +314,225 @@ def serialize_request_run(row: UpstoxTokenRequestRun) -> dict[str, Any]:
         "last_error": row.last_error,
         "created_at": row.created_at.isoformat() if row.created_at is not None else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at is not None else None,
+    }
+
+
+def renew_token_run(
+    session: Session,
+    *,
+    settings: Settings,
+    correlation_id: str | None = None,
+    source: str = "manual_renew",
+) -> tuple[UpstoxTokenRequestRun, bool]:
+    run, deduped = request_token_run(
+        session,
+        settings=settings,
+        correlation_id=correlation_id,
+        source=source,
+    )
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="upstox_token_renew_initiated",
+        details={
+            "run_id": run.id,
+            "reused": bool(deduped),
+            "status": _normalize_run_status(run.status),
+            "authorization_expiry": (
+                run.authorization_expiry.isoformat()
+                if run.authorization_expiry is not None
+                else None
+            ),
+            "source": source,
+        },
+        correlation_id=correlation_id,
+        commit=True,
+    )
+    return run, bool(deduped)
+
+
+def _notifier_rate_limit_key(*, ip: str | None, source: str) -> str:
+    token = str(ip or "unknown").strip() or "unknown"
+    return f"{source}:{token}"
+
+
+def check_notifier_rate_limit(
+    session: Session,
+    *,
+    ip: str | None,
+    source: str,
+    correlation_id: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    now_dt = now or _utc_now()
+    now_ts = now_dt.timestamp()
+    key = _notifier_rate_limit_key(ip=ip, source=source)
+    bucket = _notifier_rate_limit_buckets[key]
+    while bucket and (now_ts - bucket[0]) > _NOTIFIER_RATE_LIMIT_WINDOW_SECONDS:
+        bucket.popleft()
+    bucket.append(now_ts)
+    limited = len(bucket) > _NOTIFIER_RATE_LIMIT_PER_MINUTE
+    if not limited:
+        return False
+
+    last_logged = _notifier_rate_limit_logged_at.get(key)
+    if last_logged is None or (now_ts - last_logged) >= _RATE_LIMIT_LOGGED_TTL_SECONDS:
+        _notifier_rate_limit_logged_at[key] = now_ts
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="SYSTEM",
+            message="upstox_notifier_rate_limited",
+            details={
+                "ip": str(ip or "unknown"),
+                "source": source,
+                "limit_per_minute": _NOTIFIER_RATE_LIMIT_PER_MINUTE,
+                "window_seconds": _NOTIFIER_RATE_LIMIT_WINDOW_SECONDS,
+            },
+            correlation_id=correlation_id,
+            commit=True,
+        )
+    return True
+
+
+def _default_ping_expiry(now: datetime | None = None) -> datetime:
+    return (now or _utc_now()) + timedelta(minutes=10)
+
+
+def _build_ping_url(*, settings: Settings, ping_id: str) -> str:
+    return f"{_notifier_base_url(settings)}/api/providers/upstox/notifier/ping/{ping_id}"
+
+
+def _expire_ping_if_needed(row: UpstoxNotifierPingEvent, *, now: datetime) -> bool:
+    if row.status != PING_STATUS_SENT:
+        return False
+    expiry = _to_utc_datetime(row.expires_at)
+    if expiry is None or expiry > now:
+        return False
+    row.status = PING_STATUS_EXPIRED
+    row.notes = "expired_without_callback"
+    return True
+
+
+def _create_ping_id(*, settings: Settings, source: str, now: datetime) -> str:
+    if fast_mode_enabled(settings):
+        token = f"{source}:{now.date().isoformat()}:{settings.fast_mode_seed}"
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()[:20]
+    return secrets.token_urlsafe(12)
+
+
+def serialize_ping_event(
+    row: UpstoxNotifierPingEvent,
+    *,
+    settings: Settings,
+) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "ping_id": row.ping_id,
+        "status": str(row.status or PING_STATUS_SENT),
+        "source": row.source,
+        "client_id": row.client_id,
+        "notes": row.notes,
+        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "received_at": row.received_at.isoformat() if row.received_at is not None else None,
+        "expires_at": row.expires_at.isoformat() if row.expires_at is not None else None,
+        "ping_url": _build_ping_url(settings=settings, ping_id=row.ping_id),
+    }
+
+
+def create_notifier_ping(
+    session: Session,
+    *,
+    settings: Settings,
+    source: str = "settings",
+) -> UpstoxNotifierPingEvent:
+    now = _utc_now()
+    base_ping_id = _create_ping_id(settings=settings, source=source, now=now)
+    ping_id = base_ping_id
+    row: UpstoxNotifierPingEvent | None = None
+    for _ in range(8):
+        row = session.exec(
+            select(UpstoxNotifierPingEvent).where(UpstoxNotifierPingEvent.ping_id == ping_id)
+        ).first()
+        if row is None:
+            break
+        changed = _expire_ping_if_needed(row, now=now)
+        if changed:
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+        if row.status == PING_STATUS_SENT:
+            return row
+        ping_id = f"{base_ping_id}-{secrets.token_hex(2)}"
+
+    row = UpstoxNotifierPingEvent(
+        ping_id=ping_id,
+        status=PING_STATUS_SENT,
+        source=str(source or "settings")[:64],
+        expires_at=_default_ping_expiry(now),
+        client_id=str(settings.upstox_client_id or settings.upstox_api_key or "").strip() or None,
+        notes=None,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def receive_notifier_ping(
+    session: Session,
+    *,
+    ping_id: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    now = _utc_now()
+    row = session.exec(
+        select(UpstoxNotifierPingEvent).where(UpstoxNotifierPingEvent.ping_id == str(ping_id))
+    ).first()
+    if row is None:
+        return {"ok": False, "status": "UNKNOWN", "ping_id": str(ping_id)}
+
+    if _expire_ping_if_needed(row, now=now):
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return {"ok": False, "status": PING_STATUS_EXPIRED, "ping_id": row.ping_id}
+
+    row.status = PING_STATUS_RECEIVED
+    row.received_at = now
+    row.notes = "reachability_ok"
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {
+        "ok": True,
+        "status": PING_STATUS_RECEIVED,
+        "ping_id": row.ping_id,
+        "received_at": row.received_at.isoformat() if row.received_at is not None else None,
+    }
+
+
+def notifier_ping_status(
+    session: Session,
+    *,
+    ping_id: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    row = session.exec(
+        select(UpstoxNotifierPingEvent).where(UpstoxNotifierPingEvent.ping_id == str(ping_id))
+    ).first()
+    if row is None:
+        return {"ok": False, "status": "UNKNOWN", "ping_id": str(ping_id)}
+    now = _utc_now()
+    if _expire_ping_if_needed(row, now=now):
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+    payload = serialize_ping_event(row, settings=settings)
+    return {
+        "ok": str(row.status) == PING_STATUS_RECEIVED,
+        **payload,
     }
 
 
@@ -1110,6 +1344,15 @@ def auto_renew_meta(
             )
         ),
     )
+    lead_hours_before_open = max(
+        1,
+        int(
+            state_settings.get(
+                "upstox_auto_renew_lead_hours_before_open",
+                settings.upstox_auto_renew_lead_hours_before_open,
+            )
+        ),
+    )
     from app.services.operate_scheduler import compute_next_scheduled_run_ist
 
     next_run = compute_next_scheduled_run_ist(
@@ -1138,6 +1381,7 @@ def auto_renew_meta(
             state_settings.get("upstox_auto_renew_time_ist", settings.upstox_auto_renew_time_ist)
         ),
         "if_expires_within_hours": threshold_hours,
+        "lead_hours_before_open": lead_hours_before_open,
         "only_when_provider_enabled": bool(
             state_settings.get(
                 "upstox_auto_renew_only_when_provider_enabled",

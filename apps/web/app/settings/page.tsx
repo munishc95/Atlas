@@ -13,6 +13,7 @@ import { qk } from "@/src/lib/query/keys";
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const [showNotifierEvents, setShowNotifierEvents] = useState(false);
+  const [notifierPingId, setNotifierPingId] = useState<string | null>(null);
   const settingsQuery = useQuery({
     queryKey: qk.settings,
     queryFn: async () => (await atlasApi.settings()).data,
@@ -61,6 +62,17 @@ export default function SettingsPage() {
     queryFn: async () => (await atlasApi.upstoxNotifierEvents(20, 0)).data,
     enabled: showNotifierEvents,
     refetchInterval: 15_000,
+  });
+  const upstoxNotifierPingStatusQuery = useQuery({
+    queryKey: qk.upstoxNotifierPing(notifierPingId),
+    queryFn: async () => {
+      if (!notifierPingId) {
+        throw new Error("Ping id missing");
+      }
+      return (await atlasApi.upstoxNotifierPingStatus(notifierPingId)).data;
+    },
+    enabled: notifierPingId !== null,
+    refetchInterval: notifierPingId ? 3_000 : false,
   });
 
   const [form, setForm] = useState<Record<string, string>>({});
@@ -179,8 +191,12 @@ export default function SettingsPage() {
         upstox_auto_renew_if_expires_within_hours: Number(
           form.upstox_auto_renew_if_expires_within_hours,
         ),
+        upstox_auto_renew_lead_hours_before_open: Number(
+          form.upstox_auto_renew_lead_hours_before_open,
+        ),
         upstox_auto_renew_only_when_provider_enabled:
           form.upstox_auto_renew_only_when_provider_enabled === "true",
+        operate_provider_stage_on_token_invalid: form.operate_provider_stage_on_token_invalid,
         upstox_notifier_pending_no_callback_minutes: Number(
           form.upstox_notifier_pending_no_callback_minutes,
         ),
@@ -331,6 +347,17 @@ export default function SettingsPage() {
       toast.error(error.message || "Could not run webhook test");
     },
   });
+  const createNotifierPingMutation = useMutation({
+    mutationFn: async () => (await atlasApi.upstoxNotifierPingCreate("settings")).data,
+    onSuccess: (payload) => {
+      setNotifierPingId(String(payload.ping_id));
+      toast.success("Ping URL generated");
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierPing(String(payload.ping_id)) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not generate ping URL");
+    },
+  });
   const saveUpstoxAutoRenewMutation = useMutation({
     mutationFn: async () =>
       (
@@ -340,8 +367,14 @@ export default function SettingsPage() {
           upstox_auto_renew_if_expires_within_hours: Number(
             form.upstox_auto_renew_if_expires_within_hours || 12,
           ),
+          upstox_auto_renew_lead_hours_before_open: Number(
+            form.upstox_auto_renew_lead_hours_before_open || 10,
+          ),
           upstox_auto_renew_only_when_provider_enabled:
             form.upstox_auto_renew_only_when_provider_enabled === "true",
+          operate_provider_stage_on_token_invalid: String(
+            form.operate_provider_stage_on_token_invalid || "SKIP",
+          ).toUpperCase(),
           upstox_notifier_pending_no_callback_minutes: Number(
             form.upstox_notifier_pending_no_callback_minutes || 15,
           ),
@@ -474,8 +507,16 @@ export default function SettingsPage() {
         label: "Upstox auto-renew if expires within hours",
       },
       {
+        key: "upstox_auto_renew_lead_hours_before_open",
+        label: "Upstox auto-renew lead time before open (hours)",
+      },
+      {
         key: "upstox_auto_renew_only_when_provider_enabled",
         label: "Upstox auto-renew only when provider updates enabled (true/false)",
+      },
+      {
+        key: "operate_provider_stage_on_token_invalid",
+        label: "Operate provider stage on invalid token (SKIP/FAIL)",
       },
       {
         key: "upstox_notifier_pending_no_callback_minutes",
@@ -543,6 +584,11 @@ export default function SettingsPage() {
   const notifierHealth = notifierStatus?.webhook_health ?? null;
   const recommendedNotifierUrl = String(notifierStatus?.recommended_notifier_url ?? "-");
   const notifierStatusBadge = String(notifierHealth?.status ?? "NEVER_RECEIVED");
+  const notifierPing = upstoxNotifierPingStatusQuery.data ?? null;
+  const notifierPingUrl = String(notifierPing?.ping_url ?? "-");
+  const notifierPingStatus = String(
+    notifierPing?.status ?? (notifierPingId !== null ? "SENT" : "-"),
+  );
 
   const copyNotifierUrl = async () => {
     if (!recommendedNotifierUrl || recommendedNotifierUrl === "-") {
@@ -554,6 +600,19 @@ export default function SettingsPage() {
       toast.success("Notifier URL copied");
     } catch {
       toast.error("Could not copy notifier URL");
+    }
+  };
+
+  const copyNotifierPingUrl = async () => {
+    if (!notifierPingUrl || notifierPingUrl === "-") {
+      toast.error("Generate a ping URL first.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(notifierPingUrl);
+      toast.success("Ping URL copied");
+    } catch {
+      toast.error("Could not copy ping URL");
     }
   };
 
@@ -798,6 +857,19 @@ export default function SettingsPage() {
                   />
                 </label>
                 <label className="text-sm text-muted">
+                  Lead hours before next trading session open
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.upstox_auto_renew_lead_hours_before_open ?? "10"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        upstox_auto_renew_lead_hours_before_open: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm text-muted">
                   Only when provider updates enabled (true/false)
                   <input
                     className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
@@ -806,6 +878,19 @@ export default function SettingsPage() {
                       setForm((prev) => ({
                         ...prev,
                         upstox_auto_renew_only_when_provider_enabled: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-sm text-muted">
+                  Provider stage when token invalid (SKIP/FAIL)
+                  <input
+                    className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
+                    value={form.operate_provider_stage_on_token_invalid ?? "SKIP"}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        operate_provider_stage_on_token_invalid: event.target.value.toUpperCase(),
                       }))
                     }
                   />
@@ -900,7 +985,52 @@ export default function SettingsPage() {
                     >
                       View Events
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => createNotifierPingMutation.mutate()}
+                      disabled={createNotifierPingMutation.isPending}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      {createNotifierPingMutation.isPending ? "Generating..." : "Generate Ping URL"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyNotifierPingUrl();
+                      }}
+                      disabled={!notifierPingId}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      Copy Ping URL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!notifierPingUrl || notifierPingUrl === "-") {
+                          toast.error("Generate a ping URL first.");
+                          return;
+                        }
+                        window.open(notifierPingUrl, "_blank", "noopener,noreferrer");
+                      }}
+                      disabled={!notifierPingId}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      Open Ping URL
+                    </button>
                   </div>
+                  {notifierPingId ? (
+                    <div className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+                      <p>Ping status: {notifierPingStatus}</p>
+                      <p className="mt-1 break-all">Ping URL: {notifierPingUrl}</p>
+                      <p className="mt-1">
+                        Received at: {String(notifierPing?.received_at ?? "-")} | Expires at:{" "}
+                        {String(notifierPing?.expires_at ?? "-")}
+                      </p>
+                    </div>
+                  ) : null}
+                  <p className="mt-2 text-xs text-muted">
+                    Reachability check: open the ping URL in a browser to verify your tunnel reaches Atlas.
+                  </p>
                   <details className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
                     <summary className="cursor-pointer font-medium text-foreground">
                       Troubleshooting

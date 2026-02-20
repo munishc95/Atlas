@@ -146,6 +146,18 @@ class UpstoxNotifierEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class UpstoxNotifierPingEvent(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, max_length=64)
+    created_at: datetime = Field(default_factory=utc_now)
+    received_at: datetime | None = Field(default=None)
+    expires_at: datetime | None = Field(default=None)
+    ping_id: str = Field(default="", max_length=128)
+    status: str = Field(default="SENT", max_length=16)
+    source: str = Field(default="settings", max_length=64)
+    client_id: str | None = Field(default=None, max_length=256)
+    notes: str | None = Field(default=None, max_length=512)
+
+
 class DatasetBundle(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True, max_length=128)

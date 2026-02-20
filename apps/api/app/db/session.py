@@ -495,6 +495,24 @@ def _ensure_indexes_and_columns() -> None:
                 "ON upstoxnotifierevent (payload_digest)"
             )
         )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxnotifierpingevent_created_at "
+                "ON upstoxnotifierpingevent (created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxnotifierpingevent_status_created "
+                "ON upstoxnotifierpingevent (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_upstoxnotifierpingevent_ping_id "
+                "ON upstoxnotifierpingevent (ping_id)"
+            )
+        )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))
         conn.execute(
             text(

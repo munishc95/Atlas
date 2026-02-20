@@ -302,7 +302,9 @@ class RuntimeSettingsRequest(BaseModel):
     upstox_auto_renew_enabled: bool | None = None
     upstox_auto_renew_time_ist: str | None = None
     upstox_auto_renew_if_expires_within_hours: int | None = None
+    upstox_auto_renew_lead_hours_before_open: int | None = None
     upstox_auto_renew_only_when_provider_enabled: bool | None = None
+    operate_provider_stage_on_token_invalid: str | None = None
     upstox_notifier_pending_no_callback_minutes: int | None = None
     upstox_notifier_stale_hours: int | None = None
     operate_last_upstox_auto_renew_date: str | None = None

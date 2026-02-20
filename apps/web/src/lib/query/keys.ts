@@ -69,6 +69,7 @@ export const qk = {
   upstoxNotifierStatus: ["upstoxNotifierStatus"] as const,
   upstoxNotifierEvents: (limit = 20, offset = 0) =>
     ["upstoxNotifierEvents", limit, offset] as const,
+  upstoxNotifierPing: (pingId: string | null) => ["upstoxNotifierPing", pingId ?? "none"] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>

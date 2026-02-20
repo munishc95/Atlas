@@ -273,10 +273,52 @@ def run_auto_operate_once(
             settings.upstox_auto_renew_if_expires_within_hours,
         ),
     )
+    auto_renew_lead_hours_before_open = max(
+        1,
+        _safe_int(
+            state_settings.get(
+                "upstox_auto_renew_lead_hours_before_open",
+                settings.upstox_auto_renew_lead_hours_before_open,
+            ),
+            settings.upstox_auto_renew_lead_hours_before_open,
+        ),
+    )
     last_auto_renew_date = state_settings.get("operate_last_upstox_auto_renew_date")
+    auto_renew_due_by_clock = now.time() >= auto_renew_time
+    auto_renew_due_by_next_open = False
+    next_open_ist: datetime | None = None
+    next_open_trading_day: date | None = None
+    next_open_time_label: str | None = None
+    if auto_renew_enabled and (provider_updates_enabled or not auto_renew_only_when_provider_enabled):
+        token_for_next_open = upstox_token_status(
+            session,
+            settings=settings,
+            allow_env_fallback=True,
+        )
+        expiry_raw = token_for_next_open.get("expires_at")
+        expiry_ts: datetime | None = None
+        if isinstance(expiry_raw, str) and expiry_raw.strip():
+            try:
+                expiry_ts = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                if expiry_ts.tzinfo is None:
+                    expiry_ts = expiry_ts.replace(tzinfo=ZoneInfo("UTC"))
+            except ValueError:
+                expiry_ts = None
+        if expiry_ts is not None:
+            next_day = next_trading_day(today, segment=segment, settings=settings)
+            next_session = calendar_get_session(next_day, segment=segment, settings=settings)
+            open_label = str(next_session.get("open_time") or settings.nse_equities_open_time_ist)
+            open_time = parse_time_hhmm(open_label, default=settings.nse_equities_open_time_ist)
+            next_open_ist = datetime.combine(next_day, open_time, tzinfo=IST_ZONE)
+            next_open_time_label = open_label
+            next_open_trading_day = next_day
+            lead_start_ist = next_open_ist - timedelta(hours=auto_renew_lead_hours_before_open)
+            auto_renew_due_by_next_open = (
+                now >= lead_start_ist and expiry_ts <= next_open_ist.astimezone(ZoneInfo("UTC"))
+            )
     if (
         auto_renew_enabled
-        and now.time() >= auto_renew_time
+        and (auto_renew_due_by_clock or auto_renew_due_by_next_open)
         and not (
             isinstance(last_auto_renew_date, str) and last_auto_renew_date == today.isoformat()
         )
@@ -310,6 +352,9 @@ def run_auto_operate_once(
                         reason = "token_expires_soon"
                 except ValueError:
                     pass
+            if (not should_request) and auto_renew_due_by_next_open:
+                should_request = True
+                reason = "token_expires_before_next_session_open"
         if should_request:
             try:
                 queued_id = _enqueue_job(
@@ -329,6 +374,16 @@ def run_auto_operate_once(
                         "date": today.isoformat(),
                         "reason": reason,
                         "threshold_hours": auto_renew_threshold_hours,
+                        "lead_hours_before_open": auto_renew_lead_hours_before_open,
+                        "next_session_open_ist": (
+                            next_open_ist.isoformat() if next_open_ist is not None else None
+                        ),
+                        "next_session_trading_day": (
+                            next_open_trading_day.isoformat()
+                            if next_open_trading_day is not None
+                            else None
+                        ),
+                        "next_session_open_time_ist": next_open_time_label,
                         "queued_job_id": queued_id,
                     },
                     correlation_id=queued_id,
@@ -343,6 +398,7 @@ def run_auto_operate_once(
                         "date": today.isoformat(),
                         "reason": reason,
                         "error": str(exc),
+                        "lead_hours_before_open": auto_renew_lead_hours_before_open,
                     },
                     correlation_id=None,
                 )

@@ -168,7 +168,9 @@ class Settings(BaseSettings):
     upstox_auto_renew_enabled: bool = False
     upstox_auto_renew_time_ist: str = "06:30"
     upstox_auto_renew_if_expires_within_hours: int = 12
+    upstox_auto_renew_lead_hours_before_open: int = 10
     upstox_auto_renew_only_when_provider_enabled: bool = True
+    operate_provider_stage_on_token_invalid: str = "SKIP"
     upstox_notifier_base_url: str = "http://127.0.0.1:8000"
     upstox_notifier_secret: str | None = None
     upstox_notifier_pending_no_callback_minutes: int = 15

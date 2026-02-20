@@ -188,7 +188,9 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,
             "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
             "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
+            "upstox_auto_renew_lead_hours_before_open": settings.upstox_auto_renew_lead_hours_before_open,
             "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+            "operate_provider_stage_on_token_invalid": settings.operate_provider_stage_on_token_invalid,
             "operate_last_upstox_auto_renew_date": None,
             "risk_overlay_enabled": (
                 True if str(settings.operate_mode).strip().lower() == "live" else False

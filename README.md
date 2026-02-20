@@ -465,13 +465,18 @@ ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/providers/upstox/callback
   3. Upstox posts the access token to Atlas notifier webhook.
 - Reconnect flow is still available, but auto-renew reduces daily manual code-exchange friction.
 
-#### Upstox Auto-Renew + Webhook Observability (v3.4)
+#### Upstox Auto-Renew + Webhook Observability (v3.4-v3.5)
 
 - Settings page now includes:
   - auto-renew toggle/time/expiry threshold
   - **Request token now**
   - **Send Test Webhook**
+  - **Generate Ping URL** reachability check
   - notifier health + callback timestamp + request history
+- Ops page includes one-click **Renew Upstox Token Now** with:
+  - pending-request reuse when still valid
+  - 60s status auto-refresh flow (request + token + notifier status)
+  - copy-ready notifier URL and short approval instructions
 - Preferred notifier route is now secret-path based:
   - `POST /api/providers/upstox/notifier/{secret}`
 - Legacy route still works (marked less secure):
@@ -481,6 +486,11 @@ ATLAS_UPSTOX_REDIRECT_URI=http://localhost:3000/providers/upstox/callback
   - always responds quickly with 2xx
   - validates client/nonce/secret when present
   - never returns or logs raw access tokens
+  - applies local rate limiting and emits `upstox_notifier_rate_limited` warnings when flooded
+- Webhook reachability diagnostics:
+  - Atlas can generate a temporary ping URL
+  - open the ping URL in a browser to confirm your tunnel reaches Atlas
+  - inspect ping status (`SENT` / `RECEIVED` / `EXPIRED`) from Settings
 
 Local-first notifier setup for development:
 
@@ -509,8 +519,12 @@ python -m app.tools.upstox_auto_renew request --source cli
 - `GET /api/providers/upstox/auth-url`
 - `POST /api/providers/upstox/token/exchange`
 - `POST /api/providers/upstox/token/request`
+- `POST /api/providers/upstox/token/renew`
 - `GET /api/providers/upstox/notifier/status`
 - `POST /api/providers/upstox/notifier/test`
+- `POST /api/providers/upstox/notifier/ping`
+- `GET /api/providers/upstox/notifier/ping/{ping_id}`
+- `GET /api/providers/upstox/notifier/ping/{ping_id}/status`
 - `GET /api/providers/upstox/notifier/events?limit=&offset=`
 - `POST /api/providers/upstox/notifier/{secret}` (recommended)
 - `POST /api/providers/upstox/notifier`
@@ -525,7 +539,11 @@ python -m app.tools.upstox_auto_renew request --source cli
 - Provider updates fail gracefully when token missing/expired:
   - `provider_token_missing`
   - `provider_token_expired`
-- Operate pipeline logs warning events and continues inbox/data-quality/report stages.
+- Operate pipeline token-invalid behavior is configurable:
+  - `SKIP` (default): provider stage skipped with `provider_stage_status=SKIPPED_TOKEN_INVALID`, then continue updates/quality/paper/report.
+  - `FAIL`: abort operate run at provider stage (strict mode).
+- Scheduler can request renewal ahead of next session open:
+  - `upstox_auto_renew_lead_hours_before_open` (default 10h).
 
 ## Instrument Map Manager + Provider Repair/Backfill + Optional 4H-ish (v2.8)
 

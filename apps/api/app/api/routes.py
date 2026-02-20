@@ -126,6 +126,8 @@ from app.services.upstox_auth import (
 )
 from app.services.upstox_token_request import (
     auto_renew_meta,
+    check_notifier_rate_limit,
+    create_notifier_ping,
     ensure_test_pending_run,
     get_notifier_secret,
     legacy_notifier_endpoint,
@@ -134,8 +136,12 @@ from app.services.upstox_token_request import (
     list_request_runs,
     notifier_health_payload,
     notifier_status_payload,
+    notifier_ping_status,
     process_notifier_payload,
+    receive_notifier_ping,
     recommended_notifier_endpoint,
+    renew_token_run,
+    serialize_ping_event,
     request_token_run,
     serialize_request_run,
     serialize_notifier_event,
@@ -708,6 +714,44 @@ def upstox_token_request(
     )
 
 
+@router.post("/providers/upstox/token/renew")
+def upstox_token_renew(
+    payload: UpstoxTokenRequestCreateRequest | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
+    source = str((payload.source if payload is not None else None) or "ops_manual_renew")
+    run, reused = renew_token_run(
+        session,
+        settings=settings,
+        correlation_id=None,
+        source=source,
+    )
+    status = "reused_pending" if reused else "new_pending"
+    instructions = {
+        "steps": [
+            "Open Upstox My Apps and set notifier URL to the secret-path URL below.",
+            "Approve the token request in Upstox.",
+            "Return to Atlas and click Verify, or wait for status auto-refresh.",
+        ],
+        "status": status,
+    }
+    return _data(
+        {
+            "run": serialize_request_run(run),
+            "reused": bool(reused),
+            "approval_instructions": instructions,
+            "recommended_notifier_url": recommended_notifier_endpoint(
+                settings=settings,
+                session=session,
+                nonce=str(run.correlation_nonce or ""),
+                include_nonce_query=False,
+            ),
+        }
+    )
+
+
 async def _parse_upstox_notifier_payload(request: Request) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     try:
@@ -719,6 +763,15 @@ async def _parse_upstox_notifier_payload(request: Request) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         payload = {}
     return payload
+
+
+def _request_client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if isinstance(forwarded, str) and forwarded.strip():
+        return forwarded.split(",")[0].strip() or None
+    if request.client is not None:
+        return str(request.client.host or "").strip() or None
+    return None
 
 
 def _notifier_response(result: dict[str, Any]) -> dict[str, Any]:
@@ -743,6 +796,12 @@ async def upstox_notifier_legacy(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     payload = await _parse_upstox_notifier_payload(request)
+    check_notifier_rate_limit(
+        session,
+        ip=_request_client_ip(request),
+        source="webhook_legacy",
+        correlation_id=None,
+    )
     try:
         result = process_notifier_payload(
             session,
@@ -765,6 +824,45 @@ def upstox_notifier_status(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     return _data(notifier_status_payload(session, settings=settings))
+
+
+@router.post("/providers/upstox/notifier/ping")
+def upstox_notifier_ping_create(
+    source: str = Query(default="settings"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = create_notifier_ping(
+        session,
+        settings=settings,
+        source=str(source or "settings").strip() or "settings",
+    )
+    payload = serialize_ping_event(row, settings=settings)
+    return _data(
+        {
+            **payload,
+            "ping_url": payload.get("ping_url"),
+        }
+    )
+
+
+@router.get("/providers/upstox/notifier/ping/{ping_id}")
+def upstox_notifier_ping_receive(
+    ping_id: str,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    result = receive_notifier_ping(session, ping_id=ping_id, settings=settings)
+    return _data(result)
+
+
+@router.get("/providers/upstox/notifier/ping/{ping_id}/status")
+def upstox_notifier_ping_get_status(
+    ping_id: str,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(notifier_ping_status(session, ping_id=ping_id, settings=settings))
 
 
 @router.post("/providers/upstox/notifier/test")
@@ -889,6 +987,12 @@ async def upstox_notifier_secure(
     payload = await _parse_upstox_notifier_payload(request)
     expected_secret = get_notifier_secret(session, settings=settings)
     secret_valid = secrets.compare_digest(str(secret).strip(), str(expected_secret).strip())
+    check_notifier_rate_limit(
+        session,
+        ip=_request_client_ip(request),
+        source="webhook_secret",
+        correlation_id=None,
+    )
     try:
         result = process_notifier_payload(
             session,
@@ -1996,6 +2100,12 @@ def operate_status(
             "upstox_auto_renew_if_expires_within_hours": health_summary.get(
                 "upstox_auto_renew_if_expires_within_hours"
             ),
+            "upstox_auto_renew_lead_hours_before_open": health_summary.get(
+                "upstox_auto_renew_lead_hours_before_open"
+            ),
+            "operate_provider_stage_on_token_invalid": health_summary.get(
+                "operate_provider_stage_on_token_invalid"
+            ),
             "operate_last_upstox_auto_renew_date": health_summary.get(
                 "operate_last_upstox_auto_renew_date"
             ),
@@ -2003,6 +2113,7 @@ def operate_status(
             "upstox_token_expires_within_hours": health_summary.get(
                 "upstox_token_expires_within_hours"
             ),
+            "provider_stage_status": health_summary.get("provider_stage_status"),
             "recent_event_counts_24h": health_summary.get("recent_event_counts_24h"),
             "fast_mode_enabled": health_summary.get("fast_mode_enabled"),
             "last_job_durations": health_summary.get("last_job_durations"),
@@ -2472,7 +2583,9 @@ def get_settings_payload(
         "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,
         "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
         "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
+        "upstox_auto_renew_lead_hours_before_open": settings.upstox_auto_renew_lead_hours_before_open,
         "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+        "operate_provider_stage_on_token_invalid": settings.operate_provider_stage_on_token_invalid,
         "upstox_notifier_pending_no_callback_minutes": settings.upstox_notifier_pending_no_callback_minutes,
         "upstox_notifier_stale_hours": settings.upstox_notifier_stale_hours,
         "operate_last_upstox_auto_renew_date": None,

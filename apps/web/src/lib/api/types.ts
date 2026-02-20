@@ -337,9 +337,12 @@ export type ApiOperateStatus = {
   upstox_auto_renew_enabled?: boolean;
   upstox_auto_renew_time_ist?: string;
   upstox_auto_renew_if_expires_within_hours?: number;
+  upstox_auto_renew_lead_hours_before_open?: number;
+  operate_provider_stage_on_token_invalid?: string;
   operate_last_upstox_auto_renew_date?: string | null;
   next_upstox_auto_renew_ist?: string | null;
   upstox_token_expires_within_hours?: number | null;
+  provider_stage_status?: string | null;
   recent_event_counts_24h?: Record<string, number>;
   fast_mode_enabled?: boolean;
   last_job_durations?: Record<
@@ -445,6 +448,7 @@ export type ApiUpstoxTokenStatus = {
     enabled: boolean;
     time_ist?: string;
     if_expires_within_hours?: number;
+    lead_hours_before_open?: number;
     only_when_provider_enabled?: boolean;
     last_run_date?: string | null;
     next_scheduled_run_ist?: string | null;
@@ -495,6 +499,20 @@ export type ApiUpstoxNotifierStatus = {
   webhook_health: ApiUpstoxNotifierHealth;
   last_request_run?: ApiUpstoxTokenRequestRun | null;
   suggested_actions: string[];
+};
+
+export type ApiUpstoxNotifierPing = {
+  id?: string;
+  ping_id: string;
+  status: "SENT" | "RECEIVED" | "EXPIRED" | "UNKNOWN";
+  source?: string;
+  client_id?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  received_at?: string | null;
+  expires_at?: string | null;
+  ping_url?: string;
+  ok?: boolean;
 };
 
 export type ApiUpstoxNotifierEvent = {
@@ -612,9 +630,12 @@ export type ApiOperateHealth = {
   upstox_auto_renew_enabled?: boolean;
   upstox_auto_renew_time_ist?: string;
   upstox_auto_renew_if_expires_within_hours?: number;
+  upstox_auto_renew_lead_hours_before_open?: number;
+  operate_provider_stage_on_token_invalid?: string;
   operate_last_upstox_auto_renew_date?: string | null;
   next_upstox_auto_renew_ist?: string | null;
   upstox_token_expires_within_hours?: number | null;
+  provider_stage_status?: string | null;
   latest_paper_run_id?: number | null;
   current_regime?: string | null;
   no_trade?: Record<string, unknown>;
@@ -636,6 +657,7 @@ export type ApiOperateRunSummary = {
   timeframe?: string;
   policy_id?: number | null;
   regime?: string;
+  provider_stage_status?: string;
   mode?: "NORMAL" | "SAFE" | "SHADOW";
   quality_status?: string;
   update_status?: string;

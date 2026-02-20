@@ -26,6 +26,7 @@ import type {
   ApiUpstoxMappingStatus,
   ApiUpstoxAuthUrl,
   ApiUpstoxNotifierEvent,
+  ApiUpstoxNotifierPing,
   ApiUpstoxNotifierStatus,
   ApiUpstoxTokenRequestRun,
   ApiUpstoxTokenStatus,
@@ -176,6 +177,19 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  upstoxTokenRenew: (payload?: { source?: string }) =>
+    apiFetch<{
+      run: ApiUpstoxTokenRequestRun;
+      reused: boolean;
+      approval_instructions?: {
+        status?: "reused_pending" | "new_pending" | string;
+        steps?: string[];
+      };
+      recommended_notifier_url?: string;
+    }>("/api/providers/upstox/token/renew", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
   upstoxTokenRequestLatest: () =>
     apiFetch<ApiUpstoxTokenRequestRun>("/api/providers/upstox/token/requests/latest"),
   upstoxTokenRequestHistory: (page = 1, pageSize = 10) =>
@@ -184,6 +198,22 @@ export const atlasApi = {
     ),
   upstoxNotifierStatus: () =>
     apiFetch<ApiUpstoxNotifierStatus>("/api/providers/upstox/notifier/status"),
+  upstoxNotifierPingCreate: (source = "settings") =>
+    apiFetch<ApiUpstoxNotifierPing>(
+      `/api/providers/upstox/notifier/ping?source=${encodeURIComponent(source)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    ),
+  upstoxNotifierPingHit: (pingId: string) =>
+    apiFetch<ApiUpstoxNotifierPing>(
+      `/api/providers/upstox/notifier/ping/${encodeURIComponent(pingId)}`,
+    ),
+  upstoxNotifierPingStatus: (pingId: string) =>
+    apiFetch<ApiUpstoxNotifierPing>(
+      `/api/providers/upstox/notifier/ping/${encodeURIComponent(pingId)}/status`,
+    ),
   upstoxNotifierTest: () =>
     apiFetch<{
       created_event_id?: string | null;

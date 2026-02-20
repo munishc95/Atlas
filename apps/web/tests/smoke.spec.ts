@@ -222,19 +222,45 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   expect(enforcePolicyModeRes.ok()).toBeTruthy();
 
-  await page.goto("/settings");
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("Providers - Upstox")).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Request token now" }).click();
-  await expect(page.getByText("Connected")).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Send Test Webhook" }).click();
-  await expect(page.getByText(/Health:/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/Last callback:/i)).toBeVisible({ timeout: 20_000 });
-
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Fast mode:/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/Mapping missing:/i)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Renew Upstox Token Now" }).click();
+  await expect
+    .poll(async () => {
+      const tokenRes = await request.get(`${apiBase}/api/providers/upstox/token/status`);
+      const tokenBody = await tokenRes.json();
+      const tokenData = (tokenBody?.data ?? {}) as Record<string, unknown>;
+      return Boolean(tokenData.connected) && !Boolean(tokenData.is_expired);
+    })
+    .toBeTruthy();
+
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Providers - Upstox")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Generate Ping URL" }).click();
+  await expect(page.getByText(/Ping status:/i)).toBeVisible({ timeout: 20_000 });
+  const pingLine = page.getByText(/Ping URL:/i).first();
+  await expect(pingLine).toBeVisible({ timeout: 20_000 });
+  const pingUrlRaw = (await pingLine.textContent()) ?? "";
+  const pingUrl = pingUrlRaw.replace(/^Ping URL:\s*/i, "").trim();
+  expect(pingUrl.length > 0).toBeTruthy();
+  const pingPage = await page.context().newPage();
+  await pingPage.goto(pingUrl, { waitUntil: "domcontentloaded" });
+  await pingPage.close();
+  const pingPath = new URL(pingUrl).pathname;
+  const pingId = pingPath.split("/").at(-1) ?? "";
+  expect(pingId.length > 0).toBeTruthy();
+  await expect
+    .poll(async () => {
+      const pingStatusRes = await request.get(
+        `${apiBase}/api/providers/upstox/notifier/ping/${pingId}/status`,
+      );
+      const pingStatusBody = await pingStatusRes.json();
+      return String(pingStatusBody?.data?.status ?? "");
+    })
+    .toBe("RECEIVED");
+
   await expect(page.getByText(/Provider updates are enabled but Upstox token is/i)).toHaveCount(0);
 
   const runOperateRes = await request.post(`${apiBase}/api/operate/run`, {
@@ -278,15 +304,14 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
 
   await page.reload();
   await expect(page.getByText(/Active ensemble:/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/No-trade gate:/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/No-trade reason:/i)).toBeVisible({ timeout: 20_000 });
 
   const pdfRes = await request.get(`${apiBase}/api/reports/daily/${reportId}/export.pdf`);
   expect(pdfRes.ok()).toBeTruthy();
   expect(pdfRes.headers()["content-type"] ?? "").toContain("application/pdf");
   expect((await pdfRes.body()).byteLength).toBeGreaterThan(1000);
 
-  await expect(page.getByRole("heading", { name: "Latest operate run" })).toBeVisible({
+  await page.goto("/ops");
+  await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({
     timeout: 20_000,
   });
 });

@@ -27,6 +27,7 @@ from app.services.paper import run_paper_step
 from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
+from app.services.upstox_auth import token_status as upstox_token_status
 from app.services.upstox_token_request import request_token_run, serialize_request_run
 from app.services.walkforward import execute_walkforward
 from app.db.models import DatasetBundle, PaperRun, PaperState, ProviderUpdateItem
@@ -818,6 +819,7 @@ def _operate_run_result(
         "policy_id": policy_id,
         "regime": regime,
         "step_order": step_order,
+        "provider_stage_status": ("PENDING" if provider_stage_enabled else "NOT_ENABLED"),
         "steps": [],
     }
 
@@ -825,49 +827,144 @@ def _operate_run_result(
     provider_payload: dict[str, Any] | None = None
     if provider_stage_enabled:
         step_started = time.perf_counter()
-        if isinstance(bundle_id, int) and bundle_id > 0:
-            append_job_log(session, job_id, "Operate run: provider updates started")
-            provider_row = run_provider_updates(
-                session=session,
+        provider_kind = str(
+            payload.get("provider_kind")
+            or state_settings.get("data_updates_provider_kind", settings.data_updates_provider_kind)
+            or "UPSTOX"
+        ).strip().upper()
+        provider_invalid_mode = str(
+            state_settings.get(
+                "operate_provider_stage_on_token_invalid",
+                settings.operate_provider_stage_on_token_invalid,
+            )
+        ).strip().upper() or "SKIP"
+        token_invalid_reason: str | None = None
+        token_invalid_context: dict[str, Any] | None = None
+        if provider_kind == "UPSTOX":
+            token_meta = upstox_token_status(
+                session,
                 settings=settings,
-                store=store,
-                bundle_id=bundle_id,
-                timeframe=timeframe,
-                overrides=state_settings,
-                provider_kind=payload.get("provider_kind"),
-                max_symbols_per_run=payload.get("provider_max_symbols_per_run"),
-                max_calls_per_run=payload.get("provider_max_calls_per_run"),
-                start=payload.get("provider_start"),
-                end=payload.get("provider_end"),
-                correlation_id=job_id,
+                allow_env_fallback=True,
             )
-            provider_items = (
-                session.exec(
-                    select(ProviderUpdateItem).where(
-                        ProviderUpdateItem.run_id == int(provider_row.id)
-                    )
-                ).all()
-                if provider_row.id is not None
-                else []
-            )
-            bars_updated_total = int(sum(int(item.bars_updated or 0) for item in provider_items))
-            provider_payload = {
-                "status": str(provider_row.status),
-                "run_id": int(provider_row.id) if provider_row.id is not None else None,
-                "provider_kind": provider_row.provider_kind,
-                "symbols_attempted": int(provider_row.symbols_attempted),
-                "symbols_succeeded": int(provider_row.symbols_succeeded),
-                "symbols_failed": int(provider_row.symbols_failed),
-                "bars_added": int(provider_row.bars_added),
-                "bars_updated": bars_updated_total,
-                "repaired_days_used": int(provider_row.repaired_days_used),
-                "missing_days_detected": int(provider_row.missing_days_detected),
-                "backfill_truncated": bool(provider_row.backfill_truncated),
-                "api_calls": int(provider_row.api_calls),
-            }
+            if not bool(token_meta.get("connected")):
+                token_invalid_reason = "provider_token_missing"
+            elif bool(token_meta.get("is_expired")):
+                token_invalid_reason = "provider_token_expired"
+            if token_invalid_reason is not None:
+                token_invalid_context = {
+                    "connected": bool(token_meta.get("connected")),
+                    "is_expired": bool(token_meta.get("is_expired")),
+                    "expires_at": token_meta.get("expires_at"),
+                }
+        if isinstance(bundle_id, int) and bundle_id > 0:
+            if token_invalid_reason is not None and provider_invalid_mode != "FAIL":
+                append_job_log(
+                    session,
+                    job_id,
+                    f"Operate run: provider updates skipped ({token_invalid_reason})",
+                )
+                provider_payload = {
+                    "status": "SKIPPED",
+                    "reason": "provider_token_invalid",
+                    "token_reason": token_invalid_reason,
+                    "provider_kind": provider_kind,
+                    "provider_stage_status": "SKIPPED_TOKEN_INVALID",
+                    "token_context": token_invalid_context or {},
+                }
+                emit_operate_event(
+                    session,
+                    severity="WARN",
+                    category="SYSTEM",
+                    message="operate_provider_stage_skipped_token_invalid",
+                    details={
+                        "job_id": job_id,
+                        "bundle_id": bundle_id,
+                        "timeframe": timeframe,
+                        "provider_kind": provider_kind,
+                        "reason": token_invalid_reason,
+                        "mode": provider_invalid_mode,
+                    },
+                    correlation_id=job_id,
+                )
+            elif token_invalid_reason is not None and provider_invalid_mode == "FAIL":
+                append_job_log(
+                    session,
+                    job_id,
+                    f"Operate run: provider updates failing due to invalid token ({token_invalid_reason})",
+                )
+                emit_operate_event(
+                    session,
+                    severity="WARN",
+                    category="SYSTEM",
+                    message="operate_provider_stage_failed_token_invalid",
+                    details={
+                        "job_id": job_id,
+                        "bundle_id": bundle_id,
+                        "timeframe": timeframe,
+                        "provider_kind": provider_kind,
+                        "reason": token_invalid_reason,
+                        "mode": provider_invalid_mode,
+                    },
+                    correlation_id=job_id,
+                )
+                raise RuntimeError(
+                    f"provider stage failed due to invalid token ({token_invalid_reason})"
+                )
+            else:
+                append_job_log(session, job_id, "Operate run: provider updates started")
+                provider_row = run_provider_updates(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    bundle_id=bundle_id,
+                    timeframe=timeframe,
+                    overrides=state_settings,
+                    provider_kind=payload.get("provider_kind"),
+                    max_symbols_per_run=payload.get("provider_max_symbols_per_run"),
+                    max_calls_per_run=payload.get("provider_max_calls_per_run"),
+                    start=payload.get("provider_start"),
+                    end=payload.get("provider_end"),
+                    correlation_id=job_id,
+                )
+                provider_items = (
+                    session.exec(
+                        select(ProviderUpdateItem).where(
+                            ProviderUpdateItem.run_id == int(provider_row.id)
+                        )
+                    ).all()
+                    if provider_row.id is not None
+                    else []
+                )
+                bars_updated_total = int(sum(int(item.bars_updated or 0) for item in provider_items))
+                provider_payload = {
+                    "status": str(provider_row.status),
+                    "run_id": int(provider_row.id) if provider_row.id is not None else None,
+                    "provider_kind": provider_row.provider_kind,
+                    "symbols_attempted": int(provider_row.symbols_attempted),
+                    "symbols_succeeded": int(provider_row.symbols_succeeded),
+                    "symbols_failed": int(provider_row.symbols_failed),
+                    "bars_added": int(provider_row.bars_added),
+                    "bars_updated": bars_updated_total,
+                    "repaired_days_used": int(provider_row.repaired_days_used),
+                    "missing_days_detected": int(provider_row.missing_days_detected),
+                    "backfill_truncated": bool(provider_row.backfill_truncated),
+                    "api_calls": int(provider_row.api_calls),
+                    "provider_stage_status": (
+                        "SUCCEEDED"
+                        if str(provider_row.status).upper() in {"SUCCEEDED", "DONE"}
+                        else str(provider_row.status).upper()
+                    ),
+                }
         else:
-            provider_payload = {"status": "SKIPPED", "reason": "no_bundle"}
+            provider_payload = {
+                "status": "SKIPPED",
+                "reason": "no_bundle",
+                "provider_stage_status": "SKIPPED_NO_BUNDLE",
+            }
         provider_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
+        if "provider_stage_status" not in provider_payload:
+            provider_payload["provider_stage_status"] = str(provider_payload.get("status", "UNKNOWN")).upper()
+        summary["provider_stage_status"] = provider_payload["provider_stage_status"]
         summary["provider_updates"] = provider_payload
         summary["steps"].append({"name": "provider_updates", **provider_payload})
         emit_operate_event(

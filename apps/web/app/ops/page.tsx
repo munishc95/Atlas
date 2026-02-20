@@ -36,6 +36,8 @@ export default function OpsPage() {
   const [selectedEvent, setSelectedEvent] = useState<ApiOperateEvent | null>(null);
   const [selectedSwitch, setSelectedSwitch] = useState<ApiPolicySwitchEvent | null>(null);
   const [lastOperateSummary, setLastOperateSummary] = useState<ApiOperateRunSummary | null>(null);
+  const [renewRunId, setRenewRunId] = useState<string | null>(null);
+  const [renewPayload, setRenewPayload] = useState<Record<string, unknown> | null>(null);
 
   const statusQuery = useQuery({
     queryKey: qk.operateStatus,
@@ -274,6 +276,30 @@ export default function OpsPage() {
       toast.error(error.message || "Could not send webhook test");
     },
   });
+  const renewUpstoxTokenMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.upstoxTokenRenew({
+          source: "ops_manual_renew",
+        })
+      ).data,
+    onSuccess: (payload) => {
+      setRenewPayload(payload as unknown as Record<string, unknown>);
+      const run = payload.run;
+      setRenewRunId(run?.id ? String(run.id) : null);
+      const reusedTag = payload.reused ? " (reused pending request)" : "";
+      toast.success(`Upstox renew request submitted${reusedTag}`);
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestLatest });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestHistory(1, 10) });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not submit Upstox renew request");
+    },
+  });
 
   const stream = useJobStream(jobId);
   const streamSummary = stream.result?.summary as ApiOperateRunSummary | undefined;
@@ -314,6 +340,54 @@ export default function OpsPage() {
     streamSummary,
     stream.status,
   ]);
+
+  useEffect(() => {
+    if (!renewRunId) {
+      return;
+    }
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 12; // ~60s at 5s interval
+
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const [token, notifier] = await Promise.all([
+          atlasApi.upstoxTokenStatus(),
+          atlasApi.upstoxNotifierStatus(),
+        ]);
+        if (cancelled) {
+          return;
+        }
+        const connected = Boolean(token.data?.connected);
+        const expired = Boolean(token.data?.is_expired);
+        const latestRunStatus = String(notifier.data?.last_request_run?.status ?? "").toUpperCase();
+        if (connected && !expired && latestRunStatus === "APPROVED") {
+          toast.success("Upstox token approved and connected");
+          setRenewRunId(null);
+          queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+          queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
+          queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+          queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+          return;
+        }
+      } catch {
+        // best-effort polling only
+      }
+      if (cancelled || attempts >= maxAttempts) {
+        setRenewRunId(null);
+        return;
+      }
+      window.setTimeout(() => {
+        void poll();
+      }, 5_000);
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [queryClient, renewRunId]);
 
   const mode = String(healthQuery.data?.mode ?? statusQuery.data?.mode ?? "NORMAL");
   const latestQuality = healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
@@ -414,6 +488,29 @@ export default function OpsPage() {
   const upstoxNextAutoRenew = String(
     statusQuery.data?.next_upstox_auto_renew_ist ?? healthQuery.data?.next_upstox_auto_renew_ist ?? "-",
   );
+  const upstoxTokenExpiresAt = String(upstoxTokenStatus?.expires_at ?? "");
+  const upstoxExpiresInLabel = useMemo(() => {
+    if (!upstoxTokenExpiresAt) {
+      return "-";
+    }
+    const expiry = new Date(upstoxTokenExpiresAt);
+    if (Number.isNaN(expiry.getTime())) {
+      return "-";
+    }
+    const deltaMs = expiry.getTime() - Date.now();
+    if (deltaMs <= 0) {
+      return "expired";
+    }
+    const totalMinutes = Math.floor(deltaMs / 60_000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${hours}h ${minutes}m`;
+  }, [upstoxTokenExpiresAt]);
+  const providerStageStatus = String(
+    statusQuery.data?.provider_stage_status ?? healthQuery.data?.provider_stage_status ?? "-",
+  );
+  const renewRun = (renewPayload?.run as Record<string, unknown> | undefined) ?? null;
+  const renewRecommendedNotifierUrl = String(renewPayload?.recommended_notifier_url ?? "-");
   const showUpstoxReconnectBanner =
     providerEnabled &&
     providerKind === "UPSTOX" &&
@@ -557,6 +654,56 @@ export default function OpsPage() {
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Last verified token: {upstoxLastVerified}
           </p>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Token expires in: {upstoxExpiresInLabel}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Provider stage status: {providerStageStatus}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Renew request: {renewRunId ? "Polling approval" : "Idle"}
+          </p>
+        </div>
+        <div className="mt-3 rounded-xl border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold">Upstox Renewal</h3>
+              <p className="mt-1 text-xs text-muted">
+                Request a token renewal, then approve it in Upstox.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => renewUpstoxTokenMutation.mutate()}
+              disabled={renewUpstoxTokenMutation.isPending}
+              className="focus-ring rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white"
+            >
+              {renewUpstoxTokenMutation.isPending ? "Submitting..." : "Renew Upstox Token Now"}
+            </button>
+          </div>
+          {renewRun ? (
+            <div className="mt-3 space-y-2 text-xs text-muted">
+              <p>
+                Run: {String(renewRun.id ?? "-")} | status: {String(renewRun.status ?? "-")} | auth
+                expiry: {String(renewRun.authorization_expiry ?? "-")}
+              </p>
+              <p className="break-all">
+                Notifier URL: {renewRecommendedNotifierUrl}
+              </p>
+              <details className="rounded-lg border border-border px-2 py-2">
+                <summary className="cursor-pointer text-foreground">
+                  Approval instructions
+                </summary>
+                <ol className="mt-2 list-decimal space-y-1 pl-4">
+                  <li>Open Upstox My Apps and set the notifier URL.</li>
+                  <li>Approve the pending token request in Upstox.</li>
+                  <li>Return to Atlas and click Verify or wait for auto-refresh.</li>
+                </ol>
+              </details>
+            </div>
+          ) : null}
         </div>
         <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Last token request:{" "}

@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.db.models import (
     DataQualityReport,
     DataUpdateRun,
+    Job,
     OperateEvent,
     PaperRun,
     PaperState,
@@ -221,6 +222,26 @@ def _latest_provider_update_run(
     return session.exec(stmt).first()
 
 
+def _latest_operate_run_provider_stage_status(session: Session) -> str | None:
+    row = session.exec(
+        select(Job)
+        .where(Job.type == "operate_run")
+        .where(Job.status.in_(["SUCCEEDED", "DONE"]))
+        .order_by(Job.ended_at.desc(), Job.created_at.desc())
+        .limit(1)
+    ).first()
+    if row is None or not isinstance(row.result_json, dict):
+        return None
+    summary = row.result_json.get("summary")
+    if not isinstance(summary, dict):
+        return None
+    value = summary.get("provider_stage_status")
+    if value is None:
+        return None
+    token = str(value).strip()
+    return token or None
+
+
 def get_operate_health_summary(
     session: Session,
     settings: Settings,
@@ -351,7 +372,22 @@ def get_operate_health_summary(
             )
         ),
     )
+    upstox_auto_renew_lead_hours = max(
+        1,
+        int(
+            state_settings.get(
+                "upstox_auto_renew_lead_hours_before_open",
+                settings.upstox_auto_renew_lead_hours_before_open,
+            )
+        ),
+    )
     last_upstox_auto_renew_date = state_settings.get("operate_last_upstox_auto_renew_date")
+    provider_stage_on_token_invalid = str(
+        state_settings.get(
+            "operate_provider_stage_on_token_invalid",
+            settings.operate_provider_stage_on_token_invalid,
+        )
+    ).strip().upper() or "SKIP"
     next_upstox_auto_renew_ist = compute_next_scheduled_run_ist(
         auto_run_enabled=upstox_auto_renew_enabled,
         auto_run_time_ist=upstox_auto_renew_time_ist,
@@ -428,6 +464,8 @@ def get_operate_health_summary(
                     "ts": row.ts.isoformat(),
                 }
 
+    provider_stage_status = _latest_operate_run_provider_stage_status(session)
+
     return {
         "mode": mode,
         "mode_reason": mode_reason,
@@ -467,10 +505,13 @@ def get_operate_health_summary(
         "upstox_auto_renew_enabled": upstox_auto_renew_enabled,
         "upstox_auto_renew_time_ist": upstox_auto_renew_time_ist,
         "upstox_auto_renew_if_expires_within_hours": upstox_auto_renew_threshold,
+        "upstox_auto_renew_lead_hours_before_open": upstox_auto_renew_lead_hours,
+        "operate_provider_stage_on_token_invalid": provider_stage_on_token_invalid,
         "operate_last_upstox_auto_renew_date": last_upstox_auto_renew_date,
         "next_upstox_auto_renew_ist": next_upstox_auto_renew_ist,
         "upstox_token_expires_within_hours": expires_within_hours,
         "upstox_notifier_health": upstox_notifier_health,
+        "provider_stage_status": provider_stage_status,
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,
