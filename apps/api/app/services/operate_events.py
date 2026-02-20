@@ -32,15 +32,22 @@ IST_ZONE = ZoneInfo("Asia/Kolkata")
 
 
 def _serialize_token_request(row: UpstoxTokenRequestRun) -> dict[str, Any]:
+    status = str(row.status or "").upper()
+    if status == "REQUESTED":
+        status = "PENDING"
+    if status == "FAILED":
+        status = "ERROR"
     return {
         "id": row.id,
         "provider_kind": row.provider_kind,
-        "status": row.status,
+        "status": status,
         "requested_at": row.requested_at.isoformat() if row.requested_at is not None else None,
         "authorization_expiry": (
             row.authorization_expiry.isoformat() if row.authorization_expiry is not None else None
         ),
         "approved_at": row.approved_at.isoformat() if row.approved_at is not None else None,
+        "resolved_at": row.resolved_at.isoformat() if row.resolved_at is not None else None,
+        "resolution_reason": row.resolution_reason,
         "notifier_url": row.notifier_url,
         "client_id": row.client_id,
         "user_id": row.user_id,
@@ -221,6 +228,10 @@ def get_operate_health_summary(
     bundle_id: int | None = None,
     timeframe: str | None = None,
 ) -> dict[str, Any]:
+    # Local import avoids a circular dependency:
+    # operate_events -> upstox_token_request -> operate_events.
+    from app.services.upstox_token_request import notifier_health_payload
+
     latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
     latest_summary = (
         latest_run.summary_json
@@ -366,6 +377,7 @@ def get_operate_health_summary(
     except ValueError:
         expires_within_hours = None
     latest_token_request = _latest_token_request_run(session)
+    upstox_notifier_health = notifier_health_payload(session, settings=settings)
     today_ist = datetime.now(IST_ZONE).date()
     today_is_trading_day = is_trading_day(today_ist, segment=calendar_segment, settings=settings)
     today_session = calendar_get_session(today_ist, segment=calendar_segment, settings=settings)
@@ -458,6 +470,7 @@ def get_operate_health_summary(
         "operate_last_upstox_auto_renew_date": last_upstox_auto_renew_date,
         "next_upstox_auto_renew_ist": next_upstox_auto_renew_ist,
         "upstox_token_expires_within_hours": expires_within_hours,
+        "upstox_notifier_health": upstox_notifier_health,
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,

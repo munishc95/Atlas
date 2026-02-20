@@ -162,7 +162,11 @@ def test_notifier_unmatched_returns_200_and_warn_event(tmp_path: Path) -> None:
     with Session(engine) as session:
         events = session.exec(
             select(OperateEvent)
-            .where(OperateEvent.message == "upstox_notifier_unmatched")
+            .where(
+                OperateEvent.message.in_(
+                    ["upstox_notifier_unmatched", "upstox_notifier_client_id_mismatch"]
+                )
+            )
             .order_by(OperateEvent.ts.desc())
         ).all()
         assert len(events) >= 1
@@ -282,7 +286,7 @@ def test_token_request_history_endpoints(tmp_path: Path, monkeypatch) -> None:  
         latest_res = client.get("/api/providers/upstox/token/requests/latest")
         assert latest_res.status_code == 200
         latest_data = latest_res.json()["data"]
-        assert str(latest_data.get("status")) in {"REQUESTED", "APPROVED"}
+        assert str(latest_data.get("status")) in {"PENDING", "APPROVED", "REQUESTED"}
 
         history_res = client.get("/api/providers/upstox/token/requests/history?page=1&page_size=10")
         assert history_res.status_code == 200

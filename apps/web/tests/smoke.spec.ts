@@ -109,18 +109,6 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   expect(settingsRes.ok()).toBeTruthy();
 
-  const tokenRequestRes = await request.post(`${apiBase}/api/providers/upstox/token/request`, {
-    data: {
-      source: "e2e_smoke",
-    },
-  });
-  expect(tokenRequestRes.ok()).toBeTruthy();
-  const tokenRequestBody = await tokenRequestRes.json();
-  expect(String(tokenRequestBody?.data?.run?.status ?? "")).toMatch(/REQUESTED|APPROVED/);
-  const statusRes = await request.get(`${apiBase}/api/providers/upstox/token/status`);
-  expect(statusRes.ok()).toBeTruthy();
-  expect(Boolean((await statusRes.json())?.data?.connected)).toBeTruthy();
-
   const mappingDir = path.resolve(__dirname, "../../../data/inbox/_metadata");
   mkdirSync(mappingDir, { recursive: true });
   const mappingPath = path.resolve(mappingDir, "upstox_instruments.csv");
@@ -237,7 +225,11 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Providers - Upstox")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("Connected")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Request token now" }).click();
+  await expect(page.getByText("Connected")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Send Test Webhook" }).click();
+  await expect(page.getByText(/Health:/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Last callback:/i)).toBeVisible({ timeout: 20_000 });
 
   await page.goto("/ops");
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });

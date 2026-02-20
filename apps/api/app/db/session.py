@@ -150,6 +150,14 @@ def _ensure_indexes_and_columns() -> None:
     if not _has_column("autoevalrun", "recommended_ensemble_id"):
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE autoevalrun ADD COLUMN recommended_ensemble_id INTEGER"))
+    if not _has_column("upstoxtokenrequestrun", "resolved_at"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE upstoxtokenrequestrun ADD COLUMN resolved_at TIMESTAMP"))
+    if not _has_column("upstoxtokenrequestrun", "resolution_reason"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE upstoxtokenrequestrun ADD COLUMN resolution_reason VARCHAR(64)")
+            )
 
     with engine.begin() as conn:
         conn.execute(
@@ -461,6 +469,30 @@ def _ensure_indexes_and_columns() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_upstoxtokenrequestrun_authorization_expiry "
                 "ON upstoxtokenrequestrun (authorization_expiry)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxtokenrequestrun_resolved_at "
+                "ON upstoxtokenrequestrun (resolved_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxnotifierevent_received_at "
+                "ON upstoxnotifierevent (received_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_upstoxnotifierevent_client_received "
+                "ON upstoxnotifierevent (client_id, received_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_upstoxnotifierevent_digest "
+                "ON upstoxnotifierevent (payload_digest)"
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))

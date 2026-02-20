@@ -112,6 +112,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
                     "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
                     "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+                    "upstox_notifier_pending_no_callback_minutes": settings.upstox_notifier_pending_no_callback_minutes,
+                    "upstox_notifier_stale_hours": settings.upstox_notifier_stale_hours,
                     "operate_last_upstox_auto_renew_date": None,
                     "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
                     "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,

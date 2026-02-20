@@ -15,6 +15,7 @@ from app.db.session import engine
 from app.services.jobs import create_job
 from app.services.operate_events import emit_operate_event
 from app.services.upstox_auth import token_status as upstox_token_status
+from app.services.upstox_token_request import sweep_expired_request_runs
 from app.services.trading_calendar import (
     compute_next_scheduled_run_ist as calendar_next_scheduled_run_ist,
     get_session as calendar_get_session,
@@ -190,6 +191,7 @@ def _enqueue_job(
 def run_auto_operate_once(
     *, session: Session, queue: Queue, settings: Settings, now_ist: datetime | None = None
 ) -> bool:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
     context = _resolve_scheduler_context(session)
     state: PaperState | None = context["state"]
     if state is None:

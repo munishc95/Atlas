@@ -5,12 +5,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { DetailsDrawer } from "@/components/details-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import { qk } from "@/src/lib/query/keys";
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const [showNotifierEvents, setShowNotifierEvents] = useState(false);
   const settingsQuery = useQuery({
     queryKey: qk.settings,
     queryFn: async () => (await atlasApi.settings()).data,
@@ -47,6 +49,17 @@ export default function SettingsPage() {
   const upstoxTokenRequestHistoryQuery = useQuery({
     queryKey: qk.upstoxTokenRequestHistory(1, 10),
     queryFn: async () => (await atlasApi.upstoxTokenRequestHistory(1, 10)).data,
+    refetchInterval: 15_000,
+  });
+  const upstoxNotifierStatusQuery = useQuery({
+    queryKey: qk.upstoxNotifierStatus,
+    queryFn: async () => (await atlasApi.upstoxNotifierStatus()).data,
+    refetchInterval: 15_000,
+  });
+  const upstoxNotifierEventsQuery = useQuery({
+    queryKey: qk.upstoxNotifierEvents(20, 0),
+    queryFn: async () => (await atlasApi.upstoxNotifierEvents(20, 0)).data,
+    enabled: showNotifierEvents,
     refetchInterval: 15_000,
   });
 
@@ -168,6 +181,10 @@ export default function SettingsPage() {
         ),
         upstox_auto_renew_only_when_provider_enabled:
           form.upstox_auto_renew_only_when_provider_enabled === "true",
+        upstox_notifier_pending_no_callback_minutes: Number(
+          form.upstox_notifier_pending_no_callback_minutes,
+        ),
+        upstox_notifier_stale_hours: Number(form.upstox_notifier_stale_hours),
         coverage_missing_latest_warn_pct: Number(form.coverage_missing_latest_warn_pct),
         coverage_missing_latest_fail_pct: Number(form.coverage_missing_latest_fail_pct),
         coverage_inactive_after_missing_days: Number(form.coverage_inactive_after_missing_days),
@@ -254,6 +271,7 @@ export default function SettingsPage() {
     onSuccess: () => {
       toast.success("Upstox token verified");
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
     },
@@ -266,6 +284,7 @@ export default function SettingsPage() {
     onSuccess: () => {
       toast.success("Upstox disconnected");
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
     },
@@ -286,11 +305,30 @@ export default function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestLatest });
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenRequestHistory(1, 10) });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not request Upstox token");
+    },
+  });
+  const testUpstoxNotifierMutation = useMutation({
+    mutationFn: async () => (await atlasApi.upstoxNotifierTest()).data,
+    onSuccess: (payload) => {
+      toast.success(
+        payload?.result?.accepted
+          ? "Webhook test accepted"
+          : `Webhook test acknowledged (${String(payload?.result?.reason ?? "pending")})`,
+      );
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierEvents(20, 0) });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not run webhook test");
     },
   });
   const saveUpstoxAutoRenewMutation = useMutation({
@@ -304,6 +342,10 @@ export default function SettingsPage() {
           ),
           upstox_auto_renew_only_when_provider_enabled:
             form.upstox_auto_renew_only_when_provider_enabled === "true",
+          upstox_notifier_pending_no_callback_minutes: Number(
+            form.upstox_notifier_pending_no_callback_minutes || 15,
+          ),
+          upstox_notifier_stale_hours: Number(form.upstox_notifier_stale_hours || 72),
         })
       ).data,
     onSuccess: () => {
@@ -435,6 +477,14 @@ export default function SettingsPage() {
         key: "upstox_auto_renew_only_when_provider_enabled",
         label: "Upstox auto-renew only when provider updates enabled (true/false)",
       },
+      {
+        key: "upstox_notifier_pending_no_callback_minutes",
+        label: "Upstox notifier pending-no-callback threshold (minutes)",
+      },
+      {
+        key: "upstox_notifier_stale_hours",
+        label: "Upstox notifier stale threshold (hours)",
+      },
       { key: "coverage_missing_latest_warn_pct", label: "Coverage warning threshold (%)" },
       { key: "coverage_missing_latest_fail_pct", label: "Coverage fail threshold (%)" },
       {
@@ -489,9 +539,64 @@ export default function SettingsPage() {
   }, [upstoxStatusQuery.data?.expires_at]);
   const requestHistory = upstoxTokenRequestHistoryQuery.data ?? [];
   const latestRequestRun = upstoxTokenRequestLatestQuery.data ?? null;
+  const notifierStatus = upstoxNotifierStatusQuery.data ?? null;
+  const notifierHealth = notifierStatus?.webhook_health ?? null;
+  const recommendedNotifierUrl = String(notifierStatus?.recommended_notifier_url ?? "-");
+  const notifierStatusBadge = String(notifierHealth?.status ?? "NEVER_RECEIVED");
+
+  const copyNotifierUrl = async () => {
+    if (!recommendedNotifierUrl || recommendedNotifierUrl === "-") {
+      toast.error("Notifier URL is not available yet.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(recommendedNotifierUrl);
+      toast.success("Notifier URL copied");
+    } catch {
+      toast.error("Could not copy notifier URL");
+    }
+  };
 
   return (
     <div className="space-y-5">
+      <DetailsDrawer
+        open={showNotifierEvents}
+        title="Upstox Notifier Events"
+        onClose={() => setShowNotifierEvents(false)}
+      >
+        {upstoxNotifierEventsQuery.isLoading ? (
+          <LoadingState label="Loading notifier events" />
+        ) : upstoxNotifierEventsQuery.isError ? (
+          <ErrorState
+            title="Could not load notifier events"
+            action="Retry to fetch webhook deliveries."
+            onRetry={() => void upstoxNotifierEventsQuery.refetch()}
+          />
+        ) : (upstoxNotifierEventsQuery.data ?? []).length === 0 ? (
+          <EmptyState title="No webhook events yet" action="Use Send Test Webhook to verify." />
+        ) : (
+          <div className="space-y-2">
+            {(upstoxNotifierEventsQuery.data ?? []).map((event) => (
+              <div key={String(event.id)} className="rounded-xl border border-border p-3 text-xs">
+                <p className="font-medium text-foreground">
+                  {event.message_type ?? "unknown"} - {event.received_at ?? "-"}
+                </p>
+                <p className="mt-1 text-muted">
+                  client: {event.client_id ?? "-"} | run: {event.correlated_request_run_id ?? "-"}
+                </p>
+                <p className="mt-1 text-muted">
+                  resolution: {event.correlated_request_status ?? "-"} /{" "}
+                  {event.correlated_resolution_reason ?? "-"}
+                </p>
+                <pre className="mt-2 overflow-x-auto rounded-md bg-surface px-2 py-2 text-[11px] text-muted">
+                  {JSON.stringify(event.raw_payload_json ?? {}, null, 2)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </DetailsDrawer>
+
       <section className="card p-4">
         <h2 className="text-xl font-semibold">Settings</h2>
         <p className="mt-1 text-sm text-muted">
@@ -730,13 +835,87 @@ export default function SettingsPage() {
                 <p className="mt-1">2. You approve the request in Upstox.</p>
                 <p className="mt-1">3. Atlas receives the token via notifier webhook.</p>
               </details>
-              <div className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
-                <p>Latest notifier endpoint:</p>
-                <p className="mt-1 break-all">
-                  {latestRequestRun?.notifier_url ??
-                    "Run \"Request token now\" to generate a nonce-specific notifier URL."}
-                </p>
-              </div>
+            </div>
+            <div className="mt-4 rounded-xl border border-border p-3">
+              <h4 className="text-sm font-semibold">Notifier Webhook</h4>
+              {upstoxNotifierStatusQuery.isLoading ? (
+                <div className="mt-2">
+                  <LoadingState label="Loading webhook status" />
+                </div>
+              ) : upstoxNotifierStatusQuery.isError ? (
+                <div className="mt-2">
+                  <ErrorState
+                    title="Could not load webhook status"
+                    action="Retry to refresh notifier diagnostics."
+                    onRetry={() => void upstoxNotifierStatusQuery.refetch()}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <p className="rounded-xl border border-border px-3 py-2 text-xs">
+                      Health:{" "}
+                      <span
+                        className={`badge ${
+                          notifierStatusBadge === "OK"
+                            ? "bg-success/15 text-success"
+                            : notifierStatusBadge === "FAILING"
+                              ? "bg-danger/15 text-danger"
+                              : "bg-warning/15 text-warning"
+                        }`}
+                      >
+                        {notifierStatusBadge}
+                      </span>
+                    </p>
+                    <p className="rounded-xl border border-border px-3 py-2 text-xs">
+                      Last callback: {String(notifierHealth?.last_notifier_received_at ?? "-")}
+                    </p>
+                  </div>
+                  <div className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+                    <p>Recommended notifier URL (secret path):</p>
+                    <p className="mt-1 break-all">{recommendedNotifierUrl}</p>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyNotifierUrl();
+                      }}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      Copy URL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => testUpstoxNotifierMutation.mutate()}
+                      disabled={testUpstoxNotifierMutation.isPending}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      {testUpstoxNotifierMutation.isPending ? "Testing..." : "Send Test Webhook"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowNotifierEvents(true)}
+                      className="focus-ring rounded-xl border border-border px-3 py-2 text-xs text-muted"
+                    >
+                      View Events
+                    </button>
+                  </div>
+                  <details className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
+                    <summary className="cursor-pointer font-medium text-foreground">
+                      Troubleshooting
+                    </summary>
+                    <p className="mt-2">
+                      If callbacks do not arrive, run Atlas behind ngrok/cloudflared and configure
+                      the notifier URL in Upstox My Apps.
+                    </p>
+                    <p className="mt-1">
+                      Some domains may be blocked by upstream policies. If needed, test with a
+                      temporary public endpoint and contact Upstox support for allow-list guidance.
+                    </p>
+                  </details>
+                </>
+              )}
             </div>
             <div className="mt-4 rounded-xl border border-border p-3">
               <h4 className="text-sm font-semibold">Token Request History</h4>

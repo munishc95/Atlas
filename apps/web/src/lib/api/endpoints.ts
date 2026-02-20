@@ -25,6 +25,8 @@ import type {
   ApiMonthlyReport,
   ApiUpstoxMappingStatus,
   ApiUpstoxAuthUrl,
+  ApiUpstoxNotifierEvent,
+  ApiUpstoxNotifierStatus,
   ApiUpstoxTokenRequestRun,
   ApiUpstoxTokenStatus,
   ApiResearchCandidate,
@@ -179,6 +181,26 @@ export const atlasApi = {
   upstoxTokenRequestHistory: (page = 1, pageSize = 10) =>
     apiFetch<ApiUpstoxTokenRequestRun[]>(
       `/api/providers/upstox/token/requests/history?page=${page}&page_size=${pageSize}`,
+    ),
+  upstoxNotifierStatus: () =>
+    apiFetch<ApiUpstoxNotifierStatus>("/api/providers/upstox/notifier/status"),
+  upstoxNotifierTest: () =>
+    apiFetch<{
+      created_event_id?: string | null;
+      result?: {
+        matched?: boolean;
+        accepted?: boolean;
+        reason?: string | null;
+        run_id?: string | null;
+      };
+      webhook_health_after?: Record<string, unknown>;
+    }>("/api/providers/upstox/notifier/test", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  upstoxNotifierEvents: (limit = 20, offset = 0) =>
+    apiFetch<ApiUpstoxNotifierEvent[]>(
+      `/api/providers/upstox/notifier/events?limit=${limit}&offset=${offset}`,
     ),
   upstoxTokenVerify: () =>
     apiFetch<{

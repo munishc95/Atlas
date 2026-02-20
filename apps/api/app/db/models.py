@@ -105,10 +105,12 @@ class UpstoxTokenRequestRun(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, max_length=64)
     provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
-    status: str = Field(default="REQUESTED", index=True, max_length=16)
+    status: str = Field(default="PENDING", index=True, max_length=16)
     requested_at: datetime = Field(default_factory=utc_now)
     authorization_expiry: datetime | None = Field(default=None)
     approved_at: datetime | None = Field(default=None, index=True)
+    resolved_at: datetime | None = Field(default=None, index=True)
+    resolution_reason: str | None = Field(default=None, max_length=64, index=True)
     notifier_url: str | None = Field(default=None, max_length=2048)
     client_id: str = Field(default="", max_length=256)
     user_id: str | None = Field(default=None, max_length=128)
@@ -117,6 +119,31 @@ class UpstoxTokenRequestRun(SQLModel, table=True):
     metadata_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class UpstoxNotifierEvent(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_upstoxnotifierevent_client_received", "client_id", "received_at"),
+        Index("ix_upstoxnotifierevent_digest", "payload_digest", unique=True),
+    )
+
+    id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True, max_length=64)
+    received_at: datetime = Field(default_factory=utc_now, index=True)
+    client_id: str = Field(default="", index=True, max_length=256)
+    user_id: str | None = Field(default=None, max_length=128)
+    message_type: str | None = Field(default=None, max_length=64)
+    issued_at: datetime | None = Field(default=None, index=True)
+    expires_at: datetime | None = Field(default=None, index=True)
+    payload_digest: str = Field(default="", max_length=128)
+    raw_payload_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    headers_json: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    correlated_request_run_id: str | None = Field(
+        default=None,
+        foreign_key="upstoxtokenrequestrun.id",
+        index=True,
+        max_length=64,
+    )
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class DatasetBundle(SQLModel, table=True):

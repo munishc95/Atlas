@@ -333,6 +333,7 @@ export type ApiOperateStatus = {
   latest_provider_update?: ApiProviderUpdateRun | null;
   upstox_token_status?: ApiUpstoxTokenStatus | null;
   upstox_token_request_latest?: ApiUpstoxTokenRequestRun | null;
+  upstox_notifier_health?: ApiUpstoxNotifierHealth | null;
   upstox_auto_renew_enabled?: boolean;
   upstox_auto_renew_time_ist?: string;
   upstox_auto_renew_if_expires_within_hours?: number;
@@ -449,15 +450,20 @@ export type ApiUpstoxTokenStatus = {
     next_scheduled_run_ist?: string | null;
     expires_within_hours?: number | null;
   } | null;
+  token_request_latest?: ApiUpstoxTokenRequestRun | null;
+  notifier_health?: ApiUpstoxNotifierHealth | null;
 };
 
 export type ApiUpstoxTokenRequestRun = {
   id: string;
   provider_kind: string;
-  status: "REQUESTED" | "APPROVED" | "REJECTED" | "EXPIRED" | "FAILED";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "ERROR";
+  status_legacy?: "REQUESTED" | "APPROVED" | "REJECTED" | "EXPIRED" | "FAILED";
   requested_at?: string | null;
   authorization_expiry?: string | null;
   approved_at?: string | null;
+  resolved_at?: string | null;
+  resolution_reason?: string | null;
   notifier_url?: string | null;
   client_id?: string | null;
   user_id?: string | null;
@@ -465,6 +471,47 @@ export type ApiUpstoxTokenRequestRun = {
   last_error?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type ApiUpstoxNotifierHealth = {
+  last_notifier_received_at?: string | null;
+  status: "OK" | "NEVER_RECEIVED" | "STALE" | "FAILING";
+  pending_request?: {
+    id: string;
+    status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "ERROR";
+    requested_at?: string | null;
+    authorization_expiry?: string | null;
+    minutes_waiting?: number;
+  } | null;
+  pending_no_callback?: boolean;
+  pending_threshold_minutes?: number;
+};
+
+export type ApiUpstoxNotifierStatus = {
+  recommended_notifier_url: string;
+  legacy_notifier_url: string;
+  legacy_route_security?: "less_secure" | string;
+  secret_configured: boolean;
+  webhook_health: ApiUpstoxNotifierHealth;
+  last_request_run?: ApiUpstoxTokenRequestRun | null;
+  suggested_actions: string[];
+};
+
+export type ApiUpstoxNotifierEvent = {
+  id: string;
+  received_at?: string | null;
+  client_id?: string | null;
+  user_id?: string | null;
+  message_type?: string | null;
+  issued_at?: string | null;
+  expires_at?: string | null;
+  payload_digest?: string | null;
+  raw_payload_json?: Record<string, unknown>;
+  headers_json?: Record<string, unknown>;
+  correlated_request_run_id?: string | null;
+  correlated_request_status?: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "ERROR";
+  correlated_resolution_reason?: string | null;
+  created_at?: string | null;
 };
 
 export type ApiMappingImportRun = {
@@ -561,6 +608,7 @@ export type ApiOperateHealth = {
   latest_provider_update?: ApiProviderUpdateRun | null;
   upstox_token_status?: ApiUpstoxTokenStatus | null;
   upstox_token_request_latest?: ApiUpstoxTokenRequestRun | null;
+  upstox_notifier_health?: ApiUpstoxNotifierHealth | null;
   upstox_auto_renew_enabled?: boolean;
   upstox_auto_renew_time_ist?: string;
   upstox_auto_renew_if_expires_within_hours?: number;

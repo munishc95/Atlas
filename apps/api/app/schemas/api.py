@@ -303,6 +303,8 @@ class RuntimeSettingsRequest(BaseModel):
     upstox_auto_renew_time_ist: str | None = None
     upstox_auto_renew_if_expires_within_hours: int | None = None
     upstox_auto_renew_only_when_provider_enabled: bool | None = None
+    upstox_notifier_pending_no_callback_minutes: int | None = None
+    upstox_notifier_stale_hours: int | None = None
     operate_last_upstox_auto_renew_date: str | None = None
     coverage_missing_latest_warn_pct: float | None = None
     coverage_missing_latest_fail_pct: float | None = None

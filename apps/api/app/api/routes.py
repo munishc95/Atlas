@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
@@ -25,6 +25,7 @@ from app.db.models import (
     Strategy,
     Symbol,
     Trade,
+    UpstoxTokenRequestRun,
     WalkForwardFold,
     WalkForwardRun,
 )
@@ -125,12 +126,20 @@ from app.services.upstox_auth import (
 )
 from app.services.upstox_token_request import (
     auto_renew_meta,
+    ensure_test_pending_run,
+    get_notifier_secret,
+    legacy_notifier_endpoint,
     latest_request_run,
+    list_notifier_events,
     list_request_runs,
+    notifier_health_payload,
+    notifier_status_payload,
     process_notifier_payload,
     recommended_notifier_endpoint,
     request_token_run,
     serialize_request_run,
+    serialize_notifier_event,
+    sweep_expired_request_runs,
 )
 from app.services.data_quality import (
     get_latest_data_quality_report,
@@ -641,6 +650,7 @@ def upstox_token_status(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
     state = get_or_create_paper_state(session, settings)
     state_settings = dict(state.settings_json or {})
     status_payload = token_status(
@@ -648,11 +658,16 @@ def upstox_token_status(
         settings=settings,
         allow_env_fallback=True,
     )
+    latest = latest_request_run(session)
     status_payload["auto_renew"] = auto_renew_meta(
         settings=settings,
         state_settings=state_settings,
         expires_at=(status_payload.get("expires_at") if isinstance(status_payload, dict) else None),
     )
+    status_payload["token_request_latest"] = (
+        serialize_request_run(latest) if latest is not None else None
+    )
+    status_payload["notifier_health"] = notifier_health_payload(session, settings=settings)
     return _data(status_payload)
 
 
@@ -662,20 +677,27 @@ def upstox_token_request(
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
     run, deduped = request_token_run(
         session,
         settings=settings,
         correlation_id=None,
         source=str((payload.source if payload is not None else None) or "manual"),
     )
+    secret = get_notifier_secret(session, settings=settings)
     guidance = {
         "notifier_url_in_myapps": (
-            "Set your notifier webhook in Upstox My Apps to the recommended notifier endpoint."
+            "Set your notifier webhook in Upstox My Apps to the recommended notifier URL."
         ),
         "recommended_notifier_endpoint": recommended_notifier_endpoint(
             settings=settings,
+            session=session,
             nonce=str(run.correlation_nonce or ""),
+            include_nonce_query=False,
         ),
+        "legacy_notifier_endpoint": legacy_notifier_endpoint(settings=settings, nonce=None),
+        "nonce_hint": str(run.correlation_nonce or ""),
+        "secret_hint": ("set" if secret else "missing"),
     }
     return _data(
         {
@@ -686,29 +708,20 @@ def upstox_token_request(
     )
 
 
-@router.post("/providers/upstox/notifier")
-async def upstox_notifier(
-    request: Request,
-    nonce: str | None = Query(default=None),
-    session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
-    payload: dict[str, Any] | None = None
+async def _parse_upstox_notifier_payload(request: Request) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     try:
         raw = await request.body()
         if raw:
             parsed = json.loads(raw.decode("utf-8", errors="replace"))
-            payload = parsed if isinstance(parsed, dict) else None
+            if isinstance(parsed, dict):
+                payload = parsed
     except Exception:  # noqa: BLE001
-        payload = None
-    result = process_notifier_payload(
-        session,
-        settings=settings,
-        payload=(payload if isinstance(payload, dict) else {}),
-        nonce=nonce,
-        correlation_id=None,
-        source="webhook",
-    )
+        payload = {}
+    return payload
+
+
+def _notifier_response(result: dict[str, Any]) -> dict[str, Any]:
     return _data(
         {
             "acknowledged": True,
@@ -716,14 +729,188 @@ async def upstox_notifier(
             "accepted": bool(result.get("accepted")),
             "reason": result.get("reason"),
             "run_id": result.get("run_id"),
+            "event_id": result.get("event_id"),
+            "deduplicated": bool(result.get("deduplicated", False)),
         }
     )
 
 
-@router.get("/providers/upstox/token/requests/latest")
-def upstox_token_request_latest(
+@router.post("/providers/upstox/notifier")
+async def upstox_notifier_legacy(
+    request: Request,
+    nonce: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload = await _parse_upstox_notifier_payload(request)
+    try:
+        result = process_notifier_payload(
+            session,
+            settings=settings,
+            payload=payload,
+            nonce=nonce,
+            headers=dict(request.headers),
+            secret_valid=True,
+            correlation_id=None,
+            source="webhook_legacy",
+        )
+    except Exception:  # noqa: BLE001
+        result = {"matched": False, "accepted": False, "reason": "handler_error"}
+    return _notifier_response(result)
+
+
+@router.get("/providers/upstox/notifier/status")
+def upstox_notifier_status(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(notifier_status_payload(session, settings=settings))
+
+
+@router.post("/providers/upstox/notifier/test")
+def upstox_notifier_test(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    run = ensure_test_pending_run(session, settings=settings, source="notifier_test")
+    preserve_existing_credential = not bool(settings.fast_mode_enabled)
+    existing_credential = (
+        get_provider_credential(session) if preserve_existing_credential else None
+    )
+    credential_snapshot = None
+    if existing_credential is not None:
+        credential_snapshot = {
+            "access_token_encrypted": existing_credential.access_token_encrypted,
+            "user_id": existing_credential.user_id,
+            "issued_at": existing_credential.issued_at,
+            "expires_at": existing_credential.expires_at,
+            "last_verified_at": existing_credential.last_verified_at,
+            "metadata_json": dict(existing_credential.metadata_json or {}),
+        }
+    now_utc = (
+        datetime(2026, 1, 1, 3, 30, tzinfo=timezone.utc)
+        if settings.fast_mode_enabled
+        else datetime.now(timezone.utc)
+    )
+    payload = {
+        "client_id": str(settings.upstox_client_id or settings.upstox_api_key or "ATLAS_FASTMODE"),
+        "user_id": "ATLAS_TEST",
+        "access_token": build_fake_access_token(issued_at=now_utc),
+        "token_type": "Bearer",
+        "issued_at": now_utc.isoformat(),
+        "expires_at": (now_utc + timedelta(hours=12)).isoformat(),
+        "message_type": "access_token",
+    }
+    result = process_notifier_payload(
+        session,
+        settings=settings,
+        payload=payload,
+        nonce=str(run.correlation_nonce or ""),
+        headers={"x-atlas-notifier-test": "1"},
+        secret_valid=True,
+        correlation_id=None,
+        source="notifier_test",
+    )
+    if preserve_existing_credential:
+        current_credential = get_provider_credential(session)
+        if credential_snapshot is not None and current_credential is not None:
+            current_credential.access_token_encrypted = str(
+                credential_snapshot["access_token_encrypted"]
+            )
+            current_credential.user_id = (
+                str(credential_snapshot["user_id"])
+                if credential_snapshot["user_id"] is not None
+                else None
+            )
+            current_credential.issued_at = credential_snapshot["issued_at"]
+            current_credential.expires_at = credential_snapshot["expires_at"]
+            current_credential.last_verified_at = credential_snapshot["last_verified_at"]
+            current_credential.metadata_json = dict(
+                credential_snapshot["metadata_json"] or {}
+            )
+            session.add(current_credential)
+            session.commit()
+        elif credential_snapshot is None and current_credential is not None:
+            metadata = (
+                current_credential.metadata_json
+                if isinstance(current_credential.metadata_json, dict)
+                else {}
+            )
+            if str(metadata.get("source") or "").strip() == "notifier_test":
+                session.delete(current_credential)
+                session.commit()
+    health_after = notifier_health_payload(session, settings=settings)
+    return _data(
+        {
+            "created_event_id": result.get("event_id"),
+            "result": {
+                "matched": bool(result.get("matched")),
+                "accepted": bool(result.get("accepted")),
+                "reason": result.get("reason"),
+                "run_id": result.get("run_id"),
+            },
+            "webhook_health_after": health_after,
+        }
+    )
+
+
+@router.get("/providers/upstox/notifier/events")
+def upstox_notifier_events(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    rows, total = list_notifier_events(session, limit=limit, offset=offset)
+    run_ids = {
+        str(row.correlated_request_run_id)
+        for row in rows
+        if row.correlated_request_run_id is not None
+    }
+    run_lookup: dict[str, UpstoxTokenRequestRun] = {}
+    if run_ids:
+        run_rows = session.exec(
+            select(UpstoxTokenRequestRun).where(UpstoxTokenRequestRun.id.in_(run_ids))
+        ).all()
+        run_lookup = {str(row.id): row for row in run_rows}
+    return _data(
+        [serialize_notifier_event(row, run_lookup=run_lookup) for row in rows],
+        meta={"limit": limit, "offset": offset, "total": total},
+    )
+
+
+@router.post("/providers/upstox/notifier/{secret}")
+async def upstox_notifier_secure(
+    secret: str,
+    request: Request,
+    nonce: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload = await _parse_upstox_notifier_payload(request)
+    expected_secret = get_notifier_secret(session, settings=settings)
+    secret_valid = secrets.compare_digest(str(secret).strip(), str(expected_secret).strip())
+    try:
+        result = process_notifier_payload(
+            session,
+            settings=settings,
+            payload=payload,
+            nonce=nonce,
+            headers=dict(request.headers),
+            secret_valid=secret_valid,
+            correlation_id=None,
+            source="webhook_secret",
+        )
+    except Exception:  # noqa: BLE001
+        result = {"matched": False, "accepted": False, "reason": "handler_error"}
+    return _notifier_response(result)
+
+
+@router.get("/providers/upstox/token/requests/latest")
+def upstox_token_request_latest(
+    settings: Settings = Depends(get_settings),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
     row = latest_request_run(session)
     if row is None:
         raise APIError(code="not_found", message="No Upstox token requests found", status_code=404)
@@ -734,8 +921,10 @@ def upstox_token_request_latest(
 def upstox_token_request_history(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
+    settings: Settings = Depends(get_settings),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    sweep_expired_request_runs(session, settings=settings, correlation_id=None)
     rows, total = list_request_runs(
         session,
         page=page,
@@ -1801,6 +1990,7 @@ def operate_status(
             "latest_provider_update": health_summary.get("latest_provider_update"),
             "upstox_token_status": health_summary.get("upstox_token_status"),
             "upstox_token_request_latest": health_summary.get("upstox_token_request_latest"),
+            "upstox_notifier_health": health_summary.get("upstox_notifier_health"),
             "upstox_auto_renew_enabled": health_summary.get("upstox_auto_renew_enabled"),
             "upstox_auto_renew_time_ist": health_summary.get("upstox_auto_renew_time_ist"),
             "upstox_auto_renew_if_expires_within_hours": health_summary.get(
@@ -2283,6 +2473,8 @@ def get_settings_payload(
         "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
         "upstox_auto_renew_if_expires_within_hours": settings.upstox_auto_renew_if_expires_within_hours,
         "upstox_auto_renew_only_when_provider_enabled": settings.upstox_auto_renew_only_when_provider_enabled,
+        "upstox_notifier_pending_no_callback_minutes": settings.upstox_notifier_pending_no_callback_minutes,
+        "upstox_notifier_stale_hours": settings.upstox_notifier_stale_hours,
         "operate_last_upstox_auto_renew_date": None,
         "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
         "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,

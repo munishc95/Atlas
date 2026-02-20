@@ -261,6 +261,19 @@ export default function OpsPage() {
       toast.error(error.message || "Could not queue replay");
     },
   });
+  const testUpstoxNotifierMutation = useMutation({
+    mutationFn: async () => (await atlasApi.upstoxNotifierTest()).data,
+    onSuccess: () => {
+      toast.success("Webhook test sent");
+      queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
+      queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not send webhook test");
+    },
+  });
 
   const stream = useJobStream(jobId);
   const streamSummary = stream.result?.summary as ApiOperateRunSummary | undefined;
@@ -389,6 +402,12 @@ export default function OpsPage() {
     (statusQuery.data?.upstox_token_request_latest as Record<string, unknown> | null | undefined) ??
     (healthQuery.data?.upstox_token_request_latest as Record<string, unknown> | null | undefined) ??
     null;
+  const upstoxNotifierHealth =
+    (statusQuery.data?.upstox_notifier_health as Record<string, unknown> | null | undefined) ??
+    (healthQuery.data?.upstox_notifier_health as Record<string, unknown> | null | undefined) ??
+    null;
+  const upstoxPendingNoCallback = Boolean(upstoxNotifierHealth?.pending_no_callback);
+  const upstoxPendingRequest = (upstoxNotifierHealth?.pending_request as Record<string, unknown> | null | undefined) ?? null;
   const upstoxAutoRenewEnabled = Boolean(
     statusQuery.data?.upstox_auto_renew_enabled ?? healthQuery.data?.upstox_auto_renew_enabled ?? false,
   );
@@ -396,7 +415,9 @@ export default function OpsPage() {
     statusQuery.data?.next_upstox_auto_renew_ist ?? healthQuery.data?.next_upstox_auto_renew_ist ?? "-",
   );
   const showUpstoxReconnectBanner =
-    providerEnabled && providerKind === "UPSTOX" && (!upstoxTokenConnected || upstoxTokenExpired);
+    providerEnabled &&
+    providerKind === "UPSTOX" &&
+    (!upstoxTokenConnected || upstoxTokenExpired || upstoxPendingNoCallback);
   const lastJobDurations = (healthQuery.data?.last_job_durations ??
     statusQuery.data?.last_job_durations ??
     {}) as Record<string, { duration_seconds?: number; status?: string; ts?: string }>;
@@ -491,8 +512,13 @@ export default function OpsPage() {
         {showUpstoxReconnectBanner ? (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
             <span>
-              Provider updates are enabled but Upstox token is{" "}
-              {upstoxTokenExpired ? "expired" : "missing"}.
+              {upstoxPendingNoCallback
+                ? `Upstox token request is pending without callback (${String(
+                    upstoxPendingRequest?.minutes_waiting ?? "-",
+                  )} min).`
+                : `Provider updates are enabled but Upstox token is ${
+                    upstoxTokenExpired ? "expired" : "missing"
+                  }.`}
             </span>
             <Link
               href="/settings"
@@ -500,6 +526,16 @@ export default function OpsPage() {
             >
               Reconnect Upstox
             </Link>
+            {upstoxPendingNoCallback ? (
+              <button
+                type="button"
+                onClick={() => testUpstoxNotifierMutation.mutate()}
+                disabled={testUpstoxNotifierMutation.isPending}
+                className="focus-ring rounded-md border border-warning/40 px-2 py-1 text-warning"
+              >
+                {testUpstoxNotifierMutation.isPending ? "Testing..." : "Send Test Webhook"}
+              </button>
+            ) : null}
           </div>
         ) : null}
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

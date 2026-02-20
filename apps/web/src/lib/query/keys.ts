@@ -66,6 +66,9 @@ export const qk = {
   upstoxTokenRequestLatest: ["upstoxTokenRequestLatest"] as const,
   upstoxTokenRequestHistory: (page = 1, pageSize = 10) =>
     ["upstoxTokenRequestHistory", page, pageSize] as const,
+  upstoxNotifierStatus: ["upstoxNotifierStatus"] as const,
+  upstoxNotifierEvents: (limit = 20, offset = 0) =>
+    ["upstoxNotifierEvents", limit, offset] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>

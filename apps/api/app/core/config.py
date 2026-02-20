@@ -170,6 +170,9 @@ class Settings(BaseSettings):
     upstox_auto_renew_if_expires_within_hours: int = 12
     upstox_auto_renew_only_when_provider_enabled: bool = True
     upstox_notifier_base_url: str = "http://127.0.0.1:8000"
+    upstox_notifier_secret: str | None = None
+    upstox_notifier_pending_no_callback_minutes: int = 15
+    upstox_notifier_stale_hours: int = 72
     cred_key: str | None = None
     cred_key_path: str = "data/secrets/atlas_cred.key"
     optuna_storage_url: str | None = None
