@@ -372,6 +372,9 @@ export type ApiDataQualityReport = {
   coverage_pct: number;
   checked_symbols: number;
   total_symbols: number;
+  coverage_by_source_json?: Record<string, number>;
+  low_confidence_days_count?: number;
+  low_confidence_symbols_count?: number;
   created_at: string;
 };
 
@@ -397,6 +400,8 @@ export type ApiProviderUpdateRun = {
   bundle_id?: number | null;
   timeframe: string;
   provider_kind: string;
+  provider_mode?: string;
+  provider_priority_json?: string[];
   status: string;
   symbols_attempted: number;
   symbols_succeeded: number;
@@ -406,11 +411,70 @@ export type ApiProviderUpdateRun = {
   missing_days_detected: number;
   backfill_truncated: boolean;
   api_calls: number;
+  coverage_before_pct?: number;
+  coverage_after_pct?: number;
+  by_provider_count_json?: Record<string, number>;
+  confidence_distribution_json?: Record<string, number>;
+  continuity_met?: boolean;
   duration_seconds: number;
   warnings_json: Array<Record<string, unknown>>;
   errors_json: Array<Record<string, unknown>>;
   created_at: string;
   ended_at?: string | null;
+};
+
+export type ApiDataProvenanceEntry = {
+  id?: number | null;
+  symbol: string;
+  bar_date: string;
+  source_provider: string;
+  source_run_kind?: string;
+  source_run_id?: string | null;
+  confidence_score: number;
+  reason?: string | null;
+  metadata_json?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ApiDataProvenance = {
+  bundle_id: number;
+  timeframe: string;
+  symbol?: string | null;
+  from?: string | null;
+  to?: string | null;
+  entries: ApiDataProvenanceEntry[];
+  latest_day_summary?: {
+    latest_day?: string | null;
+    coverage_by_source_provider?: Record<string, number>;
+    low_confidence_days_count?: number;
+    low_confidence_symbols_count?: number;
+    latest_day_all_low_confidence?: boolean;
+  };
+};
+
+export type ApiProviderStatusItem = {
+  provider: string;
+  last_run_at?: string | null;
+  last_status?: string;
+  run_id?: number;
+  timeframe?: string;
+  bundle_id?: number | null;
+  bars_added?: number;
+  rows_ingested?: number;
+  enabled?: boolean;
+  token?: {
+    connected: boolean;
+    is_expired: boolean;
+    expires_at?: string | null;
+    last_verified_at?: string | null;
+  };
+  notes?: string[];
+};
+
+export type ApiProvidersStatus = {
+  providers: ApiProviderStatusItem[];
+  upstox_token_status?: Record<string, unknown>;
 };
 
 export type ApiUpstoxMappingStatus = {

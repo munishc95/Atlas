@@ -429,6 +429,9 @@ class DataQualityReport(SQLModel, table=True):
     issues_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     last_bar_ts: datetime | None = Field(default=None, index=True)
     coverage_pct: float = 100.0
+    coverage_by_source_json: dict[str, float] = Field(default_factory=dict, sa_column=Column(JSON))
+    low_confidence_days_count: int = 0
+    low_confidence_symbols_count: int = 0
     checked_symbols: int = 0
     total_symbols: int = 0
     created_at: datetime = Field(default_factory=utc_now)
@@ -493,6 +496,8 @@ class ProviderUpdateRun(SQLModel, table=True):
     bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
     timeframe: str = Field(default="1d", index=True, max_length=16)
     provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
+    provider_mode: str = Field(default="SINGLE", index=True, max_length=16)
+    provider_priority_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     status: str = Field(default="QUEUED", index=True, max_length=16)
     symbols_attempted: int = 0
     symbols_succeeded: int = 0
@@ -502,6 +507,11 @@ class ProviderUpdateRun(SQLModel, table=True):
     missing_days_detected: int = 0
     backfill_truncated: bool = False
     api_calls: int = 0
+    coverage_before_pct: float = 0.0
+    coverage_after_pct: float = 0.0
+    by_provider_count_json: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    confidence_distribution_json: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    continuity_met: bool = True
     duration_seconds: float = 0.0
     warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
@@ -526,6 +536,13 @@ class ProviderUpdateItem(SQLModel, table=True):
     provider_kind: str = Field(default="UPSTOX", index=True, max_length=32)
     symbol: str = Field(default="", index=True, max_length=64)
     status: str = Field(default="PENDING", index=True, max_length=16)
+    source_provider: str | None = Field(default=None, index=True, max_length=32)
+    confidence_score: float = 0.0
+    attempted_providers_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    selected_provider: str | None = Field(default=None, max_length=32)
+    days_filled: int = 0
+    days_remaining: int = 0
+    fallback_reason: str | None = Field(default=None, max_length=128)
     bars_added: int = 0
     bars_updated: int = 0
     api_calls: int = 0
@@ -536,6 +553,40 @@ class ProviderUpdateItem(SQLModel, table=True):
     warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class DataProvenance(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_dataprovenance_bundle_tf_symbol_day",
+            "bundle_id",
+            "timeframe",
+            "symbol",
+            "bar_date",
+            unique=True,
+        ),
+        Index(
+            "ix_dataprovenance_bundle_tf_day",
+            "bundle_id",
+            "timeframe",
+            "bar_date",
+        ),
+        Index("ix_dataprovenance_source_day", "source_provider", "bar_date"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    symbol: str = Field(default="", index=True, max_length=64)
+    bar_date: dt_date = Field(index=True)
+    source_provider: str = Field(default="INBOX", index=True, max_length=32)
+    source_run_kind: str = Field(default="data_updates", max_length=32)
+    source_run_id: str | None = Field(default=None, max_length=64, index=True)
+    confidence_score: float = 0.0
+    reason: str | None = Field(default=None, max_length=128)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
 
 
 class OperateEvent(SQLModel, table=True):

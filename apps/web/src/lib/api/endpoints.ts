@@ -12,9 +12,11 @@ import type {
   ApiPolicy,
   ApiDailyReport,
   ApiDataCoverage,
+  ApiDataProvenance,
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiProviderUpdateRun,
+  ApiProvidersStatus,
   ApiOperateEvent,
   ApiOperateHealth,
   ApiOperateRunSummary,
@@ -64,6 +66,8 @@ export const atlasApi = {
     bundle_id: number;
     timeframe?: string;
     provider_kind?: string;
+    provider_mode?: "SINGLE" | "FALLBACK";
+    provider_priority_order?: string[];
     max_symbols_per_run?: number;
     max_calls_per_run?: number;
     start?: string;
@@ -251,6 +255,24 @@ export const atlasApi = {
     apiFetch<ApiDataCoverage>(
       `/api/data/coverage?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&top_n=${topN}`,
     ),
+  dataProvenance: (params: {
+    bundle_id: number;
+    timeframe?: string;
+    symbol?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    search.set("bundle_id", String(params.bundle_id));
+    if (params.timeframe) search.set("timeframe", params.timeframe);
+    if (params.symbol) search.set("symbol", params.symbol);
+    if (params.from) search.set("from", params.from);
+    if (params.to) search.set("to", params.to);
+    if (typeof params.limit === "number") search.set("limit", String(params.limit));
+    return apiFetch<ApiDataProvenance>(`/api/data/provenance?${search.toString()}`);
+  },
+  providersStatus: () => apiFetch<ApiProvidersStatus>("/api/providers/status"),
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
       `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,

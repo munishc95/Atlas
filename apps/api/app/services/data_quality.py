@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date as dt_date
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import DataQualityReport
+from app.services.data_provenance import provenance_summary
 from app.services.data_store import DataStore
 from app.services.data_updates import STATUS_FAIL as COVERAGE_FAIL
 from app.services.data_updates import STATUS_WARN as COVERAGE_WARN
@@ -333,6 +335,20 @@ def run_data_quality_report(
     stale_limit = _stale_limit_minutes(tf, settings=settings, overrides=state)
     stale_severity = _stale_severity(settings=settings, overrides=state)
     segment = _calendar_segment(settings=settings, overrides=state)
+    operate_mode = str(state.get("operate_mode", settings.operate_mode)).strip().lower()
+    low_confidence_threshold = max(
+        0.0,
+        min(
+            100.0,
+            _safe_float(
+                state.get(
+                    "data_quality_confidence_fail_threshold",
+                    settings.data_quality_confidence_fail_threshold,
+                ),
+                settings.data_quality_confidence_fail_threshold,
+            ),
+        ),
+    )
 
     symbols = store.get_bundle_symbols(session, bundle_id, timeframe=tf)
     issues: list[dict[str, Any]] = []
@@ -434,6 +450,27 @@ def run_data_quality_report(
     coverage_status = str(coverage_summary.get("status", STATUS_OK)).upper()
     missing_symbols = [str(item) for item in coverage_summary.get("missing_symbols", [])]
     inactive_symbols = [str(item) for item in coverage_summary.get("inactive_symbols", [])]
+    latest_expected_day: dt_date | None = None
+    latest_expected_day_token = coverage_summary.get("expected_latest_trading_day")
+    if isinstance(latest_expected_day_token, str) and latest_expected_day_token:
+        try:
+            latest_expected_day = dt_date.fromisoformat(latest_expected_day_token)
+        except ValueError:
+            latest_expected_day = None
+    provenance = provenance_summary(
+        session,
+        bundle_id=bundle_id,
+        timeframe=tf,
+        latest_day=latest_expected_day,
+        low_conf_threshold=float(low_confidence_threshold),
+    )
+    coverage_by_source_provider = {
+        str(key): float(value)
+        for key, value in dict(provenance.get("coverage_by_source_provider", {})).items()
+    }
+    low_confidence_days_count = int(provenance.get("low_confidence_days_count", 0) or 0)
+    low_confidence_symbols_count = int(provenance.get("low_confidence_symbols_count", 0) or 0)
+    latest_day_all_low_confidence = bool(provenance.get("latest_day_all_low_confidence", False))
     if coverage_status == COVERAGE_FAIL:
         issues.append(
             _issue(
@@ -483,6 +520,39 @@ def run_data_quality_report(
                 },
             )
         )
+    if operate_mode == "live" and coverage_by_source_provider:
+        fallback_pct = sum(
+            float(value)
+            for key, value in coverage_by_source_provider.items()
+            if str(key).upper() not in {"UPSTOX"}
+        )
+        if fallback_pct > 0.0:
+            issues.append(
+                _issue(
+                    severity=STATUS_WARN,
+                    code="fallback_source_live_mode",
+                    message="Latest trading day includes fallback/inbox source data in live mode.",
+                    details={
+                        "coverage_by_source_provider": coverage_by_source_provider,
+                        "fallback_pct": round(float(fallback_pct), 3),
+                    },
+                )
+            )
+    if operate_mode == "live" and latest_day_all_low_confidence:
+        issues.append(
+            _issue(
+                severity=STATUS_FAIL,
+                code="low_confidence_latest_day",
+                message=(
+                    "Latest trading day confidence is below threshold for all symbols in live mode."
+                ),
+                details={
+                    "confidence_fail_threshold": float(low_confidence_threshold),
+                    "low_confidence_symbols_count": int(low_confidence_symbols_count),
+                    "coverage_by_source_provider": coverage_by_source_provider,
+                },
+            )
+        )
 
     has_fail = any(str(item.get("severity", "")).upper() == STATUS_FAIL for item in issues)
     has_warn = any(str(item.get("severity", "")).upper() == STATUS_WARN for item in issues)
@@ -499,6 +569,9 @@ def run_data_quality_report(
         coverage_pct=coverage_pct,
         checked_symbols=len(symbols),
         total_symbols=len(symbols),
+        coverage_by_source_json=coverage_by_source_provider,
+        low_confidence_days_count=int(low_confidence_days_count),
+        low_confidence_symbols_count=int(low_confidence_symbols_count),
     )
     session.add(report)
 

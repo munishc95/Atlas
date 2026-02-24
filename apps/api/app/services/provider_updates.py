@@ -13,7 +13,12 @@ from app.core.exceptions import APIError
 from app.db.models import DatasetBundle, ProviderUpdateItem, ProviderUpdateRun
 from app.providers.base import BaseProvider
 from app.providers.factory import build_provider
+from app.services.data_provenance import (
+    confidence_for_provider,
+    upsert_provenance_rows,
+)
 from app.services.data_store import DataStore
+from app.services.data_updates import compute_data_coverage
 from app.services.fast_mode import clamp_scan_symbols, fast_mode_enabled
 from app.services.operate_events import emit_operate_event
 from app.services.trading_calendar import is_trading_day, list_trading_days, previous_trading_day
@@ -91,6 +96,66 @@ def _provider_timeframes_from_settings(
     }
 
 
+def _provider_mode(*, settings: Settings, overrides: dict[str, Any]) -> str:
+    token = str(
+        overrides.get("data_updates_provider_mode", settings.data_updates_provider_mode)
+    ).strip().upper()
+    return "FALLBACK" if token == "FALLBACK" else "SINGLE"
+
+
+def _provider_priority(
+    *,
+    settings: Settings,
+    overrides: dict[str, Any],
+    primary_kind: str,
+) -> list[str]:
+    raw = overrides.get("data_updates_provider_priority_order")
+    values: list[str] = []
+    if isinstance(raw, list):
+        values = [str(item).strip().upper() for item in raw if str(item).strip()]
+    elif isinstance(raw, str) and raw.strip():
+        values = [str(item).strip().upper() for item in raw.split(",") if str(item).strip()]
+    if not values:
+        values = [str(item).strip().upper() for item in settings.data_updates_provider_priority_order]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in values:
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    primary = str(primary_kind or "UPSTOX").strip().upper()
+    if primary not in deduped:
+        deduped.insert(0, primary)
+    return deduped
+
+
+def _provider_enabled_for_token(
+    *,
+    token: str,
+    settings: Settings,
+    overrides: dict[str, Any],
+) -> bool:
+    provider = str(token).strip().upper()
+    if provider == "NSE_EOD":
+        return bool(
+            overrides.get(
+                "data_updates_provider_nse_eod_enabled",
+                settings.data_updates_provider_nse_eod_enabled,
+            )
+        )
+    return True
+
+
+def _confidence_bucket(score: float) -> str:
+    value = float(score)
+    if value >= 85.0:
+        return "high"
+    if value >= 65.0:
+        return "medium"
+    return "low"
+
+
 def _normalize_frame(frame: pd.DataFrame) -> pd.DataFrame:
     base = frame.copy()
     if base.empty:
@@ -151,7 +216,7 @@ def _merge_ohlcv(
 
 def _resolve_symbols(
     *,
-    provider: BaseProvider,
+    provider: BaseProvider | None,
     store: DataStore,
     session: Session,
     bundle_id: int,
@@ -159,7 +224,9 @@ def _resolve_symbols(
     max_symbols: int,
     seed: int,
 ) -> tuple[list[str], bool]:
-    symbols = provider.list_symbols(bundle_id)
+    symbols: list[str] = []
+    if provider is not None:
+        symbols = provider.list_symbols(bundle_id)
     if not symbols:
         symbols = store.get_bundle_symbols(session, int(bundle_id), timeframe=timeframe)
     deduped = sorted({str(item).upper().strip() for item in symbols if str(item).strip()})
@@ -337,6 +404,7 @@ def run_provider_updates(
     end: datetime | None = None,
     correlation_id: str | None = None,
     provider: BaseProvider | None = None,
+    provider_registry: dict[str, BaseProvider] | None = None,
 ) -> ProviderUpdateRun:
     bundle = session.get(DatasetBundle, int(bundle_id))
     if bundle is None:
@@ -360,12 +428,30 @@ def run_provider_updates(
         .strip()
         .upper()
     )
+    mode = _provider_mode(settings=settings, overrides=state)
+    priority_order = _provider_priority(
+        settings=settings,
+        overrides=state,
+        primary_kind=kind,
+    )
     allowed_timeframes = _provider_timeframes_from_settings(settings=settings, overrides=state)
+    coverage_before = compute_data_coverage(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=int(bundle_id),
+        timeframe=tf,
+        overrides=state,
+        top_n=25,
+    )
     run = ProviderUpdateRun(
         bundle_id=int(bundle.id) if bundle.id is not None else None,
         timeframe=tf,
         provider_kind=kind,
+        provider_mode=mode,
+        provider_priority_json=list(priority_order),
         status="RUNNING",
+        coverage_before_pct=float(coverage_before.get("coverage_pct", 0.0)),
     )
     session.add(run)
     session.commit()
@@ -406,7 +492,11 @@ def run_provider_updates(
         session.refresh(run)
         return run
 
-    if kind == "UPSTOX" and (provider is None or str(getattr(provider, "kind", "")).strip().upper() == "UPSTOX"):
+    if (
+        mode == "SINGLE"
+        and kind == "UPSTOX"
+        and (provider is None or str(getattr(provider, "kind", "")).strip().upper() == "UPSTOX")
+    ):
         upstox_status = token_status(
             session,
             settings=settings,
@@ -480,20 +570,70 @@ def run_provider_updates(
                     "details": {"expires_at": upstox_status.get("expires_at")},
                 }
             )
-
-    selected_provider = provider or build_provider(
-        kind=kind,
-        session=session,
-        settings=settings,
-        store=store,
-    )
-    supported = {item.lower() for item in selected_provider.supports_timeframes()}
-    if tf not in supported:
-        raise APIError(
-            code="unsupported_provider_timeframe",
-            message=f"{kind} provider does not support timeframe '{tf}'.",
-            details={"supported_timeframes": sorted(selected_provider.supports_timeframes())},
+    elif mode == "FALLBACK" and "UPSTOX" in priority_order:
+        upstox_status = token_status(
+            session,
+            settings=settings,
+            allow_env_fallback=True,
         )
+        if not bool(upstox_status.get("connected")):
+            warnings.append(
+                {
+                    "code": "primary_token_invalid",
+                    "message": "Primary provider token missing; fallback providers may be used.",
+                    "details": {"provider_kind": "UPSTOX", "reason": "provider_token_missing"},
+                }
+            )
+        elif bool(upstox_status.get("is_expired")):
+            warnings.append(
+                {
+                    "code": "primary_token_invalid",
+                    "message": "Primary provider token expired; fallback providers may be used.",
+                    "details": {
+                        "provider_kind": "UPSTOX",
+                        "reason": "provider_token_expired",
+                        "expires_at": upstox_status.get("expires_at"),
+                    },
+                }
+            )
+
+    provider_cache: dict[str, BaseProvider] = {}
+    if isinstance(provider_registry, dict):
+        for token, instance in provider_registry.items():
+            provider_cache[str(token).strip().upper()] = instance
+    if provider is not None:
+        provider_cache[str(getattr(provider, "kind", kind)).strip().upper()] = provider
+
+    def _get_provider(token: str) -> BaseProvider:
+        provider_token = str(token).strip().upper()
+        cached = provider_cache.get(provider_token)
+        if cached is not None:
+            return cached
+        built = build_provider(
+            kind=provider_token,
+            session=session,
+            settings=settings,
+            store=store,
+        )
+        provider_cache[provider_token] = built
+        return built
+
+    def _provider_supports_timeframe(provider_token: str) -> bool:
+        if provider_token == "INBOX":
+            return False
+        if not _provider_enabled_for_token(token=provider_token, settings=settings, overrides=state):
+            return False
+        provider_instance = _get_provider(provider_token)
+        return tf in {item.lower() for item in provider_instance.supports_timeframes()}
+
+    if mode == "SINGLE":
+        if not _provider_supports_timeframe(kind):
+            provider_instance = _get_provider(kind)
+            raise APIError(
+                code="unsupported_provider_timeframe",
+                message=f"{kind} provider does not support timeframe '{tf}'.",
+                details={"supported_timeframes": sorted(provider_instance.supports_timeframes())},
+            )
 
     requested_symbols = (
         int(max_symbols_per_run)
@@ -560,8 +700,20 @@ def run_provider_updates(
 
     seed_default = settings.fast_mode_seed if fast_mode_enabled(settings) else 7
     seed = _safe_int(state.get("seed"), seed_default)
+    resolver_provider: BaseProvider | None = None
+    if mode == "SINGLE":
+        resolver_provider = _get_provider(kind)
+    else:
+        for token in priority_order:
+            if token == "INBOX":
+                continue
+            if not _provider_enabled_for_token(token=token, settings=settings, overrides=state):
+                continue
+            if _provider_supports_timeframe(token):
+                resolver_provider = _get_provider(token)
+                break
     symbols, scan_truncated = _resolve_symbols(
-        provider=selected_provider,
+        provider=resolver_provider,
         store=store,
         session=session,
         bundle_id=int(bundle_id),
@@ -605,7 +757,37 @@ def run_provider_updates(
     start_ts = start_ts.astimezone(UTC) if start_ts.tzinfo else start_ts.replace(tzinfo=UTC)
     end_ts = end_ts.astimezone(UTC) if end_ts.tzinfo else end_ts.replace(tzinfo=UTC)
 
-    selected_provider.reset_counters()
+    active_provider_order: list[str]
+    if mode == "SINGLE":
+        active_provider_order = [kind]
+    else:
+        active_provider_order = []
+        for token in priority_order:
+            if token == "INBOX":
+                continue
+            if not _provider_enabled_for_token(token=token, settings=settings, overrides=state):
+                continue
+            if _provider_supports_timeframe(token):
+                active_provider_order.append(token)
+        if not active_provider_order:
+            warnings.append(
+                {
+                    "code": "no_enabled_fallback_providers",
+                    "message": "No enabled providers support this timeframe for fallback mode.",
+                }
+            )
+            run.status = "SUCCEEDED"
+            run.symbols_attempted = int(len(symbols))
+            run.warnings_json = warnings
+            run.ended_at = datetime.now(UTC)
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            return run
+
+    for provider_token in active_provider_order:
+        _get_provider(provider_token).reset_counters()
+
     symbols_succeeded = 0
     symbols_failed = 0
     bars_added_total = 0
@@ -614,54 +796,12 @@ def run_provider_updates(
     missing_days_total = 0
     repaired_days_total = 0
     backfill_truncated_any = False
+    by_provider_day_counts: dict[str, int] = {}
+    confidence_distribution: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
     started_at = datetime.now(UTC)
-
-    missing_map_symbols = selected_provider.missing_mapped_symbols(symbols)
-    if missing_map_symbols:
-        warnings.append(
-            {
-                "code": "missing_instrument_map",
-                "message": f"Missing provider mapping for {len(missing_map_symbols)} symbol(s).",
-                "details": {"symbols": sorted(missing_map_symbols)[:50]},
-            }
-        )
-        emit_operate_event(
-            session,
-            severity="WARN",
-            category="DATA",
-            message="provider_updates_missing_instrument_map",
-            details={
-                "run_id": run.id,
-                "provider_kind": kind,
-                "bundle_id": bundle_id,
-                "timeframe": tf,
-                "missing_map_count": len(missing_map_symbols),
-                "symbols": sorted(missing_map_symbols)[:50],
-            },
-            correlation_id=correlation_id,
-        )
-        for symbol in sorted(missing_map_symbols):
-            session.add(
-                ProviderUpdateItem(
-                    run_id=int(run.id or 0),
-                    bundle_id=int(bundle_id),
-                    timeframe=tf,
-                    provider_kind=kind,
-                    symbol=symbol,
-                    status="SKIPPED",
-                    warnings_json=[
-                        {
-                            "code": "missing_instrument_map",
-                            "message": "Symbol skipped due to missing instrument mapping.",
-                        }
-                    ],
-                )
-            )
 
     for symbol in symbols:
         symbol_up = str(symbol).upper()
-        if symbol_up in missing_map_symbols:
-            continue
         if api_calls_consumed >= call_cap:
             warnings.append(
                 {
@@ -696,6 +836,11 @@ def run_provider_updates(
         bars_added = 0
         bars_updated = 0
         last_bar_after = last_bar_before
+        attempted_providers: list[str] = []
+        selected_source_provider: str | None = None
+        fallback_reason: str | None = None
+        days_filled = 0
+        symbol_api_calls = 0
         item_start = datetime.now(UTC)
         if plan["fetch_start"] is None or plan["fetch_end"] is None:
             status = "SKIPPED"
@@ -710,71 +855,243 @@ def run_provider_updates(
                     "details": {"selected_days": plan.get("selected_days", [])[:20]},
                 }
             )
-        calls_before = selected_provider.api_calls_made
+        working = existing.copy()
+        remaining_days = {
+            date.fromisoformat(day)
+            for day in list(plan.get("selected_days", []))
+            if isinstance(day, str) and day
+        }
         if status != "SKIPPED":
-            try:
-                fetched = selected_provider.fetch_ohlc(
-                    [symbol_up],
-                    timeframe=tf,
-                    start=plan["fetch_start"],
-                    end=plan["fetch_end"],
-                )
-                incoming = fetched.get(symbol_up, pd.DataFrame())
+            for provider_index, provider_token in enumerate(active_provider_order):
+                if api_calls_consumed >= call_cap:
+                    warnings.append(
+                        {
+                            "code": "provider_call_cap_reached",
+                            "message": "Provider update call cap reached; remaining provider attempts skipped.",
+                            "details": {"max_calls_per_run": call_cap},
+                        }
+                    )
+                    break
+                provider_instance = _get_provider(provider_token)
+                attempted_providers.append(provider_token)
+                if symbol_up in provider_instance.missing_mapped_symbols([symbol_up]):
+                    if provider_index == 0:
+                        fallback_reason = "symbol_missing_map"
+                    symbol_warnings.append(
+                        {
+                            "code": "missing_instrument_map",
+                            "message": f"{provider_token} missing map for {symbol_up}.",
+                        }
+                    )
+                    continue
+                if provider_token == "UPSTOX":
+                    token_meta = token_status(session, settings=settings, allow_env_fallback=True)
+                    if not bool(token_meta.get("connected")):
+                        if provider_index == 0:
+                            fallback_reason = "primary_token_invalid"
+                        symbol_warnings.append(
+                            {
+                                "code": "provider_token_missing",
+                                "message": "Upstox token missing; trying next provider.",
+                            }
+                        )
+                        continue
+                    if bool(token_meta.get("is_expired")):
+                        if provider_index == 0:
+                            fallback_reason = "primary_token_invalid"
+                        symbol_warnings.append(
+                            {
+                                "code": "provider_token_expired",
+                                "message": "Upstox token expired; trying next provider.",
+                                "details": {"expires_at": token_meta.get("expires_at")},
+                            }
+                        )
+                        continue
+                calls_before = provider_instance.api_calls_made
+                try:
+                    fetched = provider_instance.fetch_ohlc(
+                        [symbol_up],
+                        timeframe=tf,
+                        start=plan["fetch_start"],
+                        end=plan["fetch_end"],
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if provider_index == 0:
+                        fallback_reason = "primary_fetch_failed"
+                    symbol_warnings.append(
+                        {
+                            "code": "provider_fetch_failed",
+                            "message": f"{provider_token} fetch failed: {exc}",
+                        }
+                    )
+                    calls_delta = max(0, provider_instance.api_calls_made - calls_before)
+                    api_calls_consumed += calls_delta
+                    api_calls_consumed = min(api_calls_consumed, call_cap)
+                    symbol_api_calls += int(calls_delta)
+                    continue
+                calls_delta = max(0, provider_instance.api_calls_made - calls_before)
+                api_calls_consumed += calls_delta
+                api_calls_consumed = min(api_calls_consumed, call_cap)
+                symbol_api_calls += int(calls_delta)
+
+                incoming = _normalize_frame(fetched.get(symbol_up, pd.DataFrame()))
                 if tf == "4h_ish":
                     incoming, resample_warnings = _enforce_4h_guardrails(
                         incoming,
                         allow_partial=allow_partial_4h,
                     )
                     symbol_warnings.extend(resample_warnings)
-                merged, bars_added, bars_updated = _merge_ohlcv(existing, incoming)
-                if bars_added > 0 or bars_updated > 0:
-                    instrument = store.find_instrument(session, symbol=symbol_up)
-                    kind_for_save = (
-                        instrument.kind if instrument is not None else _infer_instrument_kind(symbol_up)
-                    )
-                    lot_size = instrument.lot_size if instrument is not None else 1
-                    underlying = instrument.underlying if instrument is not None else None
-                    tick_size = instrument.tick_size if instrument is not None else 0.05
-                    store.save_ohlcv(
-                        session=session,
-                        symbol=symbol_up,
-                        timeframe=tf,
-                        frame=merged,
-                        provider=f"{bundle.provider}-provider-{kind.lower()}",
-                        checksum=None,
-                        instrument_kind=kind_for_save,
-                        underlying=underlying,
-                        lot_size=lot_size,
-                        tick_size=float(tick_size),
-                        bundle_id=int(bundle_id),
-                    )
-                    after = store.load_ohlcv(symbol=symbol_up, timeframe=tf)
-                    if not after.empty:
-                        ts_after = pd.to_datetime(after["datetime"], utc=True, errors="coerce").max()
-                        if pd.notna(ts_after):
-                            last_bar_after = ts_after.to_pydatetime()
+                if incoming.empty:
+                    if provider_index == 0:
+                        fallback_reason = "range_missing_primary"
+                    continue
+
+                incoming["_ist_day"] = (
+                    pd.to_datetime(incoming["datetime"], utc=True).dt.tz_convert(IST_ZONE).dt.date
+                )
+                if remaining_days:
+                    filtered_incoming = incoming[incoming["_ist_day"].isin(remaining_days)]
+                    if filtered_incoming.empty and mode == "SINGLE":
+                        # In single-provider mode accept out-of-plan rows as best-effort
+                        # because some providers return broader/cached windows.
+                        symbol_warnings.append(
+                            {
+                                "code": "provider_out_of_plan_rows_used",
+                                "message": (
+                                    f"{provider_token} returned rows outside planned range; "
+                                    "accepted in SINGLE mode."
+                                ),
+                            }
+                        )
+                    else:
+                        incoming = filtered_incoming
+                if incoming.empty:
+                    if provider_index == 0:
+                        fallback_reason = "range_missing_primary"
+                    continue
+
+                filled_days = sorted({day for day in incoming["_ist_day"].tolist() if isinstance(day, date)})
+                incoming = incoming.drop(columns=["_ist_day"])
+                merged, add_delta, upd_delta = _merge_ohlcv(working, incoming)
+                working = merged
+                bars_added += int(max(0, add_delta))
+                bars_updated += int(max(0, upd_delta))
+                days_filled += len(filled_days)
+                selected_source_provider = selected_source_provider or provider_token
+                conf = confidence_for_provider(provider=provider_token, settings=settings, overrides=state)
+                for filled_day in filled_days:
+                    if filled_day in remaining_days:
+                        remaining_days.remove(filled_day)
+                by_provider_day_counts[provider_token] = by_provider_day_counts.get(provider_token, 0) + len(
+                    filled_days
+                )
+                confidence_distribution[_confidence_bucket(conf)] = confidence_distribution.get(
+                    _confidence_bucket(conf), 0
+                ) + len(filled_days)
+                upsert_provenance_rows(
+                    session,
+                    bundle_id=int(bundle_id),
+                    timeframe=tf,
+                    symbol=symbol_up,
+                    bar_dates=filled_days,
+                    source_provider=provider_token,
+                    source_run_kind="provider_updates",
+                    source_run_id=str(run.id) if run.id is not None else None,
+                    confidence_score=conf,
+                    reason=fallback_reason,
+                    metadata={
+                        "provider_mode": mode,
+                        "attempted_providers": attempted_providers,
+                    },
+                )
+                if not remaining_days:
+                    break
+
+            if selected_source_provider is None:
+                if mode == "SINGLE":
+                    warning_codes = {
+                        str(item.get("code", ""))
+                        for item in symbol_warnings
+                        if isinstance(item, dict)
+                    }
+                    if warning_codes.intersection(
+                        {"missing_instrument_map", "provider_token_missing", "provider_token_expired"}
+                    ):
+                        status = "SKIPPED"
+                    else:
+                        status = "FAILED"
+                        symbol_errors.append(
+                            {
+                                "code": "provider_fetch_failed",
+                                "message": "Provider fetch returned no bars for required range.",
+                            }
+                        )
                 else:
                     status = "SKIPPED"
+                    if fallback_reason is None:
+                        fallback_reason = "range_missing_primary"
                     symbol_warnings.append(
                         {
-                            "code": "no_new_rows",
-                            "message": "Provider fetch returned no new or corrected bars.",
+                            "code": "continuity_not_met",
+                            "message": "Fallback providers could not fully cover missing range.",
+                            "details": {"days_remaining": len(remaining_days)},
                         }
                     )
-            except Exception as exc:  # noqa: BLE001
-                status = "FAILED"
-                symbol_errors.append({"code": "provider_fetch_failed", "message": str(exc)})
-                errors.extend(symbol_errors)
+            elif bars_added > 0 or bars_updated > 0:
+                instrument = store.find_instrument(session, symbol=symbol_up)
+                kind_for_save = (
+                    instrument.kind if instrument is not None else _infer_instrument_kind(symbol_up)
+                )
+                lot_size = instrument.lot_size if instrument is not None else 1
+                underlying = instrument.underlying if instrument is not None else None
+                tick_size = instrument.tick_size if instrument is not None else 0.05
+                source_label = str(selected_source_provider or kind).lower()
+                store.save_ohlcv(
+                    session=session,
+                    symbol=symbol_up,
+                    timeframe=tf,
+                    frame=working,
+                    provider=f"{bundle.provider}-provider-{source_label}",
+                    checksum=None,
+                    instrument_kind=kind_for_save,
+                    underlying=underlying,
+                    lot_size=lot_size,
+                    tick_size=float(tick_size),
+                    bundle_id=int(bundle_id),
+                )
+                after = store.load_ohlcv(symbol=symbol_up, timeframe=tf)
+                if not after.empty:
+                    ts_after = pd.to_datetime(after["datetime"], utc=True, errors="coerce").max()
+                    if pd.notna(ts_after):
+                        last_bar_after = ts_after.to_pydatetime()
+                if mode == "FALLBACK" and selected_source_provider != active_provider_order[0]:
+                    fallback_reason = fallback_reason or "range_missing_primary"
+            else:
+                status = "SKIPPED"
+                symbol_warnings.append(
+                    {
+                        "code": "no_new_rows",
+                        "message": "Provider fetch returned no new or corrected bars.",
+                    }
+                )
 
-        calls_delta = max(0, selected_provider.api_calls_made - calls_before)
-        api_calls_consumed += calls_delta
-        api_calls_consumed = min(api_calls_consumed, call_cap)
+        if symbol_errors:
+            errors.extend(symbol_errors)
         bars_added_total += int(max(0, bars_added))
         bars_updated_total += int(max(0, bars_updated))
         if status == "FAILED":
             symbols_failed += 1
         else:
             symbols_succeeded += 1
+        confidence_score = (
+            confidence_for_provider(
+                provider=selected_source_provider,
+                settings=settings,
+                overrides=state,
+            )
+            if selected_source_provider is not None
+            else 0.0
+        )
         session.add(
             ProviderUpdateItem(
                 run_id=int(run.id or 0),
@@ -783,9 +1100,16 @@ def run_provider_updates(
                 provider_kind=kind,
                 symbol=symbol_up,
                 status=status,
+                source_provider=selected_source_provider,
+                confidence_score=float(confidence_score),
+                attempted_providers_json=list(attempted_providers),
+                selected_provider=selected_source_provider,
+                days_filled=int(days_filled),
+                days_remaining=int(len(remaining_days)),
+                fallback_reason=fallback_reason,
                 bars_added=int(max(0, bars_added)),
                 bars_updated=int(max(0, bars_updated)),
-                api_calls=int(calls_delta),
+                api_calls=int(symbol_api_calls),
                 start_ts=item_start,
                 end_ts=datetime.now(UTC),
                 last_bar_before=last_bar_before,
@@ -806,6 +1130,23 @@ def run_provider_updates(
     run.missing_days_detected = int(missing_days_total)
     run.backfill_truncated = bool(backfill_truncated_any)
     run.api_calls = int(api_calls_consumed)
+    coverage_after = compute_data_coverage(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=int(bundle_id),
+        timeframe=tf,
+        overrides=state,
+        top_n=25,
+    )
+    run.coverage_after_pct = float(coverage_after.get("coverage_pct", 0.0))
+    run.by_provider_count_json = {
+        key: int(value) for key, value in sorted(by_provider_day_counts.items())
+    }
+    run.confidence_distribution_json = {
+        key: int(value) for key, value in sorted(confidence_distribution.items())
+    }
+    run.continuity_met = bool(float(coverage_after.get("missing_pct", 0.0)) <= float(coverage_before.get("missing_pct", 0.0)))
     run.duration_seconds = round((datetime.now(UTC) - started_at).total_seconds(), 3)
     run.warnings_json = warnings
     run.errors_json = errors
@@ -826,6 +1167,12 @@ def run_provider_updates(
         "repaired_days_used": run.repaired_days_used,
         "backfill_truncated": run.backfill_truncated,
         "api_calls": run.api_calls,
+        "coverage_before_pct": run.coverage_before_pct,
+        "coverage_after_pct": run.coverage_after_pct,
+        "provider_mode": run.provider_mode,
+        "by_provider_count": run.by_provider_count_json,
+        "confidence_distribution": run.confidence_distribution_json,
+        "continuity_met": run.continuity_met,
     }
     if run.status == "FAILED":
         emit_operate_event(

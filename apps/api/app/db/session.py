@@ -139,10 +139,107 @@ def _ensure_indexes_and_columns() -> None:
                     f"ALTER TABLE providerupdaterun ADD COLUMN backfill_truncated {bool_type} DEFAULT 0"
                 )
             )
+    if not _has_column("providerupdaterun", "provider_mode"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdaterun ADD COLUMN provider_mode VARCHAR(16) DEFAULT 'SINGLE'")
+            )
+    if not _has_column("providerupdaterun", "provider_priority_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE providerupdaterun ADD COLUMN provider_priority_json {column_type}")
+            )
+    if not _has_column("providerupdaterun", "coverage_before_pct"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdaterun ADD COLUMN coverage_before_pct FLOAT DEFAULT 0")
+            )
+    if not _has_column("providerupdaterun", "coverage_after_pct"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdaterun ADD COLUMN coverage_after_pct FLOAT DEFAULT 0")
+            )
+    if not _has_column("providerupdaterun", "by_provider_count_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE providerupdaterun ADD COLUMN by_provider_count_json {column_type}")
+            )
+    if not _has_column("providerupdaterun", "confidence_distribution_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE providerupdaterun ADD COLUMN confidence_distribution_json {column_type}"
+                )
+            )
+    if not _has_column("providerupdaterun", "continuity_met"):
+        bool_type = "INTEGER" if is_sqlite else "BOOLEAN"
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE providerupdaterun ADD COLUMN continuity_met {bool_type} DEFAULT 1"
+                )
+            )
     if not _has_column("providerupdateitem", "bars_updated"):
         with engine.begin() as conn:
             conn.execute(
                 text("ALTER TABLE providerupdateitem ADD COLUMN bars_updated INTEGER DEFAULT 0")
+            )
+    if not _has_column("providerupdateitem", "source_provider"):
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE providerupdateitem ADD COLUMN source_provider VARCHAR(32)"))
+    if not _has_column("providerupdateitem", "confidence_score"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN confidence_score FLOAT DEFAULT 0")
+            )
+    if not _has_column("providerupdateitem", "attempted_providers_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE providerupdateitem ADD COLUMN attempted_providers_json {column_type}"
+                )
+            )
+    if not _has_column("providerupdateitem", "selected_provider"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN selected_provider VARCHAR(32)")
+            )
+    if not _has_column("providerupdateitem", "days_filled"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN days_filled INTEGER DEFAULT 0")
+            )
+    if not _has_column("providerupdateitem", "days_remaining"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN days_remaining INTEGER DEFAULT 0")
+            )
+    if not _has_column("providerupdateitem", "fallback_reason"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE providerupdateitem ADD COLUMN fallback_reason VARCHAR(128)")
+            )
+    if not _has_column("dataqualityreport", "coverage_by_source_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE dataqualityreport ADD COLUMN coverage_by_source_json {column_type}")
+            )
+    if not _has_column("dataqualityreport", "low_confidence_days_count"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE dataqualityreport ADD COLUMN low_confidence_days_count INTEGER DEFAULT 0")
+            )
+    if not _has_column("dataqualityreport", "low_confidence_symbols_count"):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE dataqualityreport ADD COLUMN low_confidence_symbols_count INTEGER DEFAULT 0"
+                )
             )
     if not _has_column("autoevalrun", "active_ensemble_id"):
         with engine.begin() as conn:
@@ -422,6 +519,12 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_providerupdateitem_source_provider "
+                "ON providerupdateitem (source_provider)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_mappingimportrun_provider_created "
                 "ON mappingimportrun (provider, created_at)"
             )
@@ -511,6 +614,24 @@ def _ensure_indexes_and_columns() -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_upstoxnotifierpingevent_ping_id "
                 "ON upstoxnotifierpingevent (ping_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_dataprovenance_bundle_tf_symbol_day "
+                "ON dataprovenance (bundle_id, timeframe, symbol, bar_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataprovenance_bundle_tf_day "
+                "ON dataprovenance (bundle_id, timeframe, bar_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dataprovenance_source_day "
+                "ON dataprovenance (source_provider, bar_date)"
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_operateevent_ts ON operateevent (ts)"))

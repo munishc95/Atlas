@@ -418,6 +418,33 @@ Scheduler/operate order with provider enabled:
 4. paper run-step
 5. daily report
 
+## Multi-Provider Fallback + Data Continuity + Provenance (v3.6)
+
+Atlas now supports deterministic multi-provider continuity planning with source confidence tracking:
+
+- New secondary provider: `NSE_EOD` (1d only)
+  - cautious retry/backoff/throttle behavior
+  - fast mode returns deterministic synthetic rows (no network)
+- Provider update modes:
+  - `SINGLE`
+  - `FALLBACK` (priority order, default `["UPSTOX", "NSE_EOD", "INBOX"]`)
+- Continuity planner:
+  - computes missing trading days by NSE calendar
+  - tries providers in priority order per symbol/day until covered
+  - persists attempted providers, selected provider, days filled/remaining, and fallback reasons
+- Provenance persistence (`DataProvenance`):
+  - per `(bundle, timeframe, symbol, day)` source provider
+  - source run id/type and confidence score
+  - used by both provider updates and inbox updates
+- Data quality now includes provenance confidence:
+  - `coverage_by_source_provider`
+  - `low_confidence_days_count`
+  - `low_confidence_symbols_count`
+  - in `operate_mode=live`, latest-day all-low-confidence triggers `FAIL` (threshold configurable)
+- UI:
+  - `Universe & Data` adds provider status + provenance drawer
+  - `Ops` shows latest source mix and confidence signal
+
 ### Connect Upstox (OAuth)
 
 Atlas now provides a first-class **Connect Upstox** flow in UI:
@@ -707,6 +734,8 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/providers/upstox/mapping/status?bundle_id=&timeframe=&sample_limit=`
 - `GET /api/providers/upstox/mapping/missing?bundle_id=&timeframe=&limit=`
 - `GET /api/data/coverage?bundle_id=&timeframe=&top_n=`
+- `GET /api/data/provenance?bundle_id=&timeframe=&symbol=&from=&to=&limit=`
+- `GET /api/providers/status`
 - `GET /api/paper/state`
 - `GET /api/settings`
 - `PUT /api/settings`

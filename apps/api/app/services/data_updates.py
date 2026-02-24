@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.core.exceptions import APIError
 from app.db.models import DataUpdateFile, DataUpdateRun, DatasetBundle
+from app.services.data_provenance import confidence_for_provider, upsert_provenance_rows
 from app.services.data_store import DataStore
 from app.services.importer import _validate_numeric
 from app.services.operate_events import emit_operate_event
@@ -574,6 +575,38 @@ def run_data_updates(
                         tick_size=float(instrument.tick_size if instrument is not None else 0.05),
                         bundle_id=int(bundle_id),
                     )
+                    incoming_dates = (
+                        pd.to_datetime(incoming["datetime"], utc=True, errors="coerce")
+                        .dt.tz_convert(IST_ZONE)
+                        .dt.date
+                    )
+                    bar_dates = [
+                        day
+                        for day in sorted(set(incoming_dates.tolist()))
+                        if day is not None
+                    ]
+                    if bar_dates:
+                        inbox_confidence = confidence_for_provider(
+                            provider="INBOX",
+                            settings=settings,
+                            overrides=state,
+                        )
+                        upsert_provenance_rows(
+                            session,
+                            bundle_id=int(bundle_id),
+                            timeframe=tf,
+                            symbol=symbol,
+                            bar_dates=bar_dates,
+                            source_provider="INBOX",
+                            source_run_kind="data_updates",
+                            source_run_id=str(run.id) if run.id is not None else None,
+                            confidence_score=float(inbox_confidence),
+                            reason="manual_inbox_import",
+                            metadata={
+                                "file_name": path.name,
+                                "file_hash": file_hash,
+                            },
+                        )
                     file_rows_ingested += int(added)
                     file_symbols.add(symbol)
                 if file_rows_ingested <= 0:

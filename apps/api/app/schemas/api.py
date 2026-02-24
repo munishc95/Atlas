@@ -126,7 +126,9 @@ class DataUpdatesRunRequest(BaseModel):
 class ProviderUpdatesRunRequest(BaseModel):
     bundle_id: int
     timeframe: str = "1d"
+    provider_mode: str | None = None
     provider_kind: str | None = None
+    provider_priority_order: list[str] | None = None
     max_symbols_per_run: int | None = None
     max_calls_per_run: int | None = None
     start: str | None = None
@@ -290,7 +292,10 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_inbox_enabled: bool | None = None
     data_updates_max_files_per_run: int | None = None
     data_updates_provider_enabled: bool | None = None
+    data_updates_provider_mode: str | None = None
     data_updates_provider_kind: str | None = None
+    data_updates_provider_priority_order: list[str] | None = None
+    data_updates_provider_nse_eod_enabled: bool | None = None
     data_updates_provider_max_symbols_per_run: int | None = None
     data_updates_provider_max_calls_per_run: int | None = None
     data_updates_provider_timeframe_enabled: str | None = None
@@ -298,6 +303,10 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_repair_last_n_trading_days: int | None = None
     data_updates_provider_backfill_max_days: int | None = None
     data_updates_provider_allow_partial_4h_ish: bool | None = None
+    data_provenance_confidence_upstox: int | None = None
+    data_provenance_confidence_nse_eod: int | None = None
+    data_provenance_confidence_inbox: int | None = None
+    data_quality_confidence_fail_threshold: int | None = None
     upstox_persist_env_fallback: bool | None = None
     upstox_auto_renew_enabled: bool | None = None
     upstox_auto_renew_time_ist: str | None = None

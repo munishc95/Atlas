@@ -1229,14 +1229,15 @@ def _pending_request_summary(session: Session, *, settings: Settings) -> dict[st
     if run is None:
         return None
     now = _utc_now()
+    requested_at = _to_utc_datetime(run.requested_at)
     waiting = max(
         0.0,
-        (now - (run.requested_at if run.requested_at is not None else now)).total_seconds() / 60.0,
+        (now - (requested_at if requested_at is not None else now)).total_seconds() / 60.0,
     )
     return {
         "id": run.id,
         "status": _normalize_run_status(run.status),
-        "requested_at": run.requested_at.isoformat() if run.requested_at is not None else None,
+        "requested_at": requested_at.isoformat() if requested_at is not None else None,
         "authorization_expiry": (
             run.authorization_expiry.isoformat() if run.authorization_expiry is not None else None
         ),

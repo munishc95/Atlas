@@ -551,6 +551,10 @@ def _provider_updates_result(
     timeframe = str(payload.get("timeframe") or "1d")
     state = session.get(PaperState, 1)
     overrides = dict(state.settings_json or {}) if state is not None else {}
+    if payload.get("provider_mode") is not None:
+        overrides["data_updates_provider_mode"] = payload.get("provider_mode")
+    if payload.get("provider_priority_order") is not None:
+        overrides["data_updates_provider_priority_order"] = payload.get("provider_priority_order")
     row = run_provider_updates(
         session=session,
         settings=settings,
@@ -576,6 +580,8 @@ def _provider_updates_result(
         "bundle_id": row.bundle_id,
         "timeframe": row.timeframe,
         "provider_kind": row.provider_kind,
+        "provider_mode": row.provider_mode,
+        "provider_priority_json": row.provider_priority_json,
         "status": row.status,
         "symbols_attempted": row.symbols_attempted,
         "symbols_succeeded": row.symbols_succeeded,
@@ -586,6 +592,11 @@ def _provider_updates_result(
         "missing_days_detected": row.missing_days_detected,
         "backfill_truncated": bool(row.backfill_truncated),
         "api_calls": row.api_calls,
+        "coverage_before_pct": float(row.coverage_before_pct or 0.0),
+        "coverage_after_pct": float(row.coverage_after_pct or 0.0),
+        "by_provider_count_json": row.by_provider_count_json,
+        "confidence_distribution_json": row.confidence_distribution_json,
+        "continuity_met": bool(row.continuity_met),
         "duration_seconds": row.duration_seconds,
         "warnings_json": row.warnings_json,
         "errors_json": row.errors_json,
@@ -628,6 +639,9 @@ def _data_quality_result(
         "coverage_pct": report.coverage_pct,
         "checked_symbols": report.checked_symbols,
         "total_symbols": report.total_symbols,
+        "coverage_by_source_json": report.coverage_by_source_json,
+        "low_confidence_days_count": int(report.low_confidence_days_count or 0),
+        "low_confidence_symbols_count": int(report.low_confidence_symbols_count or 0),
         "created_at": report.created_at.isoformat(),
     }
 

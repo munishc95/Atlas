@@ -97,7 +97,12 @@ class Settings(BaseSettings):
     data_updates_inbox_enabled: bool = True
     data_updates_max_files_per_run: int = 50
     data_updates_provider_enabled: bool = False
+    data_updates_provider_mode: str = "SINGLE"
     data_updates_provider_kind: str = "UPSTOX"
+    data_updates_provider_priority_order: list[str] = Field(
+        default_factory=lambda: ["UPSTOX", "NSE_EOD", "INBOX"]
+    )
+    data_updates_provider_nse_eod_enabled: bool = True
     data_updates_provider_max_symbols_per_run: int = 120
     data_updates_provider_max_calls_per_run: int = 400
     data_updates_provider_timeframe_enabled: str = "1d"
@@ -105,6 +110,15 @@ class Settings(BaseSettings):
     data_updates_provider_repair_last_n_trading_days: int = 3
     data_updates_provider_backfill_max_days: int = 30
     data_updates_provider_allow_partial_4h_ish: bool = False
+    nse_eod_base_url: str = "https://www.nseindia.com"
+    nse_eod_timeout_seconds: float = 12.0
+    nse_eod_retry_max: int = 2
+    nse_eod_retry_backoff_seconds: float = 0.8
+    nse_eod_throttle_seconds: float = 0.8
+    data_provenance_confidence_upstox: int = 95
+    data_provenance_confidence_nse_eod: int = 80
+    data_provenance_confidence_inbox: int = 70
+    data_quality_confidence_fail_threshold: int = 65
     coverage_missing_latest_warn_pct: float = 10.0
     coverage_missing_latest_fail_pct: float = 25.0
     coverage_inactive_after_missing_days: int = 3

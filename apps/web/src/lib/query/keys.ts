@@ -72,6 +72,24 @@ export const qk = {
   upstoxNotifierPing: (pingId: string | null) => ["upstoxNotifierPing", pingId ?? "none"] as const,
   dataCoverage: (bundleId?: number | null, timeframe = "1d", topN = 50) =>
     ["dataCoverage", bundleId ?? "none", timeframe, topN] as const,
+  dataProvenance: (
+    bundleId?: number | null,
+    timeframe = "1d",
+    symbol?: string | null,
+    from?: string | null,
+    to?: string | null,
+    limit = 500,
+  ) =>
+    [
+      "dataProvenance",
+      bundleId ?? "none",
+      timeframe,
+      symbol ?? "all",
+      from ?? "none",
+      to ?? "none",
+      limit,
+    ] as const,
+  providersStatus: ["providersStatus"] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,

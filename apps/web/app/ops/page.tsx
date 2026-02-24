@@ -75,6 +75,41 @@ export default function OpsPage() {
       ).data,
     refetchInterval: 8_000,
   });
+  const providersStatusQuery = useQuery({
+    queryKey: qk.providersStatus,
+    queryFn: async () => (await atlasApi.providersStatus()).data,
+    refetchInterval: 8_000,
+  });
+  const provenanceFrom = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 14);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const provenanceQuery = useQuery({
+    queryKey: qk.dataProvenance(
+      activeBundleId,
+      activeTimeframe,
+      null,
+      provenanceFrom,
+      undefined,
+      400,
+    ),
+    enabled: Boolean(activeBundleId),
+    queryFn: async () => {
+      if (!activeBundleId) {
+        return null;
+      }
+      return (
+        await atlasApi.dataProvenance({
+          bundle_id: activeBundleId,
+          timeframe: activeTimeframe,
+          from: provenanceFrom,
+          limit: 400,
+        })
+      ).data;
+    },
+    refetchInterval: 8_000,
+  });
   const autoEvalHistoryQuery = useQuery({
     queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId),
     queryFn: async () =>
@@ -315,6 +350,7 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
+      queryClient.invalidateQueries({ queryKey: qk.providersStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       if (activeBundleId) {
@@ -322,6 +358,16 @@ export default function OpsPage() {
         queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
         queryClient.invalidateQueries({ queryKey: ["dataUpdatesLatest"] });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(activeBundleId, activeTimeframe) });
+        queryClient.invalidateQueries({
+          queryKey: qk.dataProvenance(
+            activeBundleId,
+            activeTimeframe,
+            null,
+            provenanceFrom,
+            undefined,
+            400,
+          ),
+        });
         queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(activeBundleId, activeTimeframe, 20) });
         queryClient.invalidateQueries({ queryKey: ["dataCoverage"] });
       }
@@ -335,6 +381,7 @@ export default function OpsPage() {
     activeBundleId,
     activePolicyId,
     activeTimeframe,
+    provenanceFrom,
     queryClient,
     stream.isTerminal,
     streamSummary,
@@ -463,6 +510,13 @@ export default function OpsPage() {
   const latestEnsembleRiskBudget =
     (latestRunSummary.ensemble_risk_budget_by_policy as Record<string, number> | undefined) ?? {};
   const mappingMissingCount = Number(mappingStatusQuery.data?.missing_count ?? 0);
+  const provenanceLatestSummary = provenanceQuery.data?.latest_day_summary ?? {};
+  const coverageByProvider = Object.entries(
+    (provenanceLatestSummary.coverage_by_source_provider as Record<string, number> | undefined) ?? {},
+  )
+    .map(([provider, pct]) => `${provider}: ${Number(pct).toFixed(1)}%`)
+    .join(" | ");
+  const providerRows = providersStatusQuery.data?.providers ?? [];
   const providerEnabled = Boolean(paperStateSettings.data_updates_provider_enabled ?? false);
   const providerKind = String(paperStateSettings.data_updates_provider_kind ?? "UPSTOX").toUpperCase();
   const upstoxTokenStatus =
@@ -915,9 +969,30 @@ export default function OpsPage() {
                 {latestProviderUpdate?.status ?? "Not run"}
               </span>
             </p>
+            <p>
+              Today source mix:{" "}
+              <span className="font-semibold text-foreground">
+                {coverageByProvider || "No provenance yet"}
+              </span>
+            </p>
+            <p>
+              Confidence:{" "}
+              <span className="font-semibold text-foreground">
+                {Number(provenanceLatestSummary.low_confidence_symbols_count ?? 0) > 0
+                  ? "Medium/Low"
+                  : "High"}
+              </span>
+            </p>
             <p>Mapping missing: {mappingMissingCount}</p>
             <p>API calls: {Number(latestProviderUpdate?.api_calls ?? 0)}</p>
             <p>Duration: {Number(latestProviderUpdate?.duration_seconds ?? 0).toFixed(2)}s</p>
+            <div className="mt-2 space-y-1">
+              {providerRows.map((row) => (
+                <p key={String(row.provider)}>
+                  {String(row.provider)}: {String(row.last_status ?? "NOT_RUN")}
+                </p>
+              ))}
+            </div>
           </div>
         </article>
       </section>

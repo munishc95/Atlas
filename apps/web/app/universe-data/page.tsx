@@ -25,6 +25,7 @@ export default function UniverseDataPage() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | "provider" | null>(null);
   const [showCoverageDrawer, setShowCoverageDrawer] = useState(false);
+  const [showProvenanceDrawer, setShowProvenanceDrawer] = useState(false);
   const [showMappingDrawer, setShowMappingDrawer] = useState(false);
   const [mappingPath, setMappingPath] = useState("data/inbox/_metadata/upstox_instruments.csv");
   const [mappingMode, setMappingMode] = useState<"UPSERT" | "REPLACE">("UPSERT");
@@ -91,6 +92,34 @@ export default function UniverseDataPage() {
       return (await atlasApi.dataCoverage(bundleId, coverageTimeframe, 100)).data;
     },
     refetchInterval: 15_000,
+  });
+  const provenanceFrom = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const dataProvenanceQuery = useQuery({
+    queryKey: qk.dataProvenance(bundleId, coverageTimeframe, null, provenanceFrom, undefined, 500),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      if (!bundleId) {
+        return null;
+      }
+      return (
+        await atlasApi.dataProvenance({
+          bundle_id: bundleId,
+          timeframe: coverageTimeframe,
+          from: provenanceFrom,
+          limit: 500,
+        })
+      ).data;
+    },
+    refetchInterval: 15_000,
+  });
+  const providersStatusQuery = useQuery({
+    queryKey: qk.providersStatus,
+    queryFn: async () => (await atlasApi.providersStatus()).data,
+    refetchInterval: 12_000,
   });
   const mappingStatusQuery = useQuery({
     queryKey: qk.upstoxMappingStatus(bundleId, coverageTimeframe, 20),
@@ -240,11 +269,15 @@ export default function UniverseDataPage() {
     if (stream.status === "SUCCEEDED" || stream.status === "DONE") {
       queryClient.invalidateQueries({ queryKey: qk.universe });
       queryClient.invalidateQueries({ queryKey: qk.dataStatus });
-      queryClient.invalidateQueries({ queryKey: qk.jobs(20) });
+        queryClient.invalidateQueries({ queryKey: qk.jobs(20) });
+      queryClient.invalidateQueries({ queryKey: qk.providersStatus });
       if (bundleId) {
         queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
+        queryClient.invalidateQueries({
+          queryKey: qk.dataProvenance(bundleId, coverageTimeframe, null, provenanceFrom, undefined, 500),
+        });
         queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(bundleId, coverageTimeframe, 20) });
         queryClient.invalidateQueries({ queryKey: qk.upstoxMappingMissing(bundleId, coverageTimeframe, 120) });
       }
@@ -265,7 +298,16 @@ export default function UniverseDataPage() {
         toast.error("Import failed");
       }
     }
-  }, [activeJobId, activeJobKind, bundleId, coverageTimeframe, queryClient, stream.isTerminal, stream.status]);
+  }, [
+    activeJobId,
+    activeJobKind,
+    bundleId,
+    coverageTimeframe,
+    provenanceFrom,
+    queryClient,
+    stream.isTerminal,
+    stream.status,
+  ]);
 
   const providerEnabled = String(settingsQuery.data?.data_updates_provider_enabled ?? "false") === "true";
 
@@ -534,6 +576,33 @@ export default function UniverseDataPage() {
             >
               {providerUpdatesMutation.isPending ? "Queuing..." : "Run Provider Update"}
             </button>
+            <button
+              type="button"
+              onClick={() => setShowProvenanceDrawer(true)}
+              className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted"
+            >
+              View provenance
+            </button>
+          </div>
+          <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p className="mb-1 font-medium text-foreground">Provider status</p>
+            {providersStatusQuery.isLoading ? (
+              <p>Loading provider health...</p>
+            ) : providersStatusQuery.isError ? (
+              <p className="text-danger">Could not load provider status.</p>
+            ) : (
+              <div className="space-y-1">
+                {(providersStatusQuery.data?.providers ?? []).map((provider) => (
+                  <p key={String(provider.provider)}>
+                    <span className="font-semibold">{String(provider.provider)}</span>:{" "}
+                    <span className={`badge ${String(provider.last_status ?? "").includes("FAIL") ? "bg-danger/15 text-danger" : "bg-surface text-muted"}`}>
+                      {String(provider.last_status ?? "NOT_RUN")}
+                    </span>{" "}
+                    {provider.last_run_at ? `(${provider.last_run_at})` : ""}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
           <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
             <p className="mb-1">
@@ -618,6 +687,18 @@ export default function UniverseDataPage() {
             <p>
               Inactive symbols: <span className="font-semibold">{dataCoverageQuery.data.inactive_symbols.length}</span>
             </p>
+            <p>
+              Provenance latest day:{" "}
+              <span className="font-semibold">
+                {String(dataProvenanceQuery.data?.latest_day_summary?.latest_day ?? "N/A")}
+              </span>
+            </p>
+            <p>
+              Low confidence symbols:{" "}
+              <span className="font-semibold">
+                {Number(dataProvenanceQuery.data?.latest_day_summary?.low_confidence_symbols_count ?? 0)}
+              </span>
+            </p>
             <div>
               <p className="mb-1 font-medium">Missing symbols</p>
               <div className="max-h-40 overflow-auto rounded-lg border border-border p-2 text-xs text-muted">
@@ -633,6 +714,69 @@ export default function UniverseDataPage() {
                   </p>
                 ))}
               </div>
+            </div>
+            <div>
+              <p className="mb-1 font-medium">Coverage by source (latest day)</p>
+              <div className="rounded-lg border border-border p-2 text-xs text-muted">
+                {Object.entries(dataProvenanceQuery.data?.latest_day_summary?.coverage_by_source_provider ?? {})
+                  .map(([provider, pct]) => `${provider}: ${Number(pct).toFixed(1)}%`)
+                  .join(" | ") || "No provenance entries yet."}
+              </div>
+            </div>
+          </div>
+        )}
+      </DetailsDrawer>
+
+      <DetailsDrawer
+        open={showProvenanceDrawer}
+        onClose={() => setShowProvenanceDrawer(false)}
+        title="Data Provenance"
+      >
+        {dataProvenanceQuery.isLoading ? (
+          <LoadingState label="Loading provenance rows" />
+        ) : dataProvenanceQuery.isError ? (
+          <ErrorState
+            title="Could not load provenance"
+            action="Retry provenance query."
+            onRetry={() => void dataProvenanceQuery.refetch()}
+          />
+        ) : !dataProvenanceQuery.data ? (
+          <EmptyState title="No provenance data" action="Run provider or inbox updates first." />
+        ) : (
+          <div className="space-y-3 text-sm">
+            <p>
+              Latest day:{" "}
+              <span className="font-semibold">
+                {String(dataProvenanceQuery.data.latest_day_summary?.latest_day ?? "N/A")}
+              </span>
+            </p>
+            <p>
+              Low confidence days:{" "}
+              <span className="font-semibold">
+                {Number(dataProvenanceQuery.data.latest_day_summary?.low_confidence_days_count ?? 0)}
+              </span>
+            </p>
+            <div className="max-h-72 overflow-auto rounded-lg border border-border">
+              <table className="w-full text-xs">
+                <thead className="bg-surface text-left text-muted">
+                  <tr>
+                    <th className="px-2 py-1">Date</th>
+                    <th className="px-2 py-1">Symbol</th>
+                    <th className="px-2 py-1">Source</th>
+                    <th className="px-2 py-1">Confidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(dataProvenanceQuery.data.entries ?? []).slice(0, 300).map((row, idx) => (
+                    <tr key={`${row.symbol}-${row.bar_date}-${idx}`} className="border-t border-border">
+                      <td className="px-2 py-1">{row.bar_date}</td>
+                      <td className="px-2 py-1">{row.symbol}</td>
+                      <td className="px-2 py-1">{row.source_provider}</td>
+                      <td className="px-2 py-1">{Number(row.confidence_score ?? 0).toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}

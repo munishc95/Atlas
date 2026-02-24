@@ -94,6 +94,11 @@ from app.services.data_updates import (
     get_latest_data_update_run,
     list_data_update_history,
 )
+from app.services.data_provenance import (
+    list_provenance,
+    provider_status_payload,
+    provenance_summary,
+)
 from app.services.provider_updates import (
     get_latest_provider_update_run,
     list_provider_update_history,
@@ -532,6 +537,14 @@ def provider_updates_history(
         days=days,
     )
     return _data([row.model_dump() for row in rows])
+
+
+@router.get("/providers/status")
+def providers_status(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(provider_status_payload(session, settings=settings))
 
 
 @router.get("/providers/upstox/auth-url")
@@ -1194,6 +1207,81 @@ def data_coverage(
             overrides=overrides,
             top_n=top_n,
         )
+    )
+
+
+@router.get("/data/provenance")
+def data_provenance(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    symbol: str | None = Query(default=None),
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
+    limit: int = Query(default=500, ge=1, le=10_000),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    parsed_from: date | None = None
+    parsed_to: date | None = None
+    if from_date:
+        try:
+            parsed_from = date.fromisoformat(from_date)
+        except ValueError as exc:
+            raise APIError(
+                code="invalid_from_date",
+                message="from must be YYYY-MM-DD",
+                details={"from": from_date},
+            ) from exc
+    if to_date:
+        try:
+            parsed_to = date.fromisoformat(to_date)
+        except ValueError as exc:
+            raise APIError(
+                code="invalid_to_date",
+                message="to must be YYYY-MM-DD",
+                details={"to": to_date},
+            ) from exc
+    rows = list_provenance(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        symbol=symbol,
+        from_date=parsed_from,
+        to_date=parsed_to,
+        limit=limit,
+    )
+    latest_summary = provenance_summary(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        latest_day=parsed_to,
+        low_conf_threshold=float(settings.data_quality_confidence_fail_threshold),
+    )
+    return _data(
+        {
+            "bundle_id": int(bundle_id),
+            "timeframe": str(timeframe),
+            "symbol": str(symbol).upper() if isinstance(symbol, str) and symbol.strip() else None,
+            "from": parsed_from.isoformat() if parsed_from is not None else None,
+            "to": parsed_to.isoformat() if parsed_to is not None else None,
+            "entries": [
+                {
+                    "id": int(row.id) if row.id is not None else None,
+                    "symbol": row.symbol,
+                    "bar_date": row.bar_date.isoformat(),
+                    "source_provider": row.source_provider,
+                    "source_run_kind": row.source_run_kind,
+                    "source_run_id": row.source_run_id,
+                    "confidence_score": float(row.confidence_score or 0.0),
+                    "reason": row.reason,
+                    "metadata_json": row.metadata_json,
+                    "created_at": row.created_at.isoformat(),
+                    "updated_at": row.updated_at.isoformat(),
+                }
+                for row in rows
+            ],
+            "latest_day_summary": latest_summary,
+        }
     )
 
 
@@ -2571,7 +2659,10 @@ def get_settings_payload(
         "data_updates_inbox_enabled": settings.data_updates_inbox_enabled,
         "data_updates_max_files_per_run": settings.data_updates_max_files_per_run,
         "data_updates_provider_enabled": settings.data_updates_provider_enabled,
+        "data_updates_provider_mode": settings.data_updates_provider_mode,
         "data_updates_provider_kind": settings.data_updates_provider_kind,
+        "data_updates_provider_priority_order": settings.data_updates_provider_priority_order,
+        "data_updates_provider_nse_eod_enabled": settings.data_updates_provider_nse_eod_enabled,
         "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
         "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
         "data_updates_provider_timeframe_enabled": settings.data_updates_provider_timeframe_enabled,
@@ -2579,6 +2670,10 @@ def get_settings_payload(
         "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
         "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
         "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
+        "data_provenance_confidence_upstox": settings.data_provenance_confidence_upstox,
+        "data_provenance_confidence_nse_eod": settings.data_provenance_confidence_nse_eod,
+        "data_provenance_confidence_inbox": settings.data_provenance_confidence_inbox,
+        "data_quality_confidence_fail_threshold": settings.data_quality_confidence_fail_threshold,
         "upstox_persist_env_fallback": settings.upstox_persist_env_fallback,
         "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,
         "upstox_auto_renew_time_ist": settings.upstox_auto_renew_time_ist,
