@@ -13,10 +13,12 @@ import type {
   ApiDailyReport,
   ApiDataCoverage,
   ApiDataProvenance,
+  ApiConfidenceGateSnapshot,
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiProviderUpdateRun,
   ApiProvidersStatus,
+  ApiProviderStatusTrend,
   ApiOperateEvent,
   ApiOperateHealth,
   ApiOperateRunSummary,
@@ -273,6 +275,27 @@ export const atlasApi = {
     return apiFetch<ApiDataProvenance>(`/api/data/provenance?${search.toString()}`);
   },
   providersStatus: () => apiFetch<ApiProvidersStatus>("/api/providers/status"),
+  providersStatusTrend: (bundleId: number, timeframe = "1d", days = 30) =>
+    apiFetch<ApiProviderStatusTrend>(
+      `/api/providers/status/trend?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&days=${days}`,
+    ),
+  confidenceGateLatest: (bundleId?: number, timeframe?: string) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    return apiFetch<ApiConfidenceGateSnapshot | null>(
+      `/api/confidence-gate/latest${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  confidenceGateHistory: (bundleId?: number, timeframe?: string, limit = 60) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    search.set("limit", String(limit));
+    return apiFetch<ApiConfidenceGateSnapshot[]>(
+      `/api/confidence-gate/history?${search.toString()}`,
+    );
+  },
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
       `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,

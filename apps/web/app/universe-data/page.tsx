@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -756,6 +757,35 @@ export default function UniverseDataPage() {
                 {Number(dataProvenanceQuery.data.latest_day_summary?.low_confidence_days_count ?? 0)}
               </span>
             </p>
+            <p>
+              Confidence gate:{" "}
+              <span
+                className={`badge ${
+                  String(
+                    dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.decision ??
+                      "PASS",
+                  ).toUpperCase() === "PASS"
+                    ? "bg-success/15 text-success"
+                    : "bg-warning/15 text-warning"
+                }`}
+              >
+                {String(
+                  dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.decision ??
+                    "PASS",
+                ).toUpperCase()}
+              </span>
+            </p>
+            <p className="text-xs text-muted">
+              {Array.isArray(
+                dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons,
+              ) &&
+              dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons.length > 0
+                ? `Reasons: ${dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons.join(", ")}`
+                : "No confidence gate reasons for latest day."}
+            </p>
+            <Link href="/ops" className="focus-ring inline-flex rounded-lg border border-border px-2 py-1 text-xs text-muted">
+              Open Ops confidence trend
+            </Link>
             <div className="max-h-72 overflow-auto rounded-lg border border-border">
               <table className="w-full text-xs">
                 <thead className="bg-surface text-left text-muted">

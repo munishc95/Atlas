@@ -144,12 +144,21 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       paper_mode: "strategy",
       active_policy_id: null,
       active_ensemble_id: null,
-      operate_mode: "offline",
+      operate_mode: "live",
       operate_safe_mode_on_fail: false,
       data_quality_stale_severity: "WARN",
       data_quality_stale_severity_override: true,
       coverage_missing_latest_warn_pct: 100,
       coverage_missing_latest_fail_pct: 100,
+      no_trade_enabled: false,
+      confidence_gate_enabled: true,
+      confidence_gate_avg_threshold: 99,
+      confidence_gate_low_symbol_threshold: 99,
+      confidence_gate_low_pct_threshold: 0.1,
+      confidence_gate_fallback_pct_threshold: 0.0,
+      confidence_gate_hard_floor: 40,
+      confidence_gate_action_on_trigger: "SHADOW_ONLY",
+      confidence_gate_lookback_days: 1,
     },
   });
   expect(enforceStrategyModeRes.ok()).toBeTruthy();
@@ -208,6 +217,7 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   const operateJob = await waitForJob(request, apiBase, String(runOperateBody?.data?.job_id), 240_000);
   const operateResult = (operateJob.result_json ?? {}) as Record<string, unknown>;
   const operateSummary = (operateResult.summary ?? {}) as Record<string, unknown>;
+  expect(String(operateSummary.mode ?? "")).toBe("SHADOW");
   const reportPayload = (operateSummary.daily_report ?? {}) as Record<string, unknown>;
   const reportId = Number(reportPayload.id ?? 0);
   expect(reportId > 0).toBeTruthy();
@@ -217,6 +227,12 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   const reportBody = await reportRes.json();
   const reportData = (reportBody?.data ?? {}) as Record<string, unknown>;
   expect(typeof reportData.content_json).toBe("object");
+  const reportContent = (reportData.content_json ?? {}) as Record<string, unknown>;
+  const confidenceGate = (reportContent.confidence_gate ?? {}) as Record<string, unknown>;
+  expect(String(confidenceGate.decision ?? "")).toBe("SHADOW_ONLY");
+  expect(String((reportContent.summary as Record<string, unknown> | undefined)?.mode ?? "")).toBe(
+    "SHADOW",
+  );
 
   const disconnectRes = await request.post(`${apiBase}/api/providers/upstox/disconnect`, {
     data: {},
@@ -277,4 +293,16 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({
     timeout: 20_000,
   });
+  await expect(page.getByRole("heading", { name: "Data Confidence" })).toBeVisible({
+    timeout: 20_000,
+  });
+  const confidenceCard = page
+    .locator("div.rounded-xl.border")
+    .filter({ has: page.getByRole("heading", { name: "Data Confidence" }) })
+    .first();
+  await expect(confidenceCard.getByText("SHADOW", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByRole("button", { name: "View trend" }).click();
+  await expect(page.getByText(/Data Confidence Trend/i)).toBeVisible({ timeout: 20_000 });
 });

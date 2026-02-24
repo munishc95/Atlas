@@ -1113,6 +1113,7 @@ def _operate_run_result(
         "selected_signals_count": int(paper_result.get("selected_signals_count", 0)),
         "generated_signals_count": int(paper_result.get("generated_signals_count", 0)),
         "safe_mode": paper_result.get("safe_mode", {}),
+        "confidence_gate": paper_result.get("confidence_gate", {}),
         "scan_truncated": bool(paper_result.get("scan_truncated", False)),
         "risk_overlay": paper_result.get("risk_overlay", {}),
     }

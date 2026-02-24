@@ -96,8 +96,14 @@ from app.services.data_updates import (
 )
 from app.services.data_provenance import (
     list_provenance,
+    provider_status_trend as provider_status_trend_payload,
     provider_status_payload,
     provenance_summary,
+)
+from app.services.confidence_gate import (
+    latest_confidence_gate_snapshot,
+    list_confidence_gate_snapshots,
+    serialize_confidence_gate_snapshot,
 )
 from app.services.provider_updates import (
     get_latest_provider_update_run,
@@ -545,6 +551,28 @@ def providers_status(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     return _data(provider_status_payload(session, settings=settings))
+
+
+@router.get("/providers/status/trend")
+def providers_status_trend(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    days: int = Query(default=30, ge=1, le=365),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return _data(
+        {
+            "bundle_id": int(bundle_id),
+            "timeframe": str(timeframe),
+            "days": int(days),
+            "trend": provider_status_trend_payload(
+                session,
+                bundle_id=int(bundle_id),
+                timeframe=str(timeframe),
+                days=int(days),
+            ),
+        }
+    )
 
 
 @router.get("/providers/upstox/auth-url")
@@ -1257,6 +1285,17 @@ def data_provenance(
         latest_day=parsed_to,
         low_conf_threshold=float(settings.data_quality_confidence_fail_threshold),
     )
+    latest_gate = latest_confidence_gate_snapshot(
+        session,
+        bundle_id=int(bundle_id),
+        timeframe=str(timeframe),
+    )
+    latest_summary = {
+        **latest_summary,
+        "confidence_gate_latest": (
+            serialize_confidence_gate_snapshot(latest_gate) if latest_gate is not None else None
+        ),
+    }
     return _data(
         {
             "bundle_id": int(bundle_id),
@@ -1283,6 +1322,38 @@ def data_provenance(
             "latest_day_summary": latest_summary,
         }
     )
+
+
+@router.get("/confidence-gate/latest")
+def confidence_gate_latest(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = latest_confidence_gate_snapshot(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if row is None:
+        return _data(None)
+    return _data(serialize_confidence_gate_snapshot(row))
+
+
+@router.get("/confidence-gate/history")
+def confidence_gate_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    limit: int = Query(default=60, ge=1, le=365),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_confidence_gate_snapshots(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    return _data([serialize_confidence_gate_snapshot(row) for row in rows])
 
 
 @router.post("/data/quality/run")
@@ -2173,10 +2244,12 @@ def operate_status(
             "no_trade": latest_summary.get("no_trade", {}),
             "no_trade_triggered": bool(latest_summary.get("no_trade_triggered", False)),
             "no_trade_reasons": latest_summary.get("no_trade_reasons", []),
+            "confidence_gate": latest_summary.get("confidence_gate", {}),
             "ensemble_weights_source": latest_summary.get("ensemble_weights_source"),
             "ensemble_regime_used": latest_summary.get("ensemble_regime_used"),
             "last_run_step_at": latest_run.asof_ts.isoformat() if latest_run is not None else None,
             "latest_run": latest_run.model_dump() if latest_run is not None else None,
+            "latest_confidence_gate": health_summary.get("latest_confidence_gate"),
             "latest_data_quality": health_summary.get("latest_data_quality"),
             "latest_data_update": health_summary.get("latest_data_update"),
             "latest_provider_update": health_summary.get("latest_provider_update"),
@@ -2706,6 +2779,16 @@ def get_settings_payload(
         "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
         "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
         "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
+        "confidence_gate_enabled": (
+            True if str(settings.operate_mode).strip().lower() == "live" else False
+        ),
+        "confidence_gate_avg_threshold": settings.confidence_gate_avg_threshold,
+        "confidence_gate_low_symbol_threshold": settings.confidence_gate_low_symbol_threshold,
+        "confidence_gate_low_pct_threshold": settings.confidence_gate_low_pct_threshold,
+        "confidence_gate_fallback_pct_threshold": settings.confidence_gate_fallback_pct_threshold,
+        "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
+        "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
+        "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

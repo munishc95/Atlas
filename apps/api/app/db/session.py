@@ -352,6 +352,18 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_confidencegatesnapshot_bundle_timeframe_date "
+                "ON confidencegatesnapshot (bundle_id, timeframe, trading_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_confidencegatesnapshot_created_at "
+                "ON confidencegatesnapshot (created_at)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_replayrun_policy_created "
                 "ON replayrun (policy_id, created_at)"
             )

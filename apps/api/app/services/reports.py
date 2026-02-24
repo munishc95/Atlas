@@ -195,6 +195,15 @@ def build_daily_report_content(
                 "sector_cap_hits": 0,
                 "ensemble_risk_budget_by_policy": {},
             },
+            "confidence_gate": {
+                "decision": "PASS",
+                "reasons": [],
+                "avg_confidence": 0.0,
+                "pct_low_confidence": 0.0,
+                "provider_mix": {},
+                "trading_date": None,
+                "shadow_note": None,
+            },
             "links": {"paper_run_ids": [], "order_ids": []},
         }
 
@@ -253,6 +262,19 @@ def build_daily_report_content(
     positions_peak = max(
         [_safe_int((row.summary_json or {}).get("positions_after"), 0) for row in rows] or [0]
     )
+    confidence_gate = (
+        dict(last_summary.get("confidence_gate", {}))
+        if isinstance(last_summary.get("confidence_gate", {}), dict)
+        else {}
+    )
+    gate_summary = (
+        dict(confidence_gate.get("summary", {}))
+        if isinstance(confidence_gate.get("summary", {}), dict)
+        else {}
+    )
+    gate_reasons = confidence_gate.get("reasons", [])
+    if not isinstance(gate_reasons, list):
+        gate_reasons = []
 
     return {
         "date": report_date.isoformat(),
@@ -318,6 +340,24 @@ def build_daily_report_content(
             "equity_start": _safe_float(first_summary.get("equity_before"), 0.0),
             "equity_end": _safe_float(last_summary.get("equity_after"), 0.0),
             "ensemble_risk_budget_by_policy": ensemble_risk_budget_latest,
+        },
+        "confidence_gate": {
+            "decision": str(confidence_gate.get("decision", "PASS")).upper(),
+            "reasons": [str(item) for item in gate_reasons],
+            "avg_confidence": _safe_float(gate_summary.get("avg_confidence"), 0.0),
+            "pct_low_confidence": _safe_float(gate_summary.get("pct_low_confidence"), 0.0),
+            "provider_mix": (
+                dict(gate_summary.get("provider_mix", {}))
+                if isinstance(gate_summary.get("provider_mix", {}), dict)
+                else {}
+            ),
+            "trading_date": gate_summary.get("trading_date"),
+            "shadow_note": (
+                "Shadow-only run: confidence gate forced non-mutating execution."
+                if str(last_summary.get("execution_mode", "")).upper() == "SHADOW"
+                and str(confidence_gate.get("decision", "PASS")).upper() != "PASS"
+                else None
+            ),
         },
         "links": {
             "paper_run_ids": [int(row.id) for row in rows if row.id is not None],
@@ -391,6 +431,10 @@ def build_monthly_report_content(
                 "selected_reason_histogram": {},
                 "skipped_reason_histogram": {},
             },
+            "confidence_gate": {
+                "shadow_days_due_to_gate": 0,
+                "provider_mix_distribution": {},
+            },
             "links": {"paper_run_ids": []},
         }
 
@@ -402,11 +446,45 @@ def build_monthly_report_content(
     costs = float(sum(_safe_float((row.summary_json or {}).get("total_cost"), 0.0) for row in rows))
 
     per_day: dict[str, dict[str, Any]] = defaultdict(lambda: {"runs": 0, "net_pnl": 0.0, "costs": 0.0})
+    per_day_provider_mix: dict[str, dict[str, float]] = {}
+    shadow_gate_days: set[str] = set()
     for row in rows:
         key = row.asof_ts.date().isoformat()
         per_day[key]["runs"] += 1
         per_day[key]["net_pnl"] += _safe_float((row.summary_json or {}).get("net_pnl"), 0.0)
         per_day[key]["costs"] += _safe_float((row.summary_json or {}).get("total_cost"), 0.0)
+        summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+        confidence_gate = (
+            dict(summary.get("confidence_gate", {}))
+            if isinstance(summary.get("confidence_gate", {}), dict)
+            else {}
+        )
+        gate_summary = (
+            dict(confidence_gate.get("summary", {}))
+            if isinstance(confidence_gate.get("summary", {}), dict)
+            else {}
+        )
+        provider_mix = gate_summary.get("provider_mix", {})
+        if isinstance(provider_mix, dict) and provider_mix:
+            per_day_provider_mix[key] = {
+                str(provider): _safe_float(value, 0.0)
+                for provider, value in provider_mix.items()
+            }
+        decision = str(confidence_gate.get("decision", "PASS")).upper()
+        if decision != "PASS" and str(summary.get("execution_mode", "")).upper() == "SHADOW":
+            shadow_gate_days.add(key)
+
+    provider_mix_distribution: dict[str, float] = {}
+    if per_day_provider_mix:
+        aggregates: dict[str, float] = defaultdict(float)
+        for mix in per_day_provider_mix.values():
+            for provider, value in mix.items():
+                aggregates[str(provider)] += _safe_float(value, 0.0)
+        days_count = max(1, len(per_day_provider_mix))
+        provider_mix_distribution = {
+            provider: round(total / days_count, 6)
+            for provider, total in sorted(aggregates.items())
+        }
 
     daily_breakdown = [
         {
@@ -449,6 +527,10 @@ def build_monthly_report_content(
         "explainability": {
             "selected_reason_histogram": selected_hist,
             "skipped_reason_histogram": skipped_hist,
+        },
+        "confidence_gate": {
+            "shadow_days_due_to_gate": len(shadow_gate_days),
+            "provider_mix_distribution": provider_mix_distribution,
         },
         "links": {"paper_run_ids": [int(row.id) for row in rows if row.id is not None]},
     }

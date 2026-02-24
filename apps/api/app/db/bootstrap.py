@@ -146,6 +146,16 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
                     "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
                     "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
+                    "confidence_gate_enabled": (
+                        True if str(settings.operate_mode).strip().lower() == "live" else False
+                    ),
+                    "confidence_gate_avg_threshold": settings.confidence_gate_avg_threshold,
+                    "confidence_gate_low_symbol_threshold": settings.confidence_gate_low_symbol_threshold,
+                    "confidence_gate_low_pct_threshold": settings.confidence_gate_low_pct_threshold,
+                    "confidence_gate_fallback_pct_threshold": settings.confidence_gate_fallback_pct_threshold,
+                    "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
+                    "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
+                    "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
                     "paper_mode": "strategy",
                     "active_policy_id": None,
                     "active_ensemble_id": None,

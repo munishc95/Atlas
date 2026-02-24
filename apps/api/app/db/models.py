@@ -391,6 +391,32 @@ class NoTradeSnapshot(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ConfidenceGateSnapshot(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_confidencegatesnapshot_bundle_timeframe_date",
+            "bundle_id",
+            "timeframe",
+            "trading_date",
+        ),
+        Index("ix_confidencegatesnapshot_created_at", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    trading_date: dt_date = Field(index=True)
+    decision: str = Field(default="PASS", index=True, max_length=24)
+    reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    avg_confidence: float = 0.0
+    pct_low_confidence: float = 0.0
+    provider_mix_json: dict[str, float] = Field(default_factory=dict, sa_column=Column(JSON))
+    threshold_json: dict[str, float | str | int | bool] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
+
+
 class PortfolioRiskSnapshot(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     ts: datetime = Field(default_factory=utc_now, index=True)

@@ -337,3 +337,11 @@ class RuntimeSettingsRequest(BaseModel):
     no_trade_min_breadth_pct: float | None = None
     no_trade_min_trend_strength: float | None = None
     no_trade_cooldown_trading_days: int | None = None
+    confidence_gate_enabled: bool | None = None
+    confidence_gate_avg_threshold: float | None = None
+    confidence_gate_low_symbol_threshold: float | None = None
+    confidence_gate_low_pct_threshold: float | None = None
+    confidence_gate_fallback_pct_threshold: float | None = None
+    confidence_gate_hard_floor: float | None = None
+    confidence_gate_action_on_trigger: str | None = None
+    confidence_gate_lookback_days: int | None = None

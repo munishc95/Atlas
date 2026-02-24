@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import (
+    ConfidenceGateSnapshot,
     DataQualityReport,
     DataUpdateRun,
     Job,
@@ -242,6 +243,41 @@ def _latest_operate_run_provider_stage_status(session: Session) -> str | None:
     return token or None
 
 
+def _latest_confidence_gate_snapshot(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> ConfidenceGateSnapshot | None:
+    stmt = select(ConfidenceGateSnapshot)
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        stmt = stmt.where(ConfidenceGateSnapshot.bundle_id == int(bundle_id))
+    if isinstance(timeframe, str) and timeframe.strip():
+        stmt = stmt.where(ConfidenceGateSnapshot.timeframe == str(timeframe).strip())
+    stmt = stmt.order_by(
+        ConfidenceGateSnapshot.trading_date.desc(),
+        ConfidenceGateSnapshot.created_at.desc(),
+        ConfidenceGateSnapshot.id.desc(),
+    ).limit(1)
+    return session.exec(stmt).first()
+
+
+def _serialize_confidence_gate_snapshot(row: ConfidenceGateSnapshot) -> dict[str, Any]:
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "bundle_id": int(row.bundle_id) if row.bundle_id is not None else None,
+        "timeframe": str(row.timeframe),
+        "trading_date": row.trading_date.isoformat(),
+        "decision": str(row.decision),
+        "reasons": list(row.reasons_json or []),
+        "avg_confidence": float(row.avg_confidence),
+        "pct_low_confidence": float(row.pct_low_confidence),
+        "provider_mix": dict(row.provider_mix_json or {}),
+        "threshold_used": dict(row.threshold_json or {}),
+    }
+
+
 def get_operate_health_summary(
     session: Session,
     settings: Settings,
@@ -465,6 +501,11 @@ def get_operate_health_summary(
                 }
 
     provider_stage_status = _latest_operate_run_provider_stage_status(session)
+    latest_confidence_gate = _latest_confidence_gate_snapshot(
+        session,
+        bundle_id=target_bundle_id if isinstance(target_bundle_id, int) else None,
+        timeframe=target_timeframe,
+    )
 
     return {
         "mode": mode,
@@ -512,6 +553,11 @@ def get_operate_health_summary(
         "upstox_token_expires_within_hours": expires_within_hours,
         "upstox_notifier_health": upstox_notifier_health,
         "provider_stage_status": provider_stage_status,
+        "latest_confidence_gate": (
+            _serialize_confidence_gate_snapshot(latest_confidence_gate)
+            if latest_confidence_gate is not None
+            else None
+        ),
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None
         else None,

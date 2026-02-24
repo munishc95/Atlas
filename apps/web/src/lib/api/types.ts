@@ -324,6 +324,8 @@ export type ApiOperateStatus = {
   no_trade?: Record<string, unknown>;
   no_trade_triggered?: boolean;
   no_trade_reasons?: string[];
+  confidence_gate?: Record<string, unknown>;
+  latest_confidence_gate?: ApiConfidenceGateSnapshot | null;
   ensemble_weights_source?: string | null;
   ensemble_regime_used?: string | null;
   last_run_step_at?: string | null;
@@ -450,7 +452,39 @@ export type ApiDataProvenance = {
     low_confidence_days_count?: number;
     low_confidence_symbols_count?: number;
     latest_day_all_low_confidence?: boolean;
+    confidence_gate_latest?: ApiConfidenceGateSnapshot | null;
   };
+};
+
+export type ApiConfidenceGateSnapshot = {
+  id?: number | null;
+  created_at?: string | null;
+  bundle_id?: number | null;
+  timeframe: string;
+  trading_date: string;
+  decision: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string;
+  reasons: string[];
+  avg_confidence: number;
+  pct_low_confidence: number;
+  provider_mix: Record<string, number>;
+  threshold_used?: Record<string, unknown>;
+};
+
+export type ApiProviderStatusTrendDay = {
+  trading_date: string;
+  provider_counts: Record<string, number>;
+  provider_mix: Record<string, number>;
+  dominant_provider?: string | null;
+  avg_confidence: number;
+  pct_low_confidence: number;
+  symbols: number;
+};
+
+export type ApiProviderStatusTrend = {
+  bundle_id: number;
+  timeframe: string;
+  days: number;
+  trend: ApiProviderStatusTrendDay[];
 };
 
 export type ApiProviderStatusItem = {
@@ -705,6 +739,7 @@ export type ApiOperateHealth = {
   no_trade?: Record<string, unknown>;
   no_trade_triggered?: boolean;
   no_trade_reasons?: string[];
+  latest_confidence_gate?: ApiConfidenceGateSnapshot | null;
   ensemble_weights_source?: string | null;
   ensemble_regime_used?: string | null;
   last_run_step_at?: string | null;

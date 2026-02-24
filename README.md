@@ -258,6 +258,43 @@ New APIs:
 - `GET /api/data/quality/latest?bundle_id=&timeframe=`
 - `GET /api/data/quality/history?bundle_id=&timeframe=&days=`
 - `GET /api/operate/events?since=&severity=&category=`
+
+## Confidence-Gated Trading + Auto Shadow (v3.7)
+
+Atlas now adds a provenance-driven confidence gate on top of quality checks:
+
+- Confidence gate decisions are persisted per trading day (`PASS`, `SHADOW_ONLY`, `BLOCK_ENTRIES`).
+- Decision inputs use latest provenance confidence and provider mix.
+- When triggered:
+  - `SHADOW_ONLY`: paper step runs in shadow mode (no live state mutation).
+  - `BLOCK_ENTRIES`: entries are blocked with reason `confidence_gate_block_entries`, exits still run.
+- Every paper run summary now includes `confidence_gate` metadata.
+- Daily/monthly reports include confidence-gate context:
+  - daily: decision + reasons + confidence stats
+  - monthly: shadow-day count due to gate + provider mix distribution summary
+
+New APIs:
+
+- `GET /api/confidence-gate/latest?bundle_id=&timeframe=`
+- `GET /api/confidence-gate/history?bundle_id=&timeframe=&limit=60`
+- `GET /api/providers/status/trend?bundle_id=&timeframe=&days=30`
+
+UI updates:
+
+- Ops page shows a **Data Confidence** card with decision badge and provider mix.
+- Ops page has a trend drawer for last N snapshots.
+- Universe & Data provenance drawer shows latest confidence-gate decision and links to Ops.
+
+Runtime settings:
+
+- `confidence_gate_enabled`
+- `confidence_gate_avg_threshold`
+- `confidence_gate_low_symbol_threshold`
+- `confidence_gate_low_pct_threshold`
+- `confidence_gate_fallback_pct_threshold`
+- `confidence_gate_hard_floor`
+- `confidence_gate_action_on_trigger` (`SHADOW_ONLY` or `BLOCK_ENTRIES`)
+- `confidence_gate_lookback_days`
 - `GET /api/operate/health`
 
 New frontend page:

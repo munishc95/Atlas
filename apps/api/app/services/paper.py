@@ -32,6 +32,11 @@ from app.engine.costs import (
     estimate_intraday_cost,
 )
 from app.engine.signal_engine import SignalGenerationResult, generate_signals_for_policy
+from app.services.confidence_gate import (
+    DECISION_BLOCK_ENTRIES,
+    DECISION_SHADOW_ONLY,
+    evaluate_confidence_gate,
+)
 from app.services.data_quality import (
     STATUS_FAIL as DATA_QUALITY_FAIL,
     STATUS_WARN as DATA_QUALITY_WARN,
@@ -218,6 +223,16 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
             "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
             "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
+            "confidence_gate_enabled": (
+                True if str(settings.operate_mode).strip().lower() == "live" else False
+            ),
+            "confidence_gate_avg_threshold": settings.confidence_gate_avg_threshold,
+            "confidence_gate_low_symbol_threshold": settings.confidence_gate_low_symbol_threshold,
+            "confidence_gate_low_pct_threshold": settings.confidence_gate_low_pct_threshold,
+            "confidence_gate_fallback_pct_threshold": settings.confidence_gate_fallback_pct_threshold,
+            "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
+            "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
+            "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
             "paper_mode": "strategy",
             "active_policy_id": None,
             "active_ensemble_id": None,
@@ -1373,6 +1388,7 @@ def _run_paper_step_with_simulator_engine(
     safe_mode_action: str,
     safe_mode_reason: str | None,
     no_trade_snapshot: dict[str, Any],
+    confidence_gate_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
     risk_overlay: dict[str, Any],
@@ -1551,6 +1567,7 @@ def _run_paper_step_with_simulator_engine(
         "no_trade": dict(no_trade_snapshot or {}),
         "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
         "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
+        "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -1835,6 +1852,7 @@ def _run_paper_step_with_simulator_engine(
                 "warnings": quality_warn_summary,
             },
             "no_trade": dict(no_trade_snapshot or {}),
+            "confidence_gate": dict(confidence_gate_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -1909,6 +1927,7 @@ def _run_paper_step_shadow_only(
     safe_mode_action: str,
     safe_mode_reason: str | None,
     no_trade_snapshot: dict[str, Any],
+    confidence_gate_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
     risk_overlay: dict[str, Any],
@@ -2055,6 +2074,7 @@ def _run_paper_step_shadow_only(
         "no_trade": dict(no_trade_snapshot or {}),
         "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
         "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
+        "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -2257,6 +2277,7 @@ def _run_paper_step_shadow_only(
                 "warnings": quality_warn_summary,
             },
             "no_trade": dict(no_trade_snapshot or {}),
+            "confidence_gate": dict(confidence_gate_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -2571,6 +2592,35 @@ def run_paper_step(
                 "breadth_pct": no_trade_snapshot.get("breadth_pct"),
                 "realized_vol": no_trade_snapshot.get("realized_vol"),
                 "trend_strength": no_trade_snapshot.get("trend_strength"),
+            },
+        )
+
+    operate_mode = str(state_settings.get("operate_mode", settings.operate_mode)).strip().lower()
+    confidence_gate_snapshot = evaluate_confidence_gate(
+        session,
+        settings=settings,
+        bundle_id=resolved_bundle_id,
+        timeframe=primary_timeframe,
+        asof_ts=asof_dt,
+        operate_mode=operate_mode,
+        overrides=state_settings,
+        correlation_id=str(seed),
+        persist=True,
+    )
+    confidence_gate_decision = str(confidence_gate_snapshot.get("decision", "PASS")).upper()
+    confidence_gate_reasons = list(confidence_gate_snapshot.get("reasons", []))
+    confidence_gate_force_shadow = confidence_gate_decision == DECISION_SHADOW_ONLY
+    confidence_gate_block_entries = confidence_gate_decision == DECISION_BLOCK_ENTRIES
+    if confidence_gate_decision != "PASS":
+        _log(
+            session,
+            "confidence_gate_triggered",
+            {
+                "bundle_id": resolved_bundle_id,
+                "timeframe": primary_timeframe,
+                "decision": confidence_gate_decision,
+                "reasons": confidence_gate_reasons,
+                "summary": confidence_gate_snapshot.get("summary", {}),
             },
         )
 
@@ -2972,6 +3022,28 @@ def run_paper_step(
                 }
             )
         candidates = []
+    elif confidence_gate_block_entries:
+        for signal in candidates:
+            skipped_signals.append(
+                {
+                    "symbol": str(signal.get("symbol", "")).upper(),
+                    "underlying_symbol": str(
+                        signal.get("underlying_symbol", signal.get("symbol", ""))
+                    ).upper(),
+                    "template": str(signal.get("template", "trend_breakout")),
+                    "side": str(signal.get("side", "BUY")).upper(),
+                    "instrument_kind": str(signal.get("instrument_kind", "EQUITY_CASH")).upper(),
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                    "policy_name": policy.get("policy_name"),
+                    "reason": "confidence_gate_block_entries",
+                    "details": {
+                        "decision": confidence_gate_decision,
+                        "reasons": confidence_gate_reasons,
+                    },
+                }
+            )
+        candidates = []
     elif no_trade_active:
         for signal in candidates:
             skipped_signals.append(
@@ -3015,7 +3087,6 @@ def run_paper_step(
     selected_symbols = set(open_symbols)
     selected_underlyings = set(open_underlyings)
     inactive_symbols: set[str] = set()
-    operate_mode = str(state_settings.get("operate_mode", settings.operate_mode)).strip().lower()
     enforce_inactive_filter = operate_mode == "live" and not (
         safe_mode_active and safe_mode_action == "shadow_only"
     )
@@ -3277,7 +3348,7 @@ def run_paper_step(
     use_simulator_engine = bool(
         state_settings.get("paper_use_simulator_engine", settings.paper_use_simulator_engine)
     )
-    if safe_mode_active and safe_mode_action == "shadow_only":
+    if (safe_mode_active and safe_mode_action == "shadow_only") or confidence_gate_force_shadow:
         return _run_paper_step_shadow_only(
             session=session,
             settings=settings,
@@ -3299,6 +3370,7 @@ def run_paper_step(
             safe_mode_action=safe_mode_action,
             safe_mode_reason=safe_mode_reason,
             no_trade_snapshot=no_trade_snapshot,
+            confidence_gate_snapshot=confidence_gate_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
             risk_overlay=risk_overlay,
@@ -3334,6 +3406,7 @@ def run_paper_step(
             safe_mode_action=safe_mode_action,
             safe_mode_reason=safe_mode_reason,
             no_trade_snapshot=no_trade_snapshot,
+            confidence_gate_snapshot=confidence_gate_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
             risk_overlay=risk_overlay,
@@ -3766,6 +3839,7 @@ def run_paper_step(
         "no_trade": dict(no_trade_snapshot or {}),
         "no_trade_triggered": bool((no_trade_snapshot or {}).get("triggered", False)),
         "no_trade_reasons": list((no_trade_snapshot or {}).get("reasons", [])),
+        "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
         "cost_ratio_spike_active": bool(cost_spike_active),
@@ -4031,6 +4105,7 @@ def run_paper_step(
                 "warnings": quality_warn_summary,
             },
             "no_trade": dict(no_trade_snapshot or {}),
+            "confidence_gate": dict(confidence_gate_snapshot or {}),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,

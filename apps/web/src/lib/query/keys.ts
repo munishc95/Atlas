@@ -90,6 +90,12 @@ export const qk = {
       limit,
     ] as const,
   providersStatus: ["providersStatus"] as const,
+  providersStatusTrend: (bundleId?: number | null, timeframe = "1d", days = 30) =>
+    ["providersStatusTrend", bundleId ?? "none", timeframe, days] as const,
+  confidenceGateLatest: (bundleId?: number | null, timeframe?: string | null) =>
+    ["confidenceGateLatest", bundleId ?? "all", timeframe ?? "all"] as const,
+  confidenceGateHistory: (bundleId?: number | null, timeframe?: string | null, limit = 60) =>
+    ["confidenceGateHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,

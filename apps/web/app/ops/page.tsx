@@ -13,6 +13,7 @@ import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import type {
   ApiAutoEvalRun,
+  ApiConfidenceGateSnapshot,
   ApiOperateEvent,
   ApiOperateRunSummary,
   ApiPolicySwitchEvent,
@@ -38,6 +39,7 @@ export default function OpsPage() {
   const [lastOperateSummary, setLastOperateSummary] = useState<ApiOperateRunSummary | null>(null);
   const [renewRunId, setRenewRunId] = useState<string | null>(null);
   const [renewPayload, setRenewPayload] = useState<Record<string, unknown> | null>(null);
+  const [showConfidenceTrend, setShowConfidenceTrend] = useState(false);
 
   const statusQuery = useQuery({
     queryKey: qk.operateStatus,
@@ -79,6 +81,22 @@ export default function OpsPage() {
     queryKey: qk.providersStatus,
     queryFn: async () => (await atlasApi.providersStatus()).data,
     refetchInterval: 8_000,
+  });
+  const confidenceGateLatestQuery = useQuery({
+    queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe),
+    enabled: Boolean(activeBundleId),
+    queryFn: async () =>
+      (await atlasApi.confidenceGateLatest(activeBundleId ?? undefined, activeTimeframe)).data,
+    refetchInterval: 8_000,
+  });
+  const confidenceGateHistoryQuery = useQuery({
+    queryKey: qk.confidenceGateHistory(activeBundleId, activeTimeframe, 30),
+    enabled: Boolean(activeBundleId) && showConfidenceTrend,
+    queryFn: async () =>
+      (
+        await atlasApi.confidenceGateHistory(activeBundleId ?? undefined, activeTimeframe, 30)
+      ).data,
+    refetchInterval: showConfidenceTrend ? 8_000 : false,
   });
   const provenanceFrom = useMemo(() => {
     const d = new Date();
@@ -351,6 +369,8 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
       queryClient.invalidateQueries({ queryKey: qk.providersStatus });
+      queryClient.invalidateQueries({ queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe) });
+      queryClient.invalidateQueries({ queryKey: qk.confidenceGateHistory(activeBundleId, activeTimeframe, 30) });
       queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       if (activeBundleId) {
@@ -495,6 +515,17 @@ export default function OpsPage() {
     (healthQuery.data?.no_trade_reasons as string[] | undefined) ??
     []
   ).slice(0, 4);
+  const latestConfidenceGate =
+    (statusQuery.data?.latest_confidence_gate as ApiConfidenceGateSnapshot | null | undefined) ??
+    (healthQuery.data?.latest_confidence_gate as ApiConfidenceGateSnapshot | null | undefined) ??
+    confidenceGateLatestQuery.data ??
+    null;
+  const confidenceDecision = String(latestConfidenceGate?.decision ?? "PASS").toUpperCase();
+  const confidenceReasons = (latestConfidenceGate?.reasons ?? []).slice(0, 4);
+  const confidenceAvg = Number(latestConfidenceGate?.avg_confidence ?? 0);
+  const confidenceLowPct = Number(latestConfidenceGate?.pct_low_confidence ?? 0);
+  const confidenceTradingDate = String(latestConfidenceGate?.trading_date ?? "-");
+  const confidenceProviderMix = latestConfidenceGate?.provider_mix ?? {};
   const ensembleWeightsSource = String(
     statusQuery.data?.ensemble_weights_source ??
       healthQuery.data?.ensemble_weights_source ??
@@ -604,6 +635,64 @@ export default function OpsPage() {
   return (
     <div className="space-y-5">
       <JobDrawer jobId={jobId} onClose={() => setJobId(null)} title="Ops Job" />
+      <DetailsDrawer
+        open={showConfidenceTrend}
+        onClose={() => setShowConfidenceTrend(false)}
+        title="Data Confidence Trend"
+      >
+        {confidenceGateHistoryQuery.isLoading ? (
+          <LoadingState label="Loading confidence trend" />
+        ) : confidenceGateHistoryQuery.isError ? (
+          <ErrorState
+            title="Could not load confidence trend"
+            action="Retry confidence gate history query."
+            onRetry={() => void confidenceGateHistoryQuery.refetch()}
+          />
+        ) : (confidenceGateHistoryQuery.data ?? []).length === 0 ? (
+          <EmptyState
+            title="No confidence snapshots yet"
+            action="Run operate once to generate snapshots."
+          />
+        ) : (
+          <div className="space-y-2">
+            {(confidenceGateHistoryQuery.data ?? []).map((row) => {
+              const decision = String(row.decision ?? "PASS").toUpperCase();
+              const providerMix = row.provider_mix ?? {};
+              return (
+                <div key={`${row.id ?? row.trading_date}`} className="rounded-xl border border-border p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium text-foreground">{row.trading_date}</p>
+                    <span
+                      className={`badge ${
+                        decision === "PASS"
+                          ? "bg-success/15 text-success"
+                          : decision === "BLOCK_ENTRIES"
+                            ? "bg-danger/15 text-danger"
+                            : "bg-warning/15 text-warning"
+                      }`}
+                    >
+                      {decision}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-muted">
+                    Avg confidence {Number(row.avg_confidence ?? 0).toFixed(1)} | low-confidence{" "}
+                    {(Number(row.pct_low_confidence ?? 0) * 100).toFixed(1)}%
+                  </p>
+                  <p className="mt-1 text-muted">
+                    Provider mix:{" "}
+                    {Object.entries(providerMix)
+                      .map(([provider, pct]) => `${provider} ${(Number(pct) * 100).toFixed(0)}%`)
+                      .join(" | ") || "-"}
+                  </p>
+                  {(row.reasons ?? []).length > 0 ? (
+                    <p className="mt-1 text-muted">Reasons: {(row.reasons ?? []).join(", ")}</p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DetailsDrawer>
 
       <section className="card p-4">
         <div className="flex items-center justify-between">
@@ -649,6 +738,46 @@ export default function OpsPage() {
             ))}
           </ul>
         ) : null}
+        <div className="mt-3 rounded-xl border border-border p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold">Data Confidence</h3>
+              <p className="mt-1 text-xs text-muted">Confidence gate decision as of {confidenceTradingDate}</p>
+            </div>
+            <span
+              className={`badge ${
+                confidenceDecision === "PASS"
+                  ? "bg-success/15 text-success"
+                  : confidenceDecision === "BLOCK_ENTRIES"
+                    ? "bg-danger/15 text-danger"
+                    : "bg-warning/15 text-warning"
+              }`}
+            >
+              {confidenceDecision === "SHADOW_ONLY" ? "SHADOW" : confidenceDecision}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Avg confidence {confidenceAvg.toFixed(1)} | low-confidence symbols {(confidenceLowPct * 100).toFixed(1)}%
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Provider mix:{" "}
+            {Object.entries(confidenceProviderMix)
+              .map(([provider, pct]) => `${provider} ${(Number(pct) * 100).toFixed(0)}%`)
+              .join(" | ") || "-"}
+          </p>
+          {confidenceReasons.length > 0 ? (
+            <p className="mt-1 text-xs text-muted">Reasons: {confidenceReasons.join(", ")}</p>
+          ) : null}
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => setShowConfidenceTrend(true)}
+              className="focus-ring rounded-md border border-border px-2 py-1 text-xs text-muted"
+            >
+              View trend
+            </button>
+          </div>
+        </div>
         <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Fast mode:{" "}
           <span className={`badge ${fastModeEnabled ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>

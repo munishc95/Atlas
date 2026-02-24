@@ -230,3 +230,67 @@ def provider_status_payload(
         "upstox_token_status": rows["UPSTOX"].get("token", {}),
     }
 
+
+def provider_status_trend(
+    session: Session,
+    *,
+    bundle_id: int,
+    timeframe: str,
+    days: int = 30,
+) -> list[dict[str, Any]]:
+    tf = str(timeframe or "1d").strip()
+    latest_row = session.exec(
+        select(DataProvenance)
+        .where(DataProvenance.bundle_id == int(bundle_id))
+        .where(DataProvenance.timeframe == tf)
+        .order_by(DataProvenance.bar_date.desc())
+        .limit(1)
+    ).first()
+    if latest_row is None:
+        return []
+    latest_day = latest_row.bar_date
+    lookback_days = max(1, min(int(days), 365))
+    rows = list(
+        session.exec(
+            select(DataProvenance)
+            .where(DataProvenance.bundle_id == int(bundle_id))
+            .where(DataProvenance.timeframe == tf)
+            .where(DataProvenance.bar_date <= latest_day)
+            .order_by(DataProvenance.bar_date.desc())
+        ).all()
+    )
+    per_day: dict[dt_date, list[DataProvenance]] = {}
+    for row in rows:
+        per_day.setdefault(row.bar_date, []).append(row)
+    selected_days = sorted(per_day.keys())[-lookback_days:]
+    output: list[dict[str, Any]] = []
+    for day in selected_days:
+        day_rows = per_day.get(day, [])
+        total = max(1, len(day_rows))
+        counts: dict[str, int] = {}
+        conf_sum = 0.0
+        low_conf_count = 0
+        for row in day_rows:
+            provider = _provider_token(row.source_provider)
+            counts[provider] = int(counts.get(provider, 0)) + 1
+            score = float(row.confidence_score or 0.0)
+            conf_sum += score
+            if score < 65.0:
+                low_conf_count += 1
+        mix = {
+            provider: round(count / total, 6)
+            for provider, count in sorted(counts.items())
+        }
+        dominant = max(mix.items(), key=lambda item: item[1])[0] if mix else None
+        output.append(
+            {
+                "trading_date": day.isoformat(),
+                "provider_counts": counts,
+                "provider_mix": mix,
+                "dominant_provider": dominant,
+                "avg_confidence": round(conf_sum / total, 6),
+                "pct_low_confidence": round(low_conf_count / total, 6),
+                "symbols": int(len(day_rows)),
+            }
+        )
+    return output

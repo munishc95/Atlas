@@ -159,6 +159,14 @@ class Settings(BaseSettings):
     no_trade_min_breadth_pct: float = 35.0
     no_trade_min_trend_strength: float = 15.0
     no_trade_cooldown_trading_days: int = 2
+    confidence_gate_enabled: bool = True
+    confidence_gate_avg_threshold: float = 70.0
+    confidence_gate_low_symbol_threshold: float = 65.0
+    confidence_gate_low_pct_threshold: float = 0.50
+    confidence_gate_fallback_pct_threshold: float = 0.80
+    confidence_gate_hard_floor: float = 55.0
+    confidence_gate_action_on_trigger: str = "SHADOW_ONLY"
+    confidence_gate_lookback_days: int = 1
 
     four_hour_bars: str = Field(default="09:15-13:15,13:15-15:30")
     upstox_access_token: str | None = None
