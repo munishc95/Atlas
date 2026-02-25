@@ -234,6 +234,9 @@ export default function SettingsPage() {
         confidence_gate_hard_floor: Number(form.confidence_gate_hard_floor),
         confidence_gate_action_on_trigger: String(form.confidence_gate_action_on_trigger || "SHADOW_ONLY"),
         confidence_gate_lookback_days: Number(form.confidence_gate_lookback_days),
+        confidence_risk_scaling_enabled: form.confidence_risk_scaling_enabled === "true",
+        confidence_risk_scale_exponent: Number(form.confidence_risk_scale_exponent),
+        confidence_risk_scale_low_threshold: Number(form.confidence_risk_scale_low_threshold),
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -570,6 +573,9 @@ export default function SettingsPage() {
       { key: "confidence_gate_hard_floor", label: "Confidence gate hard floor" },
       { key: "confidence_gate_action_on_trigger", label: "Confidence gate action (SHADOW_ONLY/BLOCK_ENTRIES)" },
       { key: "confidence_gate_lookback_days", label: "Confidence gate lookback days" },
+      { key: "confidence_risk_scaling_enabled", label: "Confidence risk scaling enabled (true/false)" },
+      { key: "confidence_risk_scale_exponent", label: "Confidence risk scale exponent" },
+      { key: "confidence_risk_scale_low_threshold", label: "Confidence risk low-scale warning threshold" },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],
@@ -609,6 +615,10 @@ export default function SettingsPage() {
   const notifierPingUrl = String(notifierPing?.ping_url ?? "-");
   const notifierPingStatus = String(
     notifierPing?.status ?? (notifierPingId !== null ? "SENT" : "-"),
+  );
+  const currentConfidenceRiskScale = Number(
+    (operateStatusQuery.data?.latest_confidence_gate as Record<string, unknown> | undefined)
+      ?.confidence_risk_scale ?? 1,
   );
 
   const copyNotifierUrl = async () => {
@@ -726,6 +736,9 @@ export default function SettingsPage() {
             </button>
             <p className="mt-2 text-xs text-muted">
               Unified simulator is default for paper execution; disable this only as a temporary legacy fallback.
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              Current confidence risk scale: {(currentConfidenceRiskScale * 100).toFixed(1)}%
             </p>
           </>
         )}

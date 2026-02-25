@@ -229,7 +229,12 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   expect(typeof reportData.content_json).toBe("object");
   const reportContent = (reportData.content_json ?? {}) as Record<string, unknown>;
   const confidenceGate = (reportContent.confidence_gate ?? {}) as Record<string, unknown>;
+  const confidenceRiskScaling = (reportContent.confidence_risk_scaling ?? {}) as Record<
+    string,
+    unknown
+  >;
   expect(String(confidenceGate.decision ?? "")).toBe("SHADOW_ONLY");
+  expect(Number(confidenceRiskScaling.scale ?? 1)).toBeLessThan(1);
   expect(String((reportContent.summary as Record<string, unknown> | undefined)?.mode ?? "")).toBe(
     "SHADOW",
   );
@@ -296,6 +301,7 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Data Confidence" })).toBeVisible({
     timeout: 20_000,
   });
+  await expect(page.getByText(/Confidence risk scale:/i)).toBeVisible({ timeout: 20_000 });
   const confidenceCard = page
     .locator("div.rounded-xl.border")
     .filter({ has: page.getByRole("heading", { name: "Data Confidence" }) })
@@ -305,4 +311,5 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   await page.getByRole("button", { name: "View trend" }).click();
   await expect(page.getByText(/Data Confidence Trend/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Risk scale/i).first()).toBeVisible({ timeout: 20_000 });
 });

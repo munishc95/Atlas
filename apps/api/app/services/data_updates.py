@@ -14,6 +14,7 @@ from app.core.exceptions import APIError
 from app.db.models import DataUpdateFile, DataUpdateRun, DatasetBundle
 from app.services.data_provenance import confidence_for_provider, upsert_provenance_rows
 from app.services.data_store import DataStore
+from app.services.confidence_agg import upsert_daily_confidence_agg
 from app.services.importer import _validate_numeric
 from app.services.operate_events import emit_operate_event
 from app.services.trading_calendar import (
@@ -699,6 +700,32 @@ def run_data_updates(
                 "processed_files": processed_files,
                 "rows_ingested": rows_ingested,
                 "symbols_affected": sorted(symbols_affected),
+            },
+            correlation_id=correlation_id,
+        )
+
+    try:
+        upsert_daily_confidence_agg(
+            session,
+            settings=settings,
+            bundle_id=int(bundle_id),
+            timeframe=tf,
+            trading_date=datetime.now(timezone.utc).date(),
+            operate_mode=str(state.get("operate_mode", settings.operate_mode)).strip().lower(),
+            overrides=state,
+            force=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_agg_refresh_failed",
+            details={
+                "bundle_id": int(bundle_id),
+                "timeframe": tf,
+                "stage": "data_updates",
+                "error": str(exc),
             },
             correlation_id=correlation_id,
         )

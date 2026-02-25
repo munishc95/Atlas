@@ -468,6 +468,25 @@ export type ApiConfidenceGateSnapshot = {
   pct_low_confidence: number;
   provider_mix: Record<string, number>;
   threshold_used?: Record<string, unknown>;
+  confidence_risk_scale?: number;
+};
+
+export type ApiDailyConfidenceAggregate = {
+  id?: number | null;
+  created_at?: string | null;
+  bundle_id: number;
+  timeframe: string;
+  trading_date: string;
+  eligible_symbols_count: number;
+  avg_confidence: number;
+  pct_low_confidence: number;
+  provider_counts: Record<string, number>;
+  low_confidence_symbols_count: number;
+  low_confidence_days_count: number;
+  decision: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string;
+  reasons: string[];
+  confidence_risk_scale: number;
+  threshold_used?: Record<string, unknown>;
 };
 
 export type ApiProviderStatusTrendDay = {
@@ -478,6 +497,8 @@ export type ApiProviderStatusTrendDay = {
   avg_confidence: number;
   pct_low_confidence: number;
   symbols: number;
+  decision?: string;
+  confidence_risk_scale?: number;
 };
 
 export type ApiProviderStatusTrend = {

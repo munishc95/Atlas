@@ -55,6 +55,9 @@ class SimulationConfig:
     risk_overlay_corr_clamp_enabled: bool = False
     risk_overlay_corr_threshold: float = 0.65
     risk_overlay_corr_reduce_factor: float = 0.5
+    confidence_risk_scaling_enabled: bool = False
+    confidence_risk_scale: float = 1.0
+    confidence_risk_scale_low_threshold: float = 0.35
     seed: int = 7
 
 
@@ -212,6 +215,9 @@ def _config_hash(config: SimulationConfig) -> str:
         "risk_overlay_corr_clamp_enabled": bool(config.risk_overlay_corr_clamp_enabled),
         "risk_overlay_corr_threshold": float(config.risk_overlay_corr_threshold),
         "risk_overlay_corr_reduce_factor": float(config.risk_overlay_corr_reduce_factor),
+        "confidence_risk_scaling_enabled": bool(config.confidence_risk_scaling_enabled),
+        "confidence_risk_scale": float(config.confidence_risk_scale),
+        "confidence_risk_scale_low_threshold": float(config.confidence_risk_scale_low_threshold),
         "seed": int(config.seed),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
@@ -899,6 +905,17 @@ def simulate_portfolio_step(
     overlay_scale = (
         max(0.0, float(config.risk_overlay_scale)) if overlay_enabled else 1.0
     )
+    confidence_scaling_enabled = bool(config.confidence_risk_scaling_enabled)
+    confidence_scale = (
+        max(0.0, min(1.0, float(config.confidence_risk_scale)))
+        if confidence_scaling_enabled
+        else 1.0
+    )
+    confidence_low_threshold = max(
+        0.0,
+        min(1.0, float(config.confidence_risk_scale_low_threshold)),
+    )
+    effective_scale = float(overlay_scale * confidence_scale)
     gross_cap_notional = max(0.0, float(config.risk_overlay_max_gross_exposure_pct)) * max(
         0.0, float(equity_reference)
     )
@@ -942,10 +959,13 @@ def simulate_portfolio_step(
         if len(positions) >= config.max_positions:
             skipped.append({**signal, "reason": "max_positions_reached"})
             continue
+        if confidence_scaling_enabled and confidence_scale <= 1e-9:
+            skipped.append({**signal, "reason": "risk_overlay_confidence_scale_zero"})
+            continue
 
         risk_amount = max(
             0.0,
-            float(equity_reference) * float(config.risk_per_trade) * overlay_scale,
+            float(equity_reference) * float(config.risk_per_trade) * effective_scale,
         )
         qty_risk = int(np.floor(risk_amount / stop_distance))
         if _is_futures(instrument_kind):
@@ -955,7 +975,17 @@ def simulate_portfolio_step(
             qty = qty_risk
             qty_lots = max(1, int(np.floor(qty / lot_size))) if qty > 0 else 0
         if qty <= 0 or qty_lots <= 0:
-            skipped.append({**signal, "reason": "invalid_price_or_size"})
+            skipped.append(
+                {
+                    **signal,
+                    "reason": (
+                        "risk_overlay_confidence_scale_low"
+                        if confidence_scaling_enabled and confidence_scale < confidence_low_threshold
+                        else "invalid_price_or_size"
+                    ),
+                    "confidence_risk_scale": float(confidence_scale),
+                }
+            )
             continue
 
         adv = float(signal.get("adv", 0.0))
@@ -1279,6 +1309,10 @@ def simulate_portfolio_step(
         "risk_overlay": {
             "enabled": bool(overlay_enabled),
             "risk_scale": float(overlay_scale),
+            "effective_risk_scale": float(effective_scale),
+            "confidence_risk_scaling_enabled": bool(confidence_scaling_enabled),
+            "confidence_risk_scale": float(confidence_scale),
+            "confidence_risk_scale_low_threshold": float(confidence_low_threshold),
             "realized_vol": float(config.risk_overlay_realized_vol),
             "target_vol": float(config.risk_overlay_target_vol),
             "caps": {

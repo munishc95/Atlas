@@ -193,6 +193,25 @@ def _build_simulation_config(
                 settings.risk_overlay_corr_reduce_factor,
             )
         ),
+        confidence_risk_scaling_enabled=bool(
+            (risk_overlay or {}).get(
+                "confidence_risk_scaling_enabled",
+                state_settings.get(
+                    "confidence_risk_scaling_enabled",
+                    settings.confidence_risk_scaling_enabled,
+                ),
+            )
+        ),
+        confidence_risk_scale=float((risk_overlay or {}).get("confidence_risk_scale", 1.0) or 1.0),
+        confidence_risk_scale_low_threshold=float(
+            (risk_overlay or {}).get(
+                "confidence_risk_scale_low_threshold",
+                state_settings.get(
+                    "confidence_risk_scale_low_threshold",
+                    settings.confidence_risk_scale_low_threshold,
+                ),
+            )
+        ),
         seed=int(seed),
     )
 

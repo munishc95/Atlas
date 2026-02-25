@@ -96,6 +96,10 @@ export const qk = {
     ["confidenceGateLatest", bundleId ?? "all", timeframe ?? "all"] as const,
   confidenceGateHistory: (bundleId?: number | null, timeframe?: string | null, limit = 60) =>
     ["confidenceGateHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
+  confidenceAggLatest: (bundleId?: number | null, timeframe?: string | null) =>
+    ["confidenceAggLatest", bundleId ?? "all", timeframe ?? "all"] as const,
+  confidenceAggHistory: (bundleId?: number | null, timeframe?: string | null, limit = 60) =>
+    ["confidenceAggHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,

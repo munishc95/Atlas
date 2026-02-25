@@ -92,7 +92,11 @@ export default function ReportsPage() {
     const summary = (content.summary ?? {}) as Record<string, unknown>;
     const explainability = (content.explainability ?? {}) as Record<string, unknown>;
     const risk = (content.risk ?? {}) as Record<string, unknown>;
-    return { summary, explainability, risk };
+    const confidenceRiskScaling = (content.confidence_risk_scaling ?? {}) as Record<
+      string,
+      unknown
+    >;
+    return { summary, explainability, risk, confidenceRiskScaling };
   }, [selectedReport]);
 
   return (
@@ -284,6 +288,10 @@ export default function ReportsPage() {
             </p>
             <p>
               <span className="text-muted">Mode:</span> {String(reportSummary.summary.mode ?? "LIVE")}
+            </p>
+            <p>
+              <span className="text-muted">Confidence risk scale:</span>{" "}
+              {String(reportSummary.confidenceRiskScaling.scale ?? "-")}
             </p>
             {reportSummary.summary.shadow_note ? (
               <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">

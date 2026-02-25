@@ -156,6 +156,11 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
                     "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
                     "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+                    "confidence_risk_scaling_enabled": (
+                        True if str(settings.operate_mode).strip().lower() == "live" else False
+                    ),
+                    "confidence_risk_scale_exponent": settings.confidence_risk_scale_exponent,
+                    "confidence_risk_scale_low_threshold": settings.confidence_risk_scale_low_threshold,
                     "paper_mode": "strategy",
                     "active_policy_id": None,
                     "active_ensemble_id": None,

@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.db.models import DataQualityReport
+from app.services.confidence_agg import upsert_daily_confidence_agg
 from app.services.data_provenance import provenance_summary
 from app.services.data_store import DataStore
 from app.services.data_updates import STATUS_FAIL as COVERAGE_FAIL
@@ -600,6 +601,32 @@ def run_data_quality_report(
                 "timeframe": tf,
                 "issue_count": len(issues),
                 "report_status": status,
+            },
+            correlation_id=correlation_id,
+        )
+
+    try:
+        upsert_daily_confidence_agg(
+            session,
+            settings=settings,
+            bundle_id=int(bundle_id),
+            timeframe=tf,
+            trading_date=now.date(),
+            operate_mode=operate_mode,
+            overrides=state,
+            force=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_agg_refresh_failed",
+            details={
+                "bundle_id": int(bundle_id),
+                "timeframe": tf,
+                "stage": "data_quality",
+                "error": str(exc),
             },
             correlation_id=correlation_id,
         )

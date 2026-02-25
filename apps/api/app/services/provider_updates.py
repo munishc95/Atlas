@@ -17,6 +17,7 @@ from app.services.data_provenance import (
     confidence_for_provider,
     upsert_provenance_rows,
 )
+from app.services.confidence_agg import upsert_daily_confidence_agg
 from app.services.data_store import DataStore
 from app.services.data_updates import compute_data_coverage
 from app.services.fast_mode import clamp_scan_symbols, fast_mode_enabled
@@ -1199,6 +1200,32 @@ def run_provider_updates(
             category="DATA",
             message="Provider update run completed successfully.",
             details=details,
+            correlation_id=correlation_id,
+        )
+
+    try:
+        upsert_daily_confidence_agg(
+            session,
+            settings=settings,
+            bundle_id=int(bundle_id),
+            timeframe=tf,
+            trading_date=datetime.now(UTC).date(),
+            operate_mode=str(state.get("operate_mode", settings.operate_mode)).strip().lower(),
+            overrides=state,
+            force=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_agg_refresh_failed",
+            details={
+                "bundle_id": int(bundle_id),
+                "timeframe": tf,
+                "stage": "provider_updates",
+                "error": str(exc),
+            },
             correlation_id=correlation_id,
         )
 

@@ -36,6 +36,11 @@ from app.services.confidence_gate import (
     DECISION_BLOCK_ENTRIES,
     DECISION_SHADOW_ONLY,
     evaluate_confidence_gate,
+    resolve_confidence_risk_scaling,
+)
+from app.services.confidence_agg import (
+    serialize_daily_confidence_agg,
+    upsert_daily_confidence_agg,
 )
 from app.services.data_quality import (
     STATUS_FAIL as DATA_QUALITY_FAIL,
@@ -233,6 +238,11 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
             "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
             "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+            "confidence_risk_scaling_enabled": (
+                True if str(settings.operate_mode).strip().lower() == "live" else False
+            ),
+            "confidence_risk_scale_exponent": settings.confidence_risk_scale_exponent,
+            "confidence_risk_scale_low_threshold": settings.confidence_risk_scale_low_threshold,
             "paper_mode": "strategy",
             "active_policy_id": None,
             "active_ensemble_id": None,
@@ -1609,6 +1619,19 @@ def _run_paper_step_with_simulator_engine(
                 "risk_scale", risk_overlay.get("risk_scale", 1.0)
             )
         ),
+        "confidence_risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "confidence_risk_scale",
+                risk_overlay.get("confidence_risk_scale", 1.0),
+            )
+        ),
+        "effective_risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "effective_risk_scale",
+                float(risk_overlay.get("risk_scale", 1.0))
+                * float(risk_overlay.get("confidence_risk_scale", 1.0)),
+            )
+        ),
         "realized_vol": float(
             (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
                 "realized_vol", risk_overlay.get("realized_vol", 0.0)
@@ -1832,8 +1855,9 @@ def _run_paper_step_with_simulator_engine(
                 or int(policy["max_positions"]) < base_max_positions
                 or float(
                     (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
-                        "risk_scale",
-                        risk_overlay.get("risk_scale", 1.0),
+                        "effective_risk_scale",
+                        float(risk_overlay.get("risk_scale", 1.0))
+                        * float(risk_overlay.get("confidence_risk_scale", 1.0)),
                     )
                 )
                 < 0.999
@@ -1871,6 +1895,31 @@ def _run_paper_step_with_simulator_engine(
                 "risk_scale": float(
                     (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
                         "risk_scale", risk_overlay.get("risk_scale", 1.0)
+                    )
+                ),
+                "effective_risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "effective_risk_scale",
+                        float(risk_overlay.get("risk_scale", 1.0))
+                        * float(risk_overlay.get("confidence_risk_scale", 1.0)),
+                    )
+                ),
+                "confidence_risk_scaling_enabled": bool(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scaling_enabled",
+                        risk_overlay.get("confidence_risk_scaling_enabled", False),
+                    )
+                ),
+                "confidence_risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scale",
+                        risk_overlay.get("confidence_risk_scale", 1.0),
+                    )
+                ),
+                "confidence_risk_scale_low_threshold": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scale_low_threshold",
+                        risk_overlay.get("confidence_risk_scale_low_threshold", 0.35),
                     )
                 ),
                 "realized_vol": float(
@@ -2113,6 +2162,19 @@ def _run_paper_step_shadow_only(
                 "risk_scale", risk_overlay.get("risk_scale", 1.0)
             )
         ),
+        "confidence_risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "confidence_risk_scale",
+                risk_overlay.get("confidence_risk_scale", 1.0),
+            )
+        ),
+        "effective_risk_scale": float(
+            (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                "effective_risk_scale",
+                float(risk_overlay.get("risk_scale", 1.0))
+                * float(risk_overlay.get("confidence_risk_scale", 1.0)),
+            )
+        ),
         "realized_vol": float(
             (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
                 "realized_vol", risk_overlay.get("realized_vol", 0.0)
@@ -2257,8 +2319,9 @@ def _run_paper_step_shadow_only(
                 or int(policy["max_positions"]) < base_max_positions
                 or float(
                     (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
-                        "risk_scale",
-                        risk_overlay.get("risk_scale", 1.0),
+                        "effective_risk_scale",
+                        float(risk_overlay.get("risk_scale", 1.0))
+                        * float(risk_overlay.get("confidence_risk_scale", 1.0)),
                     )
                 )
                 < 0.999
@@ -2296,6 +2359,31 @@ def _run_paper_step_shadow_only(
                 "risk_scale": float(
                     (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
                         "risk_scale", risk_overlay.get("risk_scale", 1.0)
+                    )
+                ),
+                "effective_risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "effective_risk_scale",
+                        float(risk_overlay.get("risk_scale", 1.0))
+                        * float(risk_overlay.get("confidence_risk_scale", 1.0)),
+                    )
+                ),
+                "confidence_risk_scaling_enabled": bool(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scaling_enabled",
+                        risk_overlay.get("confidence_risk_scaling_enabled", False),
+                    )
+                ),
+                "confidence_risk_scale": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scale",
+                        risk_overlay.get("confidence_risk_scale", 1.0),
+                    )
+                ),
+                "confidence_risk_scale_low_threshold": float(
+                    (sim_execution.metadata.get("risk_overlay", {}) or {}).get(
+                        "confidence_risk_scale_low_threshold",
+                        risk_overlay.get("confidence_risk_scale_low_threshold", 0.35),
                     )
                 ),
                 "realized_vol": float(
@@ -2607,8 +2695,109 @@ def run_paper_step(
         correlation_id=str(seed),
         persist=True,
     )
+    confidence_agg_snapshot: dict[str, Any] | None = None
+    try:
+        if isinstance(resolved_bundle_id, int) and resolved_bundle_id > 0:
+            agg_row, _ = upsert_daily_confidence_agg(
+                session,
+                settings=settings,
+                bundle_id=int(resolved_bundle_id),
+                timeframe=primary_timeframe,
+                trading_date=asof_dt.date(),
+                operate_mode=operate_mode,
+                overrides=state_settings,
+                force=False,
+            )
+            confidence_agg_snapshot = serialize_daily_confidence_agg(agg_row)
+            confidence_gate_snapshot = {
+                **dict(confidence_gate_snapshot or {}),
+                "id": confidence_agg_snapshot.get("id"),
+                "decision": confidence_agg_snapshot.get("decision", confidence_gate_snapshot.get("decision", "PASS")),
+                "reasons": confidence_agg_snapshot.get("reasons", confidence_gate_snapshot.get("reasons", [])),
+                "summary": {
+                    **dict(confidence_gate_snapshot.get("summary", {})),
+                    "trading_date": confidence_agg_snapshot.get("trading_date"),
+                    "avg_confidence": float(confidence_agg_snapshot.get("avg_confidence", 0.0)),
+                    "pct_low_confidence": float(confidence_agg_snapshot.get("pct_low_confidence", 0.0)),
+                    "provider_mix": dict(confidence_agg_snapshot.get("provider_counts", {})),
+                    "latest_day_source_counts": dict(confidence_agg_snapshot.get("provider_counts", {})),
+                    "confidence_risk_scale": float(confidence_agg_snapshot.get("confidence_risk_scale", 1.0)),
+                    "threshold_used": dict(confidence_agg_snapshot.get("threshold_used", {})),
+                    "days_lookback_used": max(
+                        1,
+                        int(
+                            confidence_agg_snapshot.get(
+                                "threshold_used", {}
+                            ).get("confidence_gate_lookback_days", 1)
+                        ),
+                    ),
+                    "eligible_symbols": int(confidence_agg_snapshot.get("eligible_symbols_count", 0)),
+                },
+            }
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_agg_refresh_failed",
+            details={
+                "bundle_id": resolved_bundle_id,
+                "timeframe": primary_timeframe,
+                "stage": "paper_run_step",
+                "error": str(exc),
+            },
+            correlation_id=str(seed),
+        )
+
     confidence_gate_decision = str(confidence_gate_snapshot.get("decision", "PASS")).upper()
     confidence_gate_reasons = list(confidence_gate_snapshot.get("reasons", []))
+    confidence_gate_summary = (
+        dict(confidence_gate_snapshot.get("summary", {}))
+        if isinstance(confidence_gate_snapshot.get("summary", {}), dict)
+        else {}
+    )
+    confidence_scaling = resolve_confidence_risk_scaling(
+        settings=settings,
+        overrides=state_settings,
+        avg_confidence=float(confidence_gate_summary.get("avg_confidence", 0.0)),
+        hard_floor=float(
+            state_settings.get("confidence_gate_hard_floor", settings.confidence_gate_hard_floor)
+        ),
+        avg_threshold=float(
+            state_settings.get(
+                "confidence_gate_avg_threshold", settings.confidence_gate_avg_threshold
+            )
+        ),
+    )
+    confidence_risk_scale = float(confidence_scaling.get("confidence_risk_scale", 1.0))
+    if confidence_gate_decision == DECISION_BLOCK_ENTRIES:
+        confidence_risk_scale = 0.0
+    confidence_gate_summary["confidence_risk_scale"] = confidence_risk_scale
+    confidence_gate_summary["confidence_risk_scaling_enabled"] = bool(
+        confidence_scaling.get("enabled", False)
+    )
+    confidence_gate_summary["confidence_risk_scale_exponent"] = float(
+        confidence_scaling.get("exponent", settings.confidence_risk_scale_exponent)
+    )
+    confidence_gate_summary["confidence_risk_scale_low_threshold"] = float(
+        confidence_scaling.get("low_threshold", settings.confidence_risk_scale_low_threshold)
+    )
+    confidence_gate_snapshot["summary"] = confidence_gate_summary
+    confidence_gate_snapshot["confidence_risk_scale"] = float(confidence_risk_scale)
+    confidence_gate_snapshot["confidence_risk_scaling_enabled"] = bool(
+        confidence_scaling.get("enabled", False)
+    )
+    confidence_gate_snapshot["aggregate"] = confidence_agg_snapshot
+    risk_overlay["confidence_risk_scaling_enabled"] = bool(
+        confidence_scaling.get("enabled", False)
+    )
+    risk_overlay["confidence_risk_scale"] = float(confidence_risk_scale)
+    risk_overlay["confidence_risk_scale_exponent"] = float(
+        confidence_scaling.get("exponent", settings.confidence_risk_scale_exponent)
+    )
+    risk_overlay["confidence_risk_scale_low_threshold"] = float(
+        confidence_scaling.get("low_threshold", settings.confidence_risk_scale_low_threshold)
+    )
     confidence_gate_force_shadow = confidence_gate_decision == DECISION_SHADOW_ONLY
     confidence_gate_block_entries = confidence_gate_decision == DECISION_BLOCK_ENTRIES
     if confidence_gate_decision != "PASS":
@@ -3876,6 +4065,22 @@ def run_paper_step(
         ],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
+        "risk_scale": float(risk_overlay.get("risk_scale", 1.0)),
+        "confidence_risk_scale": float(
+            (confidence_gate_snapshot.get("summary", {}) if isinstance(confidence_gate_snapshot.get("summary", {}), dict) else {}).get(
+                "confidence_risk_scale",
+                risk_overlay.get("confidence_risk_scale", 1.0),
+            )
+        ),
+        "effective_risk_scale": float(
+            float(risk_overlay.get("risk_scale", 1.0))
+            * float(
+                (confidence_gate_snapshot.get("summary", {}) if isinstance(confidence_gate_snapshot.get("summary", {}), dict) else {}).get(
+                    "confidence_risk_scale",
+                    risk_overlay.get("confidence_risk_scale", 1.0),
+                )
+            )
+        ),
         "equity_before": equity_before,
         "equity_after": float(state.equity),
         "cash_before": cash_before,
@@ -4090,6 +4295,16 @@ def run_paper_step(
             "risk_scaled": bool(
                 float(policy["risk_per_trade"]) < base_risk_per_trade
                 or int(policy["max_positions"]) < base_max_positions
+                or (
+                    float(risk_overlay.get("risk_scale", 1.0))
+                    * float(
+                        (confidence_gate_snapshot.get("summary", {}) if isinstance(confidence_gate_snapshot.get("summary", {}), dict) else {}).get(
+                            "confidence_risk_scale",
+                            risk_overlay.get("confidence_risk_scale", 1.0),
+                        )
+                    )
+                )
+                < 0.999
             ),
             "paper_run_id": run_row.id,
             "signals_source": signals_source,
@@ -4120,6 +4335,33 @@ def run_paper_step(
             "dataset_id": resolved_dataset_id,
             "timeframes": resolved_timeframes,
             "cost_summary": cost_summary,
+            "risk_overlay": {
+                "risk_scale": float(risk_overlay.get("risk_scale", 1.0)),
+                "effective_risk_scale": float(
+                    float(risk_overlay.get("risk_scale", 1.0))
+                    * float(
+                        (confidence_gate_snapshot.get("summary", {}) if isinstance(confidence_gate_snapshot.get("summary", {}), dict) else {}).get(
+                            "confidence_risk_scale",
+                            risk_overlay.get("confidence_risk_scale", 1.0),
+                        )
+                    )
+                ),
+                "confidence_risk_scaling_enabled": bool(
+                    risk_overlay.get("confidence_risk_scaling_enabled", False)
+                ),
+                "confidence_risk_scale": float(
+                    (confidence_gate_snapshot.get("summary", {}) if isinstance(confidence_gate_snapshot.get("summary", {}), dict) else {}).get(
+                        "confidence_risk_scale",
+                        risk_overlay.get("confidence_risk_scale", 1.0),
+                    )
+                ),
+                "confidence_risk_scale_low_threshold": float(
+                    risk_overlay.get("confidence_risk_scale_low_threshold", 0.35)
+                ),
+                "realized_vol": float(risk_overlay.get("realized_vol", 0.0)),
+                "target_vol": float(risk_overlay.get("target_vol", 0.0)),
+                "caps_applied": dict(risk_overlay.get("caps", {})),
+            },
             "paper_engine": "legacy",
             "result_digest": run_summary.get("result_digest"),
             "report_id": generated_report_id,

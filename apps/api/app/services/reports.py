@@ -19,7 +19,12 @@ from sqlmodel import Session, select
 
 from app.core.config import Settings
 from app.core.exceptions import APIError
-from app.db.models import DailyReport, MonthlyReport, PaperRun
+from app.db.models import (
+    DailyConfidenceAggregate,
+    DailyReport,
+    MonthlyReport,
+    PaperRun,
+)
 
 
 def _utc_now() -> datetime:
@@ -89,6 +94,69 @@ def _runs_for_month(
     return list(session.exec(stmt).all())
 
 
+def _report_timeframe(rows: list[PaperRun]) -> str:
+    if not rows:
+        return "1d"
+    summary = rows[-1].summary_json if isinstance(rows[-1].summary_json, dict) else {}
+    value = summary.get("timeframe")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    timeframes = summary.get("timeframes", [])
+    if isinstance(timeframes, list):
+        for item in timeframes:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return "1d"
+
+
+def _daily_aggregate_for_date(
+    session: Session,
+    *,
+    report_date: date,
+    bundle_id: int | None,
+    timeframe: str,
+) -> DailyConfidenceAggregate | None:
+    if bundle_id is None:
+        return None
+    stmt = (
+        select(DailyConfidenceAggregate)
+        .where(DailyConfidenceAggregate.bundle_id == int(bundle_id))
+        .where(DailyConfidenceAggregate.timeframe == str(timeframe))
+        .where(DailyConfidenceAggregate.trading_date == report_date)
+        .order_by(DailyConfidenceAggregate.id.desc())
+        .limit(1)
+    )
+    return session.exec(stmt).first()
+
+
+def _daily_aggregates_for_month(
+    session: Session,
+    *,
+    month_start: date,
+    month_end: date,
+    bundle_id: int | None,
+    timeframe: str,
+) -> list[DailyConfidenceAggregate]:
+    if bundle_id is None:
+        return []
+    stmt = (
+        select(DailyConfidenceAggregate)
+        .where(DailyConfidenceAggregate.bundle_id == int(bundle_id))
+        .where(DailyConfidenceAggregate.timeframe == str(timeframe))
+        .where(DailyConfidenceAggregate.trading_date >= month_start)
+        .where(DailyConfidenceAggregate.trading_date <= month_end)
+        .order_by(DailyConfidenceAggregate.trading_date.asc(), DailyConfidenceAggregate.id.desc())
+    )
+    rows = list(session.exec(stmt).all())
+    if not rows:
+        return []
+    # Keep the most recent row per day.
+    latest_by_day: dict[date, DailyConfidenceAggregate] = {}
+    for row in rows:
+        latest_by_day[row.trading_date] = row
+    return [latest_by_day[key] for key in sorted(latest_by_day.keys())]
+
+
 def _histogram(rows: list[PaperRun], key: str) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for row in rows:
@@ -107,6 +175,17 @@ def _sum_summary(rows: list[PaperRun], key: str) -> float:
         summary = row.summary_json if isinstance(row.summary_json, dict) else {}
         total += _safe_float(summary.get(key), 0.0)
     return float(total)
+
+
+def _row_confidence_risk_scale(row: PaperRun) -> float:
+    summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+    gate = summary.get("confidence_gate", {})
+    if not isinstance(gate, dict):
+        return 1.0
+    gate_summary = gate.get("summary", {})
+    if not isinstance(gate_summary, dict):
+        return 1.0
+    return _safe_float(gate_summary.get("confidence_risk_scale"), 1.0)
 
 
 def _latest_existing_daily_report(
@@ -153,7 +232,55 @@ def build_daily_report_content(
     rows: list[PaperRun],
     bundle_id: int | None,
     policy_id: int | None,
+    confidence_aggregate: DailyConfidenceAggregate | None = None,
 ) -> dict[str, Any]:
+    agg_decision = (
+        str(confidence_aggregate.gate_decision).upper()
+        if confidence_aggregate is not None
+        else "PASS"
+    )
+    agg_reasons = (
+        [str(item) for item in (confidence_aggregate.gate_reasons_json or [])]
+        if confidence_aggregate is not None
+        else []
+    )
+    agg_avg_confidence = (
+        _safe_float(confidence_aggregate.avg_confidence, 0.0)
+        if confidence_aggregate is not None
+        else 0.0
+    )
+    agg_low_pct = (
+        _safe_float(confidence_aggregate.pct_low_confidence, 0.0)
+        if confidence_aggregate is not None
+        else 0.0
+    )
+    agg_provider_mix = (
+        {
+            str(provider): _safe_int(count, 0)
+            for provider, count in (confidence_aggregate.provider_mix_json or {}).items()
+        }
+        if confidence_aggregate is not None
+        else {}
+    )
+    agg_trading_date = (
+        confidence_aggregate.trading_date.isoformat()
+        if confidence_aggregate is not None
+        else None
+    )
+    agg_confidence_risk_scale = (
+        _safe_float(confidence_aggregate.confidence_risk_scale, 1.0)
+        if confidence_aggregate is not None
+        else 1.0
+    )
+    agg_thresholds = (
+        dict(confidence_aggregate.thresholds_json or {})
+        if confidence_aggregate is not None
+        else {}
+    )
+    low_scale_threshold = _safe_float(
+        agg_thresholds.get("confidence_risk_scale_low_threshold"),
+        0.35,
+    )
     if not rows:
         return {
             "date": report_date.isoformat(),
@@ -196,13 +323,23 @@ def build_daily_report_content(
                 "ensemble_risk_budget_by_policy": {},
             },
             "confidence_gate": {
-                "decision": "PASS",
-                "reasons": [],
-                "avg_confidence": 0.0,
-                "pct_low_confidence": 0.0,
-                "provider_mix": {},
-                "trading_date": None,
+                "decision": agg_decision,
+                "reasons": agg_reasons,
+                "avg_confidence": agg_avg_confidence,
+                "pct_low_confidence": agg_low_pct,
+                "provider_mix": agg_provider_mix,
+                "trading_date": agg_trading_date,
                 "shadow_note": None,
+                "confidence_risk_scale": agg_confidence_risk_scale,
+            },
+            "confidence_risk_scaling": {
+                "enabled": bool(
+                    agg_thresholds.get("confidence_risk_scaling_enabled", False)
+                ),
+                "scale": float(agg_confidence_risk_scale),
+                "effective_risk_scale": float(agg_confidence_risk_scale),
+                "low_threshold": float(low_scale_threshold),
+                "warning": bool(agg_confidence_risk_scale < low_scale_threshold),
             },
             "links": {"paper_run_ids": [], "order_ids": []},
         }
@@ -275,6 +412,43 @@ def build_daily_report_content(
     gate_reasons = confidence_gate.get("reasons", [])
     if not isinstance(gate_reasons, list):
         gate_reasons = []
+    gate_decision = str(confidence_gate.get("decision", "PASS")).upper()
+    gate_avg_confidence = _safe_float(gate_summary.get("avg_confidence"), 0.0)
+    gate_low_pct = _safe_float(gate_summary.get("pct_low_confidence"), 0.0)
+    gate_provider_mix = (
+        dict(gate_summary.get("provider_mix", {}))
+        if isinstance(gate_summary.get("provider_mix", {}), dict)
+        else {}
+    )
+    gate_trading_date = gate_summary.get("trading_date")
+    gate_risk_scale = _safe_float(gate_summary.get("confidence_risk_scale"), 1.0)
+    threshold_used = (
+        dict(gate_summary.get("threshold_used", {}))
+        if isinstance(gate_summary.get("threshold_used", {}), dict)
+        else {}
+    )
+    if confidence_aggregate is not None:
+        gate_decision = agg_decision
+        gate_reasons = agg_reasons
+        gate_avg_confidence = agg_avg_confidence
+        gate_low_pct = agg_low_pct
+        gate_provider_mix = agg_provider_mix
+        gate_trading_date = agg_trading_date
+        gate_risk_scale = agg_confidence_risk_scale
+        threshold_used = agg_thresholds
+    scaling_enabled = bool(
+        threshold_used.get("confidence_risk_scaling_enabled")
+        if threshold_used
+        else gate_summary.get("confidence_risk_scaling_enabled", False)
+    )
+    effective_risk_scale = _safe_float(
+        last_summary.get("effective_risk_scale"),
+        _safe_float(last_summary.get("risk_scale"), 1.0) * gate_risk_scale,
+    )
+    low_scale_threshold = _safe_float(
+        threshold_used.get("confidence_risk_scale_low_threshold"),
+        _safe_float(gate_summary.get("confidence_risk_scale_low_threshold"), 0.35),
+    )
 
     return {
         "date": report_date.isoformat(),
@@ -342,22 +516,26 @@ def build_daily_report_content(
             "ensemble_risk_budget_by_policy": ensemble_risk_budget_latest,
         },
         "confidence_gate": {
-            "decision": str(confidence_gate.get("decision", "PASS")).upper(),
+            "decision": gate_decision,
             "reasons": [str(item) for item in gate_reasons],
-            "avg_confidence": _safe_float(gate_summary.get("avg_confidence"), 0.0),
-            "pct_low_confidence": _safe_float(gate_summary.get("pct_low_confidence"), 0.0),
-            "provider_mix": (
-                dict(gate_summary.get("provider_mix", {}))
-                if isinstance(gate_summary.get("provider_mix", {}), dict)
-                else {}
-            ),
-            "trading_date": gate_summary.get("trading_date"),
+            "avg_confidence": float(gate_avg_confidence),
+            "pct_low_confidence": float(gate_low_pct),
+            "provider_mix": gate_provider_mix,
+            "trading_date": gate_trading_date,
+            "confidence_risk_scale": float(gate_risk_scale),
             "shadow_note": (
                 "Shadow-only run: confidence gate forced non-mutating execution."
                 if str(last_summary.get("execution_mode", "")).upper() == "SHADOW"
-                and str(confidence_gate.get("decision", "PASS")).upper() != "PASS"
+                and gate_decision != "PASS"
                 else None
             ),
+        },
+        "confidence_risk_scaling": {
+            "enabled": bool(scaling_enabled),
+            "scale": float(gate_risk_scale),
+            "effective_risk_scale": float(effective_risk_scale),
+            "low_threshold": float(low_scale_threshold),
+            "warning": bool(gate_risk_scale < low_scale_threshold),
         },
         "links": {
             "paper_run_ids": [int(row.id) for row in rows if row.id is not None],
@@ -407,9 +585,24 @@ def build_monthly_report_content(
     rows: list[PaperRun],
     bundle_id: int | None,
     policy_id: int | None,
+    daily_confidence_aggregates: list[DailyConfidenceAggregate] | None = None,
 ) -> dict[str, Any]:
     first_day, last_day = _month_bounds(month)
+    agg_rows = list(daily_confidence_aggregates or [])
     if not rows:
+        provider_mix_distribution: dict[str, float] = {}
+        if agg_rows:
+            aggregates: dict[str, float] = defaultdict(float)
+            for agg in agg_rows:
+                counts = {str(key): _safe_int(value, 0) for key, value in (agg.provider_mix_json or {}).items()}
+                total = max(1, sum(counts.values()))
+                for provider, count in counts.items():
+                    aggregates[provider] += float(count / total)
+            day_count = max(1, len(agg_rows))
+            provider_mix_distribution = {
+                provider: round(total / day_count, 6)
+                for provider, total in sorted(aggregates.items())
+            }
         return {
             "month": month,
             "bundle_id": bundle_id,
@@ -432,8 +625,28 @@ def build_monthly_report_content(
                 "skipped_reason_histogram": {},
             },
             "confidence_gate": {
-                "shadow_days_due_to_gate": 0,
-                "provider_mix_distribution": {},
+                "shadow_days_due_to_gate": int(
+                    sum(1 for agg in agg_rows if str(agg.gate_decision).upper() != "PASS")
+                ),
+                "provider_mix_distribution": provider_mix_distribution,
+            },
+            "confidence_risk_scaling": {
+                "avg_scale": float(
+                    sum(_safe_float(agg.confidence_risk_scale, 1.0) for agg in agg_rows)
+                    / max(1, len(agg_rows))
+                ),
+                "min_scale": float(
+                    min(
+                        [_safe_float(agg.confidence_risk_scale, 1.0) for agg in agg_rows]
+                        or [1.0]
+                    )
+                ),
+                "max_scale": float(
+                    max(
+                        [_safe_float(agg.confidence_risk_scale, 1.0) for agg in agg_rows]
+                        or [1.0]
+                    )
+                ),
             },
             "links": {"paper_run_ids": []},
         }
@@ -446,7 +659,6 @@ def build_monthly_report_content(
     costs = float(sum(_safe_float((row.summary_json or {}).get("total_cost"), 0.0) for row in rows))
 
     per_day: dict[str, dict[str, Any]] = defaultdict(lambda: {"runs": 0, "net_pnl": 0.0, "costs": 0.0})
-    per_day_provider_mix: dict[str, dict[str, float]] = {}
     shadow_gate_days: set[str] = set()
     for row in rows:
         key = row.asof_ts.date().isoformat()
@@ -459,32 +671,63 @@ def build_monthly_report_content(
             if isinstance(summary.get("confidence_gate", {}), dict)
             else {}
         )
-        gate_summary = (
-            dict(confidence_gate.get("summary", {}))
-            if isinstance(confidence_gate.get("summary", {}), dict)
-            else {}
-        )
-        provider_mix = gate_summary.get("provider_mix", {})
-        if isinstance(provider_mix, dict) and provider_mix:
-            per_day_provider_mix[key] = {
-                str(provider): _safe_float(value, 0.0)
-                for provider, value in provider_mix.items()
-            }
         decision = str(confidence_gate.get("decision", "PASS")).upper()
         if decision != "PASS" and str(summary.get("execution_mode", "")).upper() == "SHADOW":
             shadow_gate_days.add(key)
 
     provider_mix_distribution: dict[str, float] = {}
-    if per_day_provider_mix:
+    if agg_rows:
         aggregates: dict[str, float] = defaultdict(float)
-        for mix in per_day_provider_mix.values():
-            for provider, value in mix.items():
-                aggregates[str(provider)] += _safe_float(value, 0.0)
-        days_count = max(1, len(per_day_provider_mix))
+        for agg in agg_rows:
+            counts = {str(key): _safe_int(value, 0) for key, value in (agg.provider_mix_json or {}).items()}
+            total = max(1, sum(counts.values()))
+            for provider, count in counts.items():
+                aggregates[provider] += float(count / total)
+            if str(agg.gate_decision).upper() != "PASS":
+                shadow_gate_days.add(agg.trading_date.isoformat())
+        days_count = max(1, len(agg_rows))
         provider_mix_distribution = {
             provider: round(total / days_count, 6)
             for provider, total in sorted(aggregates.items())
         }
+    else:
+        per_day_provider_mix: dict[str, dict[str, float]] = {}
+        for row in rows:
+            summary = row.summary_json if isinstance(row.summary_json, dict) else {}
+            confidence_gate = (
+                dict(summary.get("confidence_gate", {}))
+                if isinstance(summary.get("confidence_gate", {}), dict)
+                else {}
+            )
+            gate_summary = (
+                dict(confidence_gate.get("summary", {}))
+                if isinstance(confidence_gate.get("summary", {}), dict)
+                else {}
+            )
+            provider_mix = gate_summary.get("provider_mix", {})
+            if isinstance(provider_mix, dict) and provider_mix:
+                per_day_provider_mix[row.asof_ts.date().isoformat()] = {
+                    str(provider): _safe_float(value, 0.0)
+                    for provider, value in provider_mix.items()
+                }
+        if per_day_provider_mix:
+            aggregates: dict[str, float] = defaultdict(float)
+            for mix in per_day_provider_mix.values():
+                for provider, value in mix.items():
+                    aggregates[str(provider)] += _safe_float(value, 0.0)
+            days_count = max(1, len(per_day_provider_mix))
+            provider_mix_distribution = {
+                provider: round(total / days_count, 6)
+                for provider, total in sorted(aggregates.items())
+            }
+
+    confidence_scales = [
+        _safe_float(agg.confidence_risk_scale, 1.0) for agg in agg_rows
+    ]
+    if not confidence_scales:
+        confidence_scales = [_row_confidence_risk_scale(row) for row in rows]
+    if not confidence_scales:
+        confidence_scales = [1.0]
 
     daily_breakdown = [
         {
@@ -532,6 +775,11 @@ def build_monthly_report_content(
             "shadow_days_due_to_gate": len(shadow_gate_days),
             "provider_mix_distribution": provider_mix_distribution,
         },
+        "confidence_risk_scaling": {
+            "avg_scale": float(sum(confidence_scales) / max(1, len(confidence_scales))),
+            "min_scale": float(min(confidence_scales)),
+            "max_scale": float(max(confidence_scales)),
+        },
         "links": {"paper_run_ids": [int(row.id) for row in rows if row.id is not None]},
     }
 
@@ -562,11 +810,20 @@ def generate_daily_report(
         bundle_id=bundle_id,
         policy_id=policy_id,
     )
+    resolved_bundle_id = int(bundle_id) if bundle_id is not None else None
+    report_timeframe = _report_timeframe(rows)
+    confidence_aggregate = _daily_aggregate_for_date(
+        session,
+        report_date=resolved_date,
+        bundle_id=resolved_bundle_id,
+        timeframe=report_timeframe,
+    )
     content = build_daily_report_content(
         report_date=resolved_date,
         rows=rows,
-        bundle_id=bundle_id,
+        bundle_id=resolved_bundle_id,
         policy_id=policy_id,
+        confidence_aggregate=confidence_aggregate,
     )
 
     existing = _latest_existing_daily_report(
@@ -623,11 +880,21 @@ def generate_monthly_report(
         bundle_id=bundle_id,
         policy_id=policy_id,
     )
+    resolved_bundle_id = int(bundle_id) if bundle_id is not None else None
+    report_timeframe = _report_timeframe(rows)
+    confidence_aggs = _daily_aggregates_for_month(
+        session,
+        month_start=first_day,
+        month_end=last_day,
+        bundle_id=resolved_bundle_id,
+        timeframe=report_timeframe,
+    )
     content = build_monthly_report_content(
         month=resolved_month,
         rows=rows,
-        bundle_id=bundle_id,
+        bundle_id=resolved_bundle_id,
         policy_id=policy_id,
+        daily_confidence_aggregates=confidence_aggs,
     )
     existing = _latest_existing_monthly_report(
         session,

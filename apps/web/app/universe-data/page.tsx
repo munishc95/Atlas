@@ -117,6 +117,17 @@ export default function UniverseDataPage() {
     },
     refetchInterval: 15_000,
   });
+  const confidenceAggLatestQuery = useQuery({
+    queryKey: qk.confidenceAggLatest(bundleId, coverageTimeframe),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      if (!bundleId) {
+        return null;
+      }
+      return (await atlasApi.confidenceAggLatest(bundleId, coverageTimeframe)).data;
+    },
+    refetchInterval: 15_000,
+  });
   const providersStatusQuery = useQuery({
     queryKey: qk.providersStatus,
     queryFn: async () => (await atlasApi.providersStatus()).data,
@@ -276,6 +287,7 @@ export default function UniverseDataPage() {
         queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
+        queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({
           queryKey: qk.dataProvenance(bundleId, coverageTimeframe, null, provenanceFrom, undefined, 500),
         });
@@ -761,26 +773,42 @@ export default function UniverseDataPage() {
               Confidence gate:{" "}
               <span
                 className={`badge ${
-                  String(
-                    dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.decision ??
-                      "PASS",
-                  ).toUpperCase() === "PASS"
+                  String(confidenceAggLatestQuery.data?.decision ?? "PASS").toUpperCase() === "PASS"
                     ? "bg-success/15 text-success"
                     : "bg-warning/15 text-warning"
                 }`}
               >
-                {String(
-                  dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.decision ??
-                    "PASS",
-                ).toUpperCase()}
+                {String(confidenceAggLatestQuery.data?.decision ?? "PASS").toUpperCase()}
+              </span>
+            </p>
+            <p>
+              Confidence risk scale:{" "}
+              <span className="font-semibold">
+                {(Number(confidenceAggLatestQuery.data?.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+              </span>
+            </p>
+            <p>
+              Avg confidence:{" "}
+              <span className="font-semibold">
+                {Number(confidenceAggLatestQuery.data?.avg_confidence ?? 0).toFixed(1)}
+              </span>
+            </p>
+            <p>
+              Low-confidence symbols:{" "}
+              <span className="font-semibold">
+                {Number(confidenceAggLatestQuery.data?.low_confidence_symbols_count ?? 0)}
               </span>
             </p>
             <p className="text-xs text-muted">
-              {Array.isArray(
-                dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons,
-              ) &&
-              dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons.length > 0
-                ? `Reasons: ${dataProvenanceQuery.data.latest_day_summary?.confidence_gate_latest?.reasons.join(", ")}`
+              Provider mix:{" "}
+              {Object.entries(confidenceAggLatestQuery.data?.provider_counts ?? {})
+                .map(([provider, count]) => `${provider}: ${Number(count)}`)
+                .join(" | ") || "-"}
+            </p>
+            <p className="text-xs text-muted">
+              {Array.isArray(confidenceAggLatestQuery.data?.reasons) &&
+              confidenceAggLatestQuery.data?.reasons.length > 0
+                ? `Reasons: ${confidenceAggLatestQuery.data?.reasons.join(", ")}`
                 : "No confidence gate reasons for latest day."}
             </p>
             <Link href="/ops" className="focus-ring inline-flex rounded-lg border border-border px-2 py-1 text-xs text-muted">

@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.db.models import (
     ConfidenceGateSnapshot,
+    DailyConfidenceAggregate,
     DataQualityReport,
     DataUpdateRun,
     Job,
@@ -262,6 +263,25 @@ def _latest_confidence_gate_snapshot(
     return session.exec(stmt).first()
 
 
+def _latest_confidence_aggregate(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> DailyConfidenceAggregate | None:
+    stmt = select(DailyConfidenceAggregate)
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        stmt = stmt.where(DailyConfidenceAggregate.bundle_id == int(bundle_id))
+    if isinstance(timeframe, str) and timeframe.strip():
+        stmt = stmt.where(DailyConfidenceAggregate.timeframe == str(timeframe).strip())
+    stmt = stmt.order_by(
+        DailyConfidenceAggregate.trading_date.desc(),
+        DailyConfidenceAggregate.created_at.desc(),
+        DailyConfidenceAggregate.id.desc(),
+    ).limit(1)
+    return session.exec(stmt).first()
+
+
 def _serialize_confidence_gate_snapshot(row: ConfidenceGateSnapshot) -> dict[str, Any]:
     return {
         "id": int(row.id) if row.id is not None else None,
@@ -275,6 +295,23 @@ def _serialize_confidence_gate_snapshot(row: ConfidenceGateSnapshot) -> dict[str
         "pct_low_confidence": float(row.pct_low_confidence),
         "provider_mix": dict(row.provider_mix_json or {}),
         "threshold_used": dict(row.threshold_json or {}),
+    }
+
+
+def _serialize_confidence_aggregate(row: DailyConfidenceAggregate) -> dict[str, Any]:
+    return {
+        "id": int(row.id) if row.id is not None else None,
+        "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+        "bundle_id": int(row.bundle_id),
+        "timeframe": str(row.timeframe),
+        "trading_date": row.trading_date.isoformat(),
+        "decision": str(row.gate_decision),
+        "reasons": list(row.gate_reasons_json or []),
+        "avg_confidence": float(row.avg_confidence),
+        "pct_low_confidence": float(row.pct_low_confidence),
+        "provider_mix": dict(row.provider_mix_json or {}),
+        "threshold_used": dict(row.thresholds_json or {}),
+        "confidence_risk_scale": float(row.confidence_risk_scale),
     }
 
 
@@ -501,11 +538,19 @@ def get_operate_health_summary(
                 }
 
     provider_stage_status = _latest_operate_run_provider_stage_status(session)
-    latest_confidence_gate = _latest_confidence_gate_snapshot(
+    latest_confidence_gate = _latest_confidence_aggregate(
         session,
         bundle_id=target_bundle_id if isinstance(target_bundle_id, int) else None,
         timeframe=target_timeframe,
     )
+    if latest_confidence_gate is None:
+        legacy_gate = _latest_confidence_gate_snapshot(
+            session,
+            bundle_id=target_bundle_id if isinstance(target_bundle_id, int) else None,
+            timeframe=target_timeframe,
+        )
+    else:
+        legacy_gate = None
 
     return {
         "mode": mode,
@@ -554,9 +599,13 @@ def get_operate_health_summary(
         "upstox_notifier_health": upstox_notifier_health,
         "provider_stage_status": provider_stage_status,
         "latest_confidence_gate": (
-            _serialize_confidence_gate_snapshot(latest_confidence_gate)
+            _serialize_confidence_aggregate(latest_confidence_gate)
             if latest_confidence_gate is not None
-            else None
+            else (
+                _serialize_confidence_gate_snapshot(legacy_gate)
+                if legacy_gate is not None
+                else None
+            )
         ),
         "latest_paper_run_id": int(latest_run.id)
         if latest_run is not None and latest_run.id is not None

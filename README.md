@@ -297,6 +297,46 @@ Runtime settings:
 - `confidence_gate_lookback_days`
 - `GET /api/operate/health`
 
+## Confidence-Weighted Risk + Daily Aggregates (v3.8)
+
+Atlas now adds continuous confidence-aware sizing and a materialized confidence aggregate layer:
+
+- Continuous confidence risk scaling:
+  - `confidence_risk_scale` is computed from average confidence using:
+    - hard floor (`confidence_gate_hard_floor`) -> scale `0.0`
+    - average threshold (`confidence_gate_avg_threshold`) -> scale `1.0`
+    - linear interpolation between them
+  - optional shaping: `confidence_risk_scale_exponent`
+  - final sizing in simulator/paper path:
+    - `risk_amount = equity * base_risk_pct * risk_overlay_scale * confidence_risk_scale`
+- Materialized daily confidence aggregates (`DailyConfidenceAggregate`):
+  - one row per `(bundle_id, timeframe, trading_date)`
+  - stores eligible symbol count, provider mix, low-confidence stats, gate decision, reasons, and confidence risk scale
+  - used by:
+    - Ops confidence trend
+    - providers trend endpoint
+    - daily/monthly report confidence sections
+- Daily and monthly reports now include explicit **Confidence Risk Scaling** summaries.
+
+New APIs:
+
+- `GET /api/confidence/agg/latest?bundle_id=&timeframe=`
+- `GET /api/confidence/agg/history?bundle_id=&timeframe=&limit=60`
+- `POST /api/confidence/agg/recompute`
+
+Compatibility:
+
+- Existing `confidence-gate` endpoints remain available:
+  - `GET /api/confidence-gate/latest`
+  - `GET /api/confidence-gate/history`
+  - They now read from materialized aggregates when available.
+
+New runtime settings:
+
+- `confidence_risk_scaling_enabled`
+- `confidence_risk_scale_exponent`
+- `confidence_risk_scale_low_threshold`
+
 New frontend page:
 
 - `Ops` page (`/ops`) with current mode (`NORMAL` / `SAFE MODE`), latest quality report, recent operate events, and quick actions.

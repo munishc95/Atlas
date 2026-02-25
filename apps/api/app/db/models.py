@@ -417,6 +417,38 @@ class ConfidenceGateSnapshot(SQLModel, table=True):
     )
 
 
+class DailyConfidenceAggregate(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_dailyconfidenceagg_bundle_timeframe_date",
+            "bundle_id",
+            "timeframe",
+            "trading_date",
+            unique=True,
+        ),
+        Index("ix_dailyconfidenceagg_created_at", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    trading_date: dt_date = Field(index=True)
+    eligible_symbols_count: int = 0
+    avg_confidence: float = 0.0
+    pct_low_confidence: float = 0.0
+    provider_mix_json: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    low_confidence_symbols_count: int = 0
+    low_confidence_days_count: int = 0
+    gate_decision: str = Field(default="PASS", index=True, max_length=24)
+    gate_reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    confidence_risk_scale: float = 1.0
+    thresholds_json: dict[str, float | str | int | bool] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
+    thresholds_signature: str = Field(default="", max_length=128, index=True)
+
+
 class PortfolioRiskSnapshot(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     ts: datetime = Field(default_factory=utc_now, index=True)

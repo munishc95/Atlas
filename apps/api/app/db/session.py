@@ -364,6 +364,18 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_dailyconfidenceagg_bundle_timeframe_date "
+                "ON dailyconfidenceaggregate (bundle_id, timeframe, trading_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_dailyconfidenceagg_created_at "
+                "ON dailyconfidenceaggregate (created_at)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_replayrun_policy_created "
                 "ON replayrun (policy_id, created_at)"
             )

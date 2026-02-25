@@ -76,6 +76,90 @@ def _settings_scope(settings: Settings, overrides: dict[str, Any] | None = None)
     }
 
 
+def _scaling_scope(settings: Settings, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    scope = dict(overrides or {})
+    operate_mode = str(scope.get("operate_mode", settings.operate_mode)).strip().lower()
+    explicit_enabled = scope.get("confidence_risk_scaling_enabled")
+    if isinstance(explicit_enabled, bool):
+        enabled = explicit_enabled
+    elif isinstance(explicit_enabled, str):
+        enabled = explicit_enabled.strip().lower() in {"true", "1", "yes", "on"}
+    else:
+        enabled = operate_mode == "live"
+    return {
+        "enabled": bool(enabled),
+        "exponent": max(
+            0.1,
+            _safe_float(
+                scope.get("confidence_risk_scale_exponent"),
+                settings.confidence_risk_scale_exponent,
+            ),
+        ),
+        "low_threshold": max(
+            0.0,
+            min(
+                1.0,
+                _safe_float(
+                    scope.get("confidence_risk_scale_low_threshold"),
+                    settings.confidence_risk_scale_low_threshold,
+                ),
+            ),
+        ),
+    }
+
+
+def compute_confidence_risk_scale(
+    avg_confidence: float,
+    *,
+    hard_floor: float,
+    avg_threshold: float,
+    exponent: float = 1.0,
+) -> float:
+    floor_value = float(hard_floor)
+    threshold_value = float(avg_threshold)
+    avg_value = float(avg_confidence)
+    if threshold_value <= floor_value:
+        raw = 1.0 if avg_value >= threshold_value else 0.0
+    elif avg_value <= floor_value:
+        raw = 0.0
+    elif avg_value >= threshold_value:
+        raw = 1.0
+    else:
+        raw = (avg_value - floor_value) / max(1e-9, threshold_value - floor_value)
+    shaped = float(max(0.0, min(1.0, raw))) ** max(0.1, float(exponent))
+    return float(max(0.0, min(1.0, shaped)))
+
+
+def resolve_confidence_risk_scaling(
+    *,
+    settings: Settings,
+    overrides: dict[str, Any] | None,
+    avg_confidence: float,
+    hard_floor: float,
+    avg_threshold: float,
+) -> dict[str, Any]:
+    scope = _scaling_scope(settings, overrides=overrides)
+    if not bool(scope["enabled"]):
+        return {
+            "enabled": False,
+            "confidence_risk_scale": 1.0,
+            "exponent": float(scope["exponent"]),
+            "low_threshold": float(scope["low_threshold"]),
+        }
+    scale = compute_confidence_risk_scale(
+        float(avg_confidence),
+        hard_floor=float(hard_floor),
+        avg_threshold=float(avg_threshold),
+        exponent=float(scope["exponent"]),
+    )
+    return {
+        "enabled": True,
+        "confidence_risk_scale": float(scale),
+        "exponent": float(scope["exponent"]),
+        "low_threshold": float(scope["low_threshold"]),
+    }
+
+
 def _resolve_effective_trading_date(
     *,
     asof_ts: datetime,
@@ -329,6 +413,17 @@ def evaluate_confidence_gate(
         "days_lookback_used": len(stats_per_day),
         "eligible_symbols": eligible_symbols,
     }
+    scaling = resolve_confidence_risk_scaling(
+        settings=settings,
+        overrides=overrides,
+        avg_confidence=float(avg_confidence),
+        hard_floor=float(scope["hard_floor"]),
+        avg_threshold=float(scope["avg_threshold"]),
+    )
+    summary["confidence_risk_scale"] = float(scaling["confidence_risk_scale"])
+    summary["confidence_risk_scaling_enabled"] = bool(scaling["enabled"])
+    summary["confidence_risk_scale_exponent"] = float(scaling["exponent"])
+    summary["confidence_risk_scale_low_threshold"] = float(scaling["low_threshold"])
 
     snapshot_id: int | None = None
     if persist:
@@ -348,7 +443,7 @@ def evaluate_confidence_gate(
         session.refresh(row)
         snapshot_id = int(row.id) if row.id is not None else None
 
-    if decision != DECISION_PASS and enabled:
+    if decision != DECISION_PASS and enabled and persist:
         emit_operate_event(
             session,
             severity="WARN",

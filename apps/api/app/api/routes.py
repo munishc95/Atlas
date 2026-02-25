@@ -18,6 +18,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import APIError
 from app.db.models import (
     Backtest,
+    PaperState,
     PolicySwitchEvent,
     Policy,
     PaperRun,
@@ -48,6 +49,7 @@ from app.jobs.tasks import (
     run_walkforward_job,
 )
 from app.schemas.api import (
+    ConfidenceAggRecomputeRequest,
     AutoEvalRunRequest,
     BacktestRunRequest,
     CreatePolicyEnsembleRequest,
@@ -94,9 +96,17 @@ from app.services.data_updates import (
     get_latest_data_update_run,
     list_data_update_history,
 )
+from app.services.confidence_agg import (
+    latest_daily_confidence_agg,
+    list_daily_confidence_aggs,
+    provider_status_trend_from_aggs,
+    recompute_daily_confidence_aggs,
+    serialize_agg_as_gate,
+    serialize_daily_confidence_agg,
+)
 from app.services.data_provenance import (
     list_provenance,
-    provider_status_trend as provider_status_trend_payload,
+    provider_status_trend as provider_status_trend_raw,
     provider_status_payload,
     provenance_summary,
 )
@@ -560,17 +570,25 @@ def providers_status_trend(
     days: int = Query(default=30, ge=1, le=365),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    trend_rows = provider_status_trend_from_aggs(
+        session,
+        bundle_id=int(bundle_id),
+        timeframe=str(timeframe),
+        days=int(days),
+    )
+    if not trend_rows:
+        trend_rows = provider_status_trend_raw(
+            session,
+            bundle_id=int(bundle_id),
+            timeframe=str(timeframe),
+            days=int(days),
+        )
     return _data(
         {
             "bundle_id": int(bundle_id),
             "timeframe": str(timeframe),
             "days": int(days),
-            "trend": provider_status_trend_payload(
-                session,
-                bundle_id=int(bundle_id),
-                timeframe=str(timeframe),
-                days=int(days),
-            ),
+            "trend": trend_rows,
         }
     )
 
@@ -1285,16 +1303,30 @@ def data_provenance(
         latest_day=parsed_to,
         low_conf_threshold=float(settings.data_quality_confidence_fail_threshold),
     )
-    latest_gate = latest_confidence_gate_snapshot(
+    latest_agg = latest_daily_confidence_agg(
         session,
         bundle_id=int(bundle_id),
         timeframe=str(timeframe),
     )
+    latest_gate = (
+        serialize_agg_as_gate(latest_agg)
+        if latest_agg is not None
+        else None
+    )
+    if latest_gate is None:
+        latest_gate_row = latest_confidence_gate_snapshot(
+            session,
+            bundle_id=int(bundle_id),
+            timeframe=str(timeframe),
+        )
+        latest_gate = (
+            serialize_confidence_gate_snapshot(latest_gate_row)
+            if latest_gate_row is not None
+            else None
+        )
     latest_summary = {
         **latest_summary,
-        "confidence_gate_latest": (
-            serialize_confidence_gate_snapshot(latest_gate) if latest_gate is not None else None
-        ),
+        "confidence_gate_latest": latest_gate,
     }
     return _data(
         {
@@ -1330,14 +1362,19 @@ def confidence_gate_latest(
     timeframe: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    agg_row = latest_daily_confidence_agg(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if agg_row is not None:
+        return _data(serialize_agg_as_gate(agg_row))
     row = latest_confidence_gate_snapshot(
         session,
         bundle_id=bundle_id,
         timeframe=timeframe,
     )
-    if row is None:
-        return _data(None)
-    return _data(serialize_confidence_gate_snapshot(row))
+    return _data(serialize_confidence_gate_snapshot(row) if row is not None else None)
 
 
 @router.get("/confidence-gate/history")
@@ -1347,6 +1384,14 @@ def confidence_gate_history(
     limit: int = Query(default=60, ge=1, le=365),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
+    agg_rows = list_daily_confidence_aggs(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    if agg_rows:
+        return _data([serialize_agg_as_gate(row) for row in agg_rows])
     rows = list_confidence_gate_snapshots(
         session,
         bundle_id=bundle_id,
@@ -1354,6 +1399,59 @@ def confidence_gate_history(
         limit=limit,
     )
     return _data([serialize_confidence_gate_snapshot(row) for row in rows])
+
+
+@router.get("/confidence/agg/latest")
+def confidence_agg_latest(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = latest_daily_confidence_agg(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    return _data(serialize_daily_confidence_agg(row) if row is not None else None)
+
+
+@router.get("/confidence/agg/history")
+def confidence_agg_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    limit: int = Query(default=60, ge=1, le=366),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_daily_confidence_aggs(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    return _data([serialize_daily_confidence_agg(row) for row in rows])
+
+
+@router.post("/confidence/agg/recompute")
+def confidence_agg_recompute(
+    payload: ConfidenceAggRecomputeRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    state = session.get(PaperState, 1)
+    state_settings = dict(state.settings_json or {}) if state is not None else {}
+    operate_mode = str(state_settings.get("operate_mode", settings.operate_mode)).strip().lower()
+    result = recompute_daily_confidence_aggs(
+        session,
+        settings=settings,
+        bundle_id=int(payload.bundle_id),
+        timeframe=str(payload.timeframe),
+        operate_mode=operate_mode,
+        overrides=state_settings,
+        from_date=payload.from_date,
+        to_date=payload.to_date,
+        force=bool(payload.force),
+    )
+    return _data(result)
 
 
 @router.post("/data/quality/run")
@@ -2789,6 +2887,11 @@ def get_settings_payload(
         "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
         "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
         "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+        "confidence_risk_scaling_enabled": (
+            True if str(settings.operate_mode).strip().lower() == "live" else False
+        ),
+        "confidence_risk_scale_exponent": settings.confidence_risk_scale_exponent,
+        "confidence_risk_scale_low_threshold": settings.confidence_risk_scale_low_threshold,
         "max_position_value_pct_adv": settings.max_position_value_pct_adv,
         "diversification_corr_threshold": settings.diversification_corr_threshold,
         "autopilot_max_symbols_scan": settings.autopilot_max_symbols_scan,

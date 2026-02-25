@@ -14,6 +14,7 @@ import { atlasApi } from "@/src/lib/api/endpoints";
 import type {
   ApiAutoEvalRun,
   ApiConfidenceGateSnapshot,
+  ApiDailyConfidenceAggregate,
   ApiOperateEvent,
   ApiOperateRunSummary,
   ApiPolicySwitchEvent,
@@ -82,21 +83,21 @@ export default function OpsPage() {
     queryFn: async () => (await atlasApi.providersStatus()).data,
     refetchInterval: 8_000,
   });
-  const confidenceGateLatestQuery = useQuery({
-    queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe),
+  const confidenceAggLatestQuery = useQuery({
+    queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe),
     enabled: Boolean(activeBundleId),
     queryFn: async () =>
-      (await atlasApi.confidenceGateLatest(activeBundleId ?? undefined, activeTimeframe)).data,
+      (await atlasApi.confidenceAggLatest(activeBundleId ?? undefined, activeTimeframe)).data,
     refetchInterval: 8_000,
   });
-  const confidenceGateHistoryQuery = useQuery({
-    queryKey: qk.confidenceGateHistory(activeBundleId, activeTimeframe, 30),
-    enabled: Boolean(activeBundleId) && showConfidenceTrend,
+  const confidenceAggHistoryQuery = useQuery({
+    queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30),
+    enabled: Boolean(activeBundleId),
     queryFn: async () =>
       (
-        await atlasApi.confidenceGateHistory(activeBundleId ?? undefined, activeTimeframe, 30)
+        await atlasApi.confidenceAggHistory(activeBundleId ?? undefined, activeTimeframe, 30)
       ).data,
-    refetchInterval: showConfidenceTrend ? 8_000 : false,
+    refetchInterval: 8_000,
   });
   const provenanceFrom = useMemo(() => {
     const d = new Date();
@@ -369,8 +370,9 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
       queryClient.invalidateQueries({ queryKey: qk.providersStatus });
+      queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe) });
+      queryClient.invalidateQueries({ queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30) });
       queryClient.invalidateQueries({ queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe) });
-      queryClient.invalidateQueries({ queryKey: qk.confidenceGateHistory(activeBundleId, activeTimeframe, 30) });
       queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       if (activeBundleId) {
@@ -515,17 +517,54 @@ export default function OpsPage() {
     (healthQuery.data?.no_trade_reasons as string[] | undefined) ??
     []
   ).slice(0, 4);
+  const latestConfidenceAgg =
+    (confidenceAggLatestQuery.data as ApiDailyConfidenceAggregate | null | undefined) ?? null;
   const latestConfidenceGate =
     (statusQuery.data?.latest_confidence_gate as ApiConfidenceGateSnapshot | null | undefined) ??
     (healthQuery.data?.latest_confidence_gate as ApiConfidenceGateSnapshot | null | undefined) ??
-    confidenceGateLatestQuery.data ??
     null;
-  const confidenceDecision = String(latestConfidenceGate?.decision ?? "PASS").toUpperCase();
-  const confidenceReasons = (latestConfidenceGate?.reasons ?? []).slice(0, 4);
-  const confidenceAvg = Number(latestConfidenceGate?.avg_confidence ?? 0);
-  const confidenceLowPct = Number(latestConfidenceGate?.pct_low_confidence ?? 0);
-  const confidenceTradingDate = String(latestConfidenceGate?.trading_date ?? "-");
-  const confidenceProviderMix = latestConfidenceGate?.provider_mix ?? {};
+  const confidenceDecision = String(
+    latestConfidenceAgg?.decision ?? latestConfidenceGate?.decision ?? "PASS",
+  ).toUpperCase();
+  const confidenceReasons = (
+    latestConfidenceAgg?.reasons ?? latestConfidenceGate?.reasons ?? []
+  ).slice(0, 4);
+  const confidenceAvg = Number(
+    latestConfidenceAgg?.avg_confidence ?? latestConfidenceGate?.avg_confidence ?? 0,
+  );
+  const confidenceLowPct = Number(
+    latestConfidenceAgg?.pct_low_confidence ?? latestConfidenceGate?.pct_low_confidence ?? 0,
+  );
+  const confidenceTradingDate = String(
+    latestConfidenceAgg?.trading_date ?? latestConfidenceGate?.trading_date ?? "-",
+  );
+  const confidenceRiskScale = Number(
+    latestConfidenceAgg?.confidence_risk_scale ?? latestConfidenceGate?.confidence_risk_scale ?? 1,
+  );
+  const confidenceProviderCounts = latestConfidenceAgg?.provider_counts ?? {};
+  const confidenceProviderMix =
+    Object.keys(confidenceProviderCounts).length > 0
+      ? Object.fromEntries(
+          Object.entries(confidenceProviderCounts).map(([provider, count]) => [
+            provider,
+            Number(count) /
+              Math.max(
+                1,
+                Object.values(confidenceProviderCounts).reduce(
+                  (acc, value) => acc + Number(value),
+                  0,
+                ),
+              ),
+          ]),
+        )
+      : latestConfidenceGate?.provider_mix ?? {};
+  const confidenceTrendRows = useMemo(
+    () =>
+      [...(confidenceAggHistoryQuery.data ?? [])]
+        .slice(0, 10)
+        .reverse() as ApiDailyConfidenceAggregate[],
+    [confidenceAggHistoryQuery.data],
+  );
   const ensembleWeightsSource = String(
     statusQuery.data?.ensemble_weights_source ??
       healthQuery.data?.ensemble_weights_source ??
@@ -640,24 +679,28 @@ export default function OpsPage() {
         onClose={() => setShowConfidenceTrend(false)}
         title="Data Confidence Trend"
       >
-        {confidenceGateHistoryQuery.isLoading ? (
+        {confidenceAggHistoryQuery.isLoading ? (
           <LoadingState label="Loading confidence trend" />
-        ) : confidenceGateHistoryQuery.isError ? (
+        ) : confidenceAggHistoryQuery.isError ? (
           <ErrorState
             title="Could not load confidence trend"
-            action="Retry confidence gate history query."
-            onRetry={() => void confidenceGateHistoryQuery.refetch()}
+            action="Retry confidence aggregate history query."
+            onRetry={() => void confidenceAggHistoryQuery.refetch()}
           />
-        ) : (confidenceGateHistoryQuery.data ?? []).length === 0 ? (
+        ) : (confidenceAggHistoryQuery.data ?? []).length === 0 ? (
           <EmptyState
             title="No confidence snapshots yet"
             action="Run operate once to generate snapshots."
           />
         ) : (
           <div className="space-y-2">
-            {(confidenceGateHistoryQuery.data ?? []).map((row) => {
+            {(confidenceAggHistoryQuery.data ?? []).map((row) => {
               const decision = String(row.decision ?? "PASS").toUpperCase();
-              const providerMix = row.provider_mix ?? {};
+              const providerMix = row.provider_counts ?? {};
+              const total = Math.max(
+                1,
+                Object.values(providerMix).reduce((acc, value) => acc + Number(value), 0),
+              );
               return (
                 <div key={`${row.id ?? row.trading_date}`} className="rounded-xl border border-border p-3 text-xs">
                   <div className="flex items-center justify-between gap-2">
@@ -679,9 +722,14 @@ export default function OpsPage() {
                     {(Number(row.pct_low_confidence ?? 0) * 100).toFixed(1)}%
                   </p>
                   <p className="mt-1 text-muted">
+                    Risk scale {(Number(row.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+                  </p>
+                  <p className="mt-1 text-muted">
                     Provider mix:{" "}
                     {Object.entries(providerMix)
-                      .map(([provider, pct]) => `${provider} ${(Number(pct) * 100).toFixed(0)}%`)
+                      .map(([provider, count]) =>
+                        `${provider} ${((Number(count) / total) * 100).toFixed(0)}%`,
+                      )
                       .join(" | ") || "-"}
                   </p>
                   {(row.reasons ?? []).length > 0 ? (
@@ -760,11 +808,35 @@ export default function OpsPage() {
             Avg confidence {confidenceAvg.toFixed(1)} | low-confidence symbols {(confidenceLowPct * 100).toFixed(1)}%
           </p>
           <p className="mt-1 text-xs text-muted">
+            Confidence risk scale: {(confidenceRiskScale * 100).toFixed(1)}%
+          </p>
+          <p className="mt-1 text-xs text-muted">
             Provider mix:{" "}
             {Object.entries(confidenceProviderMix)
               .map(([provider, pct]) => `${provider} ${(Number(pct) * 100).toFixed(0)}%`)
               .join(" | ") || "-"}
           </p>
+          {confidenceTrendRows.length > 0 ? (
+            <div className="mt-2">
+              <p className="text-[11px] text-muted">Last 10 days risk-scale trend</p>
+              <div className="mt-1 flex items-end gap-1">
+                {confidenceTrendRows.map((row) => {
+                  const height = Math.max(
+                    6,
+                    Math.round(Number(row.confidence_risk_scale ?? 1) * 28),
+                  );
+                  return (
+                    <span
+                      key={`confidence-scale-${row.trading_date}`}
+                      title={`${row.trading_date}: ${(Number(row.confidence_risk_scale ?? 1) * 100).toFixed(1)}%`}
+                      className="w-2 rounded-sm bg-accent/60"
+                      style={{ height: `${height}px` }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           {confidenceReasons.length > 0 ? (
             <p className="mt-1 text-xs text-muted">Reasons: {confidenceReasons.join(", ")}</p>
           ) : null}

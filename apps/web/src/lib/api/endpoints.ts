@@ -14,6 +14,7 @@ import type {
   ApiDataCoverage,
   ApiDataProvenance,
   ApiConfidenceGateSnapshot,
+  ApiDailyConfidenceAggregate,
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiProviderUpdateRun,
@@ -296,6 +297,37 @@ export const atlasApi = {
       `/api/confidence-gate/history?${search.toString()}`,
     );
   },
+  confidenceAggLatest: (bundleId?: number, timeframe?: string) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    return apiFetch<ApiDailyConfidenceAggregate | null>(
+      `/api/confidence/agg/latest${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  confidenceAggHistory: (bundleId?: number, timeframe?: string, limit = 60) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    search.set("limit", String(limit));
+    return apiFetch<ApiDailyConfidenceAggregate[]>(`/api/confidence/agg/history?${search.toString()}`);
+  },
+  confidenceAggRecompute: (payload: {
+    bundle_id: number;
+    timeframe?: string;
+    from_date?: string;
+    to_date?: string;
+    force?: boolean;
+  }) =>
+    apiFetch<{
+      processed: number;
+      updated: number;
+      skipped: number;
+      days: string[];
+    }>("/api/confidence/agg/recompute", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
       `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,

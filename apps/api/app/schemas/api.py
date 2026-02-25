@@ -345,3 +345,14 @@ class RuntimeSettingsRequest(BaseModel):
     confidence_gate_hard_floor: float | None = None
     confidence_gate_action_on_trigger: str | None = None
     confidence_gate_lookback_days: int | None = None
+    confidence_risk_scaling_enabled: bool | None = None
+    confidence_risk_scale_exponent: float | None = None
+    confidence_risk_scale_low_threshold: float | None = None
+
+
+class ConfidenceAggRecomputeRequest(BaseModel):
+    bundle_id: int
+    timeframe: str = "1d"
+    from_date: str | None = None
+    to_date: str | None = None
+    force: bool = False
