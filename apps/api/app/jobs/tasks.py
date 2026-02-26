@@ -16,6 +16,8 @@ from app.services.backtests import execute_backtest
 from app.services.auto_evaluation import execute_auto_evaluation
 from app.services.data_store import DataStore
 from app.services.fast_mode import prefer_sample_bundle_id
+from app.services.effective_context import build_effective_trading_context
+from app.services.confidence_agg import latest_daily_confidence_agg
 from app.services.data_updates import run_data_updates
 from app.services.provider_updates import run_provider_updates
 from app.services.data_quality import run_data_quality_report
@@ -1093,6 +1095,7 @@ def _operate_run_result(
         "mark_prices": {},
         "timeframes": [timeframe],
         "asof": asof_dt.isoformat(),
+        "provider_stage_status": summary.get("provider_stage_status"),
     }
     if isinstance(policy_id, int) and policy_id > 0:
         paper_payload["policy_id"] = int(policy_id)
@@ -1189,9 +1192,61 @@ def _operate_run_result(
         "paper_step": float(paper_summary.get("duration_seconds", 0.0)),
         "daily_report": float(report_payload.get("duration_seconds", 0.0)),
     }
+    latest_agg = latest_daily_confidence_agg(
+        session,
+        bundle_id=(int(bundle_id) if isinstance(bundle_id, int) and bundle_id > 0 else None),
+        timeframe=str(timeframe),
+    )
+    confidence_gate_payload = (
+        dict(paper_summary.get("confidence_gate", {}))
+        if isinstance(paper_summary.get("confidence_gate", {}), dict)
+        else {}
+    )
+    confidence_gate_summary = (
+        dict(confidence_gate_payload.get("summary", {}))
+        if isinstance(confidence_gate_payload.get("summary", {}), dict)
+        else {}
+    )
+    effective_context = build_effective_trading_context(
+        session,
+        settings=settings,
+        bundle_id=(int(bundle_id) if isinstance(bundle_id, int) and bundle_id > 0 else None),
+        timeframe=str(timeframe),
+        asof_ts=asof_dt,
+        segment=str(state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)),
+        provider_stage_status=(
+            str(summary.get("provider_stage_status"))
+            if summary.get("provider_stage_status") is not None
+            else None
+        ),
+        confidence_gate_decision=(
+            str(confidence_gate_payload.get("decision"))
+            if confidence_gate_payload.get("decision") is not None
+            else None
+        ),
+        confidence_risk_scale=(
+            float(confidence_gate_summary.get("confidence_risk_scale"))
+            if confidence_gate_summary.get("confidence_risk_scale") is not None
+            else None
+        ),
+        agg_row=latest_agg,
+        data_digest=(
+            str((paper_result.get("data_digest")))
+            if paper_result.get("data_digest") is not None
+            else None
+        ),
+        engine_version=(
+            str((paper_result.get("engine_version")))
+            if paper_result.get("engine_version") is not None
+            else None
+        ),
+        seed=(int(payload.get("seed")) if payload.get("seed") is not None else None),
+        notes=["operate_run"],
+    )
     return {
         "status": "ok",
         "summary": summary,
+        "effective_context": effective_context,
     }
 
 

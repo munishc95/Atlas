@@ -13,6 +13,25 @@ export type DataEnvelope<T> = {
   meta?: Record<string, unknown>;
 };
 
+export type ApiEffectiveTradingContext = {
+  bundle_id?: number | null;
+  timeframe: string;
+  trading_date: string;
+  segment?: string;
+  session_open_ist?: string | null;
+  session_close_ist?: string | null;
+  now_ist?: string;
+  data_asof_ist?: string | null;
+  provider_stage_status?: string | null;
+  confidence_gate_decision?: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string | null;
+  confidence_risk_scale?: number | null;
+  agg_id?: number | null;
+  data_digest?: string | null;
+  engine_version?: string | null;
+  seed?: number | null;
+  notes?: string[];
+};
+
 export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "DONE";
 
 export type Job = {
@@ -236,6 +255,7 @@ export type ApiDailyReport = {
   bundle_id?: number | null;
   policy_id?: number | null;
   content_json: Record<string, unknown>;
+  effective_context?: ApiEffectiveTradingContext | null;
   created_at: string;
 };
 
@@ -353,6 +373,7 @@ export type ApiOperateStatus = {
   >;
   health_short?: ApiPolicyHealthSnapshot | null;
   health_long?: ApiPolicyHealthSnapshot | null;
+  effective_context?: ApiEffectiveTradingContext | null;
   paper_state: Record<string, unknown>;
 };
 
@@ -483,10 +504,83 @@ export type ApiDailyConfidenceAggregate = {
   provider_counts: Record<string, number>;
   low_confidence_symbols_count: number;
   low_confidence_days_count: number;
+  drop_points?: number;
+  mix_shift_score?: number;
+  flags?: string[];
   decision: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string;
   reasons: string[];
   confidence_risk_scale: number;
   threshold_used?: Record<string, unknown>;
+};
+
+export type ApiConfidenceTimelineRow = {
+  id?: number | null;
+  trading_date: string;
+  avg_confidence: number;
+  confidence_risk_scale: number;
+  gate_decision: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string;
+  provider_mix: Record<string, number>;
+  low_confidence_symbols_count: number;
+  confidence_drop_vs_prev: number;
+  drop_points?: number;
+  mix_shift_score?: number;
+  flags?: string[];
+};
+
+export type ApiConfidenceTimeline = {
+  bundle_id: number;
+  timeframe: string;
+  limit: number;
+  rows: ApiConfidenceTimelineRow[];
+};
+
+export type ApiConfidenceDrilldownSummary = {
+  id?: number | null;
+  trading_date: string;
+  avg_confidence: number;
+  pct_low_confidence?: number;
+  confidence_risk_scale: number;
+  gate_decision: "PASS" | "SHADOW_ONLY" | "BLOCK_ENTRIES" | string;
+  gate_reasons?: string[];
+  confidence_drop_vs_prev?: number;
+  drop_points?: number;
+  mix_shift_score?: number;
+  flags?: string[];
+};
+
+export type ApiConfidenceDrilldown = {
+  summary: ApiConfidenceDrilldownSummary | null;
+  worst_symbols_by_confidence: Array<{
+    symbol: string;
+    confidence: number;
+    provider?: string | null;
+    bars_present?: boolean;
+  }>;
+  missing_symbols: string[];
+  provider_mix_today: Record<string, number>;
+  provider_mix_prev: Record<string, number>;
+  provider_mix_delta: Record<string, number>;
+  low_confidence_threshold: number;
+  notes?: string[];
+};
+
+export type ApiConfidenceDrilldownSymbols = {
+  bundle_id: number;
+  timeframe: string;
+  trading_date: string;
+  only: "all" | "low" | "missing" | string;
+  limit: number;
+  rows: Array<{
+    symbol: string;
+    confidence_score: number | null;
+    provider?: string | null;
+    reason: string;
+    last_bar_ts?: string | null;
+    provenance_confidence?: number | null;
+    source_kind?: string | null;
+  }>;
+  low_confidence_threshold: number;
+  notes?: string[];
 };
 
 export type ApiProviderStatusTrendDay = {
@@ -792,6 +886,12 @@ export type ApiOperateRunSummary = {
   };
   durations_seconds?: Record<string, number>;
   steps?: Array<Record<string, unknown>>;
+};
+
+export type ApiOperateRunResult = {
+  status: string;
+  summary: ApiOperateRunSummary;
+  effective_context?: ApiEffectiveTradingContext | null;
 };
 
 export type ApiAutoEvalRun = {

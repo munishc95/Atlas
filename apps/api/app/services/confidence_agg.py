@@ -46,6 +46,29 @@ def _normalize_date(value: dt_date | datetime | str | None) -> dt_date | None:
     return None
 
 
+def _provider_mix_from_counts(counts: dict[str, int]) -> dict[str, float]:
+    total = max(1, int(sum(max(0, int(value)) for value in counts.values())))
+    return {
+        str(provider): float(max(0, int(value)) / total)
+        for provider, value in sorted(counts.items())
+    }
+
+
+def _provider_mix_shift_score(
+    current_counts: dict[str, int],
+    previous_counts: dict[str, int],
+) -> float:
+    current_mix = _provider_mix_from_counts(current_counts)
+    previous_mix = _provider_mix_from_counts(previous_counts)
+    providers = sorted(set(current_mix.keys()) | set(previous_mix.keys()))
+    return float(
+        sum(
+            abs(float(current_mix.get(provider, 0.0)) - float(previous_mix.get(provider, 0.0)))
+            for provider in providers
+        )
+    )
+
+
 def _effective_trading_date(
     *,
     settings: Settings,
@@ -95,6 +118,14 @@ def _settings_thresholds(
         "confidence_gate_hard_floor": _safe_float(
             state.get("confidence_gate_hard_floor"),
             settings.confidence_gate_hard_floor,
+        ),
+        "confidence_drop_warn_threshold": _safe_float(
+            state.get("confidence_drop_warn_threshold"),
+            settings.confidence_drop_warn_threshold,
+        ),
+        "confidence_provider_mix_shift_warn_pct": _safe_float(
+            state.get("confidence_provider_mix_shift_warn_pct"),
+            settings.confidence_provider_mix_shift_warn_pct,
         ),
         "confidence_gate_action_on_trigger": str(
             state.get("confidence_gate_action_on_trigger", settings.confidence_gate_action_on_trigger)
@@ -146,6 +177,9 @@ def serialize_daily_confidence_agg(row: DailyConfidenceAggregate) -> dict[str, A
         "provider_counts": dict(row.provider_mix_json or {}),
         "low_confidence_symbols_count": int(row.low_confidence_symbols_count),
         "low_confidence_days_count": int(row.low_confidence_days_count),
+        "drop_points": float(row.drop_points),
+        "mix_shift_score": float(row.mix_shift_score),
+        "flags": list(row.flags_json or []),
         "decision": str(row.gate_decision),
         "reasons": list(row.gate_reasons_json or []),
         "confidence_risk_scale": float(row.confidence_risk_scale),
@@ -168,6 +202,9 @@ def serialize_agg_as_gate(row: DailyConfidenceAggregate) -> dict[str, Any]:
         "provider_mix": payload["provider_counts"],
         "threshold_used": payload["threshold_used"],
         "confidence_risk_scale": payload["confidence_risk_scale"],
+        "drop_points": payload["drop_points"],
+        "mix_shift_score": payload["mix_shift_score"],
+        "flags": payload["flags"],
     }
 
 
@@ -305,6 +342,43 @@ def compute_daily_confidence_agg(
     if gate_decision == "BLOCK_ENTRIES":
         confidence_risk_scale = 0.0
 
+    previous_agg = session.exec(
+        select(DailyConfidenceAggregate)
+        .where(DailyConfidenceAggregate.bundle_id == int(bundle_id))
+        .where(DailyConfidenceAggregate.timeframe == tf)
+        .where(DailyConfidenceAggregate.trading_date < day)
+        .order_by(
+            DailyConfidenceAggregate.trading_date.desc(),
+            DailyConfidenceAggregate.created_at.desc(),
+            DailyConfidenceAggregate.id.desc(),
+        )
+    ).first()
+    previous_provider_counts = (
+        {
+            str(key): int(value)
+            for key, value in dict(previous_agg.provider_mix_json or {}).items()
+        }
+        if previous_agg is not None
+        else {}
+    )
+    drop_points = (
+        float(avg_confidence) - float(previous_agg.avg_confidence)
+        if previous_agg is not None
+        else 0.0
+    )
+    mix_shift_score = _provider_mix_shift_score(provider_counts, previous_provider_counts)
+    flags: list[str] = []
+    if eligible_symbols_count <= 0:
+        flags.append("NO_ELIGIBLE_SYMBOLS")
+    if avg_confidence < low_symbol_threshold:
+        flags.append("LOW_CONF")
+    if drop_points <= -float(thresholds["confidence_drop_warn_threshold"]):
+        flags.append("CONF_DROP")
+    if mix_shift_score >= float(thresholds["confidence_provider_mix_shift_warn_pct"]):
+        flags.append("MIX_SHIFT")
+    if gate_decision != DECISION_PASS:
+        flags.append("GATE_TRIGGERED")
+
     return {
         "bundle_id": int(bundle_id),
         "timeframe": tf,
@@ -315,6 +389,9 @@ def compute_daily_confidence_agg(
         "provider_counts": dict(provider_counts),
         "low_confidence_symbols_count": int(low_confidence_symbols_count),
         "low_confidence_days_count": int(len(low_days)),
+        "drop_points": float(drop_points),
+        "mix_shift_score": float(mix_shift_score),
+        "flags": list(dict.fromkeys(flags)),
         "gate_decision": gate_decision,
         "gate_reasons": gate_reasons,
         "confidence_risk_scale": float(max(0.0, min(1.0, confidence_risk_scale))),
@@ -372,6 +449,9 @@ def upsert_daily_confidence_agg(
     row.provider_mix_json = dict(payload["provider_counts"])
     row.low_confidence_symbols_count = int(payload["low_confidence_symbols_count"])
     row.low_confidence_days_count = int(payload["low_confidence_days_count"])
+    row.drop_points = float(payload["drop_points"])
+    row.mix_shift_score = float(payload["mix_shift_score"])
+    row.flags_json = list(payload["flags"])
     row.gate_decision = str(payload["gate_decision"])
     row.gate_reasons_json = list(payload["gate_reasons"])
     row.confidence_risk_scale = float(payload["confidence_risk_scale"])

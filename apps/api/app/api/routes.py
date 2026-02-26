@@ -104,6 +104,11 @@ from app.services.confidence_agg import (
     serialize_agg_as_gate,
     serialize_daily_confidence_agg,
 )
+from app.services.confidence_timeline import (
+    confidence_drilldown,
+    confidence_drilldown_symbols,
+    confidence_timeline,
+)
 from app.services.data_provenance import (
     list_provenance,
     provider_status_trend as provider_status_trend_raw,
@@ -180,6 +185,7 @@ from app.services.operate_events import (
     list_operate_events,
 )
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
+from app.services.effective_context import build_effective_trading_context
 from app.services.paper import (
     activate_policy_mode,
     get_orders,
@@ -1431,6 +1437,143 @@ def confidence_agg_history(
     return _data([serialize_daily_confidence_agg(row) for row in rows])
 
 
+@router.get("/confidence/timeline")
+def confidence_timeline_endpoint(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    limit: int = Query(default=60, ge=1, le=366),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    rows = confidence_timeline(
+        session,
+        settings=settings,
+        bundle_id=int(bundle_id),
+        timeframe=str(timeframe),
+        limit=int(limit),
+    )
+    return _data(
+        {
+            "bundle_id": int(bundle_id),
+            "timeframe": str(timeframe),
+            "limit": int(limit),
+            "rows": rows,
+        }
+    )
+
+
+@router.get("/confidence/drilldown")
+def confidence_drilldown_endpoint(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    trading_date: str = Query(...),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        day = date.fromisoformat(str(trading_date))
+    except ValueError as exc:
+        raise APIError(
+            code="invalid_trading_date",
+            message="trading_date must be in YYYY-MM-DD format.",
+        ) from exc
+    try:
+        payload = confidence_drilldown(
+            session,
+            settings=settings,
+            store=store,
+            bundle_id=int(bundle_id),
+            timeframe=str(timeframe),
+            trading_date=day,
+        )
+        return _data(payload)
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_drilldown_failed",
+            details={
+                "bundle_id": int(bundle_id),
+                "timeframe": str(timeframe),
+                "trading_date": day.isoformat(),
+                "error": str(exc),
+            },
+            correlation_id=f"confidence-drilldown-{bundle_id}-{day.isoformat()}",
+        )
+        return _data(
+            {
+                "summary": None,
+                "worst_symbols_by_confidence": [],
+                "missing_symbols": [],
+                "provider_mix_today": {},
+                "provider_mix_prev": {},
+                "provider_mix_delta": {},
+                "low_confidence_threshold": float(settings.confidence_gate_low_symbol_threshold),
+                "notes": ["drilldown_compute_failed"],
+            }
+        )
+
+
+@router.get("/confidence/drilldown/symbols")
+def confidence_drilldown_symbols_endpoint(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    trading_date: str = Query(...),
+    only: str = Query(default="all"),
+    limit: int = Query(default=200, ge=1, le=500),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        day = date.fromisoformat(str(trading_date))
+    except ValueError as exc:
+        raise APIError(
+            code="invalid_trading_date",
+            message="trading_date must be in YYYY-MM-DD format.",
+        ) from exc
+    try:
+        payload = confidence_drilldown_symbols(
+            session,
+            settings=settings,
+            store=store,
+            bundle_id=int(bundle_id),
+            timeframe=str(timeframe),
+            trading_date=day,
+            only=str(only),
+            limit=int(limit),
+        )
+        return _data(payload)
+    except Exception as exc:  # noqa: BLE001
+        emit_operate_event(
+            session,
+            severity="WARN",
+            category="DATA",
+            message="confidence_drilldown_symbols_failed",
+            details={
+                "bundle_id": int(bundle_id),
+                "timeframe": str(timeframe),
+                "trading_date": day.isoformat(),
+                "error": str(exc),
+            },
+            correlation_id=f"confidence-drilldown-symbols-{bundle_id}-{day.isoformat()}",
+        )
+        return _data(
+            {
+                "bundle_id": int(bundle_id),
+                "timeframe": str(timeframe),
+                "trading_date": day.isoformat(),
+                "only": str(only),
+                "limit": int(limit),
+                "rows": [],
+                "low_confidence_threshold": float(settings.confidence_gate_low_symbol_threshold),
+                "notes": ["drilldown_symbols_compute_failed"],
+            }
+        )
+
+
 @router.post("/confidence/agg/recompute")
 def confidence_agg_recompute(
     payload: ConfidenceAggRecomputeRequest,
@@ -2304,6 +2447,64 @@ def operate_status(
             refresh=False,
             overrides=state_settings,
         ).model_dump()
+    active_timeframe = str(health_summary.get("active_timeframe") or "1d")
+    latest_run_timeframes = latest_summary.get("timeframes", [])
+    if isinstance(latest_run_timeframes, list) and latest_run_timeframes:
+        active_timeframe = str(latest_run_timeframes[0] or active_timeframe)
+    latest_agg = latest_daily_confidence_agg(
+        session,
+        bundle_id=int(active_bundle_id) if isinstance(active_bundle_id, int) else None,
+        timeframe=active_timeframe,
+    )
+    latest_confidence_gate = (
+        dict(latest_summary.get("confidence_gate", {}))
+        if isinstance(latest_summary.get("confidence_gate", {}), dict)
+        else {}
+    )
+    latest_confidence_gate_summary = (
+        dict(latest_confidence_gate.get("summary", {}))
+        if isinstance(latest_confidence_gate.get("summary", {}), dict)
+        else {}
+    )
+    effective_context = build_effective_trading_context(
+        session,
+        settings=settings,
+        bundle_id=int(active_bundle_id) if isinstance(active_bundle_id, int) else None,
+        timeframe=active_timeframe,
+        asof_ts=latest_run.asof_ts if latest_run is not None else datetime.now(timezone.utc),
+        segment=str(state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)),
+        provider_stage_status=(
+            str(health_summary.get("provider_stage_status"))
+            if health_summary.get("provider_stage_status") is not None
+            else None
+        ),
+        confidence_gate_decision=(
+            str(latest_confidence_gate.get("decision"))
+            if latest_confidence_gate.get("decision") is not None
+            else None
+        ),
+        confidence_risk_scale=(
+            float(latest_confidence_gate_summary.get("confidence_risk_scale"))
+            if latest_confidence_gate_summary.get("confidence_risk_scale") is not None
+            else None
+        ),
+        agg_row=latest_agg,
+        data_digest=(
+            str(latest_summary.get("data_digest"))
+            if latest_summary.get("data_digest") is not None
+            else None
+        ),
+        engine_version=(
+            str(latest_summary.get("engine_version"))
+            if latest_summary.get("engine_version") is not None
+            else None
+        ),
+        seed=(
+            int(latest_summary.get("seed"))
+            if latest_summary.get("seed") is not None
+            else None
+        ),
+    )
     return _data(
         {
             "mode": health_summary.get("mode"),
@@ -2378,6 +2579,7 @@ def operate_status(
             "last_job_durations": health_summary.get("last_job_durations"),
             "health_short": health_short,
             "health_long": health_long,
+            "effective_context": effective_context,
             "paper_state": state,
         }
     )
@@ -2643,10 +2845,58 @@ def get_daily_reports(
 
 @router.get("/reports/daily/{report_id}")
 def get_daily_report_by_id(
-    report_id: int, session: Session = Depends(get_session)
+    report_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     row = get_daily_report(session, report_id)
-    return _data(row.model_dump())
+    payload = row.model_dump()
+    content = payload.get("content_json", {})
+    existing_context = (
+        dict(content.get("effective_context", {}))
+        if isinstance(content, dict) and isinstance(content.get("effective_context", {}), dict)
+        else None
+    )
+    context_needs_derive = not isinstance(existing_context, dict) or not str(
+        (existing_context or {}).get("trading_date", "")
+    ).strip()
+    if context_needs_derive:
+        summary = content.get("summary", {}) if isinstance(content, dict) else {}
+        confidence_gate = (
+            dict(content.get("confidence_gate", {}))
+            if isinstance(content, dict) and isinstance(content.get("confidence_gate", {}), dict)
+            else {}
+        )
+        timeframe = str(summary.get("timeframe", "1d"))
+        existing_context = build_effective_trading_context(
+            session,
+            settings=settings,
+            bundle_id=(int(row.bundle_id) if isinstance(row.bundle_id, int) else None),
+            timeframe=timeframe,
+            asof_ts=datetime.combine(row.date, datetime.max.time(), tzinfo=timezone.utc),
+            confidence_gate_decision=(
+                str(confidence_gate.get("decision"))
+                if confidence_gate.get("decision") is not None
+                else None
+            ),
+            confidence_risk_scale=(
+                float(confidence_gate.get("confidence_risk_scale"))
+                if confidence_gate.get("confidence_risk_scale") is not None
+                else None
+            ),
+            agg_row=latest_daily_confidence_agg(
+                session,
+                bundle_id=(int(row.bundle_id) if isinstance(row.bundle_id, int) else None),
+                timeframe=timeframe,
+            ),
+            notes=["report_context_derived"],
+        )
+    elif isinstance(existing_context, dict) and not str(existing_context.get("timeframe", "")).strip():
+        existing_context["timeframe"] = str(
+            (content.get("summary", {}) if isinstance(content, dict) else {}).get("timeframe", "1d")
+        )
+    payload["effective_context"] = existing_context
+    return _data(payload)
 
 
 @router.get("/reports/daily/{report_id}/export.json")
@@ -2887,6 +3137,8 @@ def get_settings_payload(
         "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
         "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
         "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+        "confidence_drop_warn_threshold": settings.confidence_drop_warn_threshold,
+        "confidence_provider_mix_shift_warn_pct": settings.confidence_provider_mix_shift_warn_pct,
         "confidence_risk_scaling_enabled": (
             True if str(settings.operate_mode).strip().lower() == "live" else False
         ),

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -13,8 +14,12 @@ import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import type {
   ApiAutoEvalRun,
+  ApiConfidenceDrilldown,
   ApiConfidenceGateSnapshot,
+  ApiConfidenceTimeline,
+  ApiConfidenceTimelineRow,
   ApiDailyConfidenceAggregate,
+  ApiEffectiveTradingContext,
   ApiOperateEvent,
   ApiOperateRunSummary,
   ApiPolicySwitchEvent,
@@ -33,6 +38,7 @@ function badgeTone(status: string): string {
 }
 
 export default function OpsPage() {
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<ApiOperateEvent | null>(null);
@@ -41,6 +47,9 @@ export default function OpsPage() {
   const [renewRunId, setRenewRunId] = useState<string | null>(null);
   const [renewPayload, setRenewPayload] = useState<Record<string, unknown> | null>(null);
   const [showConfidenceTrend, setShowConfidenceTrend] = useState(false);
+  const [showConfidenceDrilldown, setShowConfidenceDrilldown] = useState(false);
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState<string | null>(null);
+  const [showEffectiveContext, setShowEffectiveContext] = useState(false);
 
   const statusQuery = useQuery({
     queryKey: qk.operateStatus,
@@ -90,12 +99,46 @@ export default function OpsPage() {
       (await atlasApi.confidenceAggLatest(activeBundleId ?? undefined, activeTimeframe)).data,
     refetchInterval: 8_000,
   });
-  const confidenceAggHistoryQuery = useQuery({
-    queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30),
+  const confidenceTimelineQuery = useQuery({
+    queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60),
     enabled: Boolean(activeBundleId),
     queryFn: async () =>
       (
-        await atlasApi.confidenceAggHistory(activeBundleId ?? undefined, activeTimeframe, 30)
+        await atlasApi.confidenceTimeline(activeBundleId ?? 0, activeTimeframe, 60)
+      ).data,
+    refetchInterval: 8_000,
+  });
+  const confidenceDrilldownQuery = useQuery({
+    queryKey: qk.confidenceDrilldown(activeBundleId, activeTimeframe, selectedTimelineDate),
+    enabled: Boolean(activeBundleId && selectedTimelineDate),
+    queryFn: async () =>
+      (
+        await atlasApi.confidenceDrilldown(
+          activeBundleId ?? 0,
+          activeTimeframe,
+          selectedTimelineDate ?? "",
+        )
+      ).data,
+    refetchInterval: 8_000,
+  });
+  const confidenceDrilldownSymbolsQuery = useQuery({
+    queryKey: qk.confidenceDrilldownSymbols(
+      activeBundleId,
+      activeTimeframe,
+      selectedTimelineDate,
+      "all",
+      120,
+    ),
+    enabled: Boolean(activeBundleId && selectedTimelineDate && showConfidenceDrilldown),
+    queryFn: async () =>
+      (
+        await atlasApi.confidenceDrilldownSymbols({
+          bundle_id: activeBundleId ?? 0,
+          timeframe: activeTimeframe,
+          trading_date: selectedTimelineDate ?? "",
+          only: "all",
+          limit: 120,
+        })
       ).data,
     refetchInterval: 8_000,
   });
@@ -372,6 +415,19 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.providersStatus });
       queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe) });
       queryClient.invalidateQueries({ queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30) });
+      queryClient.invalidateQueries({ queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60) });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceDrilldown(activeBundleId, activeTimeframe, selectedTimelineDate),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceDrilldownSymbols(
+          activeBundleId,
+          activeTimeframe,
+          selectedTimelineDate,
+          "all",
+          120,
+        ),
+      });
       queryClient.invalidateQueries({ queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe) });
       queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
@@ -403,12 +459,23 @@ export default function OpsPage() {
     activeBundleId,
     activePolicyId,
     activeTimeframe,
+    selectedTimelineDate,
     provenanceFrom,
     queryClient,
     stream.isTerminal,
     streamSummary,
     stream.status,
   ]);
+
+  useEffect(() => {
+    const requestedDate = searchParams.get("confidence_date");
+    if (!requestedDate) {
+      return;
+    }
+    setShowConfidenceTrend(true);
+    setSelectedTimelineDate(requestedDate);
+    setShowConfidenceDrilldown(true);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!renewRunId) {
@@ -558,13 +625,18 @@ export default function OpsPage() {
           ]),
         )
       : latestConfidenceGate?.provider_mix ?? {};
-  const confidenceTrendRows = useMemo(
-    () =>
-      [...(confidenceAggHistoryQuery.data ?? [])]
-        .slice(0, 10)
-        .reverse() as ApiDailyConfidenceAggregate[],
-    [confidenceAggHistoryQuery.data],
+  const effectiveContext =
+    (statusQuery.data?.effective_context as ApiEffectiveTradingContext | null | undefined) ?? null;
+  const confidenceTimeline = useMemo(
+    () => ((confidenceTimelineQuery.data as ApiConfidenceTimeline | null | undefined)?.rows ?? []),
+    [confidenceTimelineQuery.data],
   );
+  const confidenceTrendRows = useMemo(
+    () => [...confidenceTimeline].slice(-10) as ApiConfidenceTimelineRow[],
+    [confidenceTimeline],
+  );
+  const confidenceDrilldown =
+    (confidenceDrilldownQuery.data as ApiConfidenceDrilldown | null | undefined) ?? null;
   const ensembleWeightsSource = String(
     statusQuery.data?.ensemble_weights_source ??
       healthQuery.data?.ensemble_weights_source ??
@@ -679,47 +751,60 @@ export default function OpsPage() {
         onClose={() => setShowConfidenceTrend(false)}
         title="Data Confidence Trend"
       >
-        {confidenceAggHistoryQuery.isLoading ? (
+        {confidenceTimelineQuery.isLoading ? (
           <LoadingState label="Loading confidence trend" />
-        ) : confidenceAggHistoryQuery.isError ? (
+        ) : confidenceTimelineQuery.isError ? (
           <ErrorState
             title="Could not load confidence trend"
-            action="Retry confidence aggregate history query."
-            onRetry={() => void confidenceAggHistoryQuery.refetch()}
+            action="Retry confidence timeline query."
+            onRetry={() => void confidenceTimelineQuery.refetch()}
           />
-        ) : (confidenceAggHistoryQuery.data ?? []).length === 0 ? (
+        ) : confidenceTimeline.length === 0 ? (
           <EmptyState
             title="No confidence snapshots yet"
             action="Run operate once to generate snapshots."
           />
         ) : (
           <div className="space-y-2">
-            {(confidenceAggHistoryQuery.data ?? []).map((row) => {
-              const decision = String(row.decision ?? "PASS").toUpperCase();
-              const providerMix = row.provider_counts ?? {};
+            {confidenceTimeline.map((row) => {
+              const decision = String(row.gate_decision ?? "PASS").toUpperCase();
+              const providerMix = row.provider_mix ?? {};
               const total = Math.max(
                 1,
                 Object.values(providerMix).reduce((acc, value) => acc + Number(value), 0),
               );
               return (
-                <div key={`${row.id ?? row.trading_date}`} className="rounded-xl border border-border p-3 text-xs">
+                <button
+                  key={`${row.id ?? row.trading_date}`}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTimelineDate(String(row.trading_date));
+                    setShowConfidenceDrilldown(true);
+                  }}
+                  className="focus-ring w-full rounded-xl border border-border p-3 text-left text-xs"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-medium text-foreground">{row.trading_date}</p>
-                    <span
-                      className={`badge ${
-                        decision === "PASS"
-                          ? "bg-success/15 text-success"
-                          : decision === "BLOCK_ENTRIES"
-                            ? "bg-danger/15 text-danger"
-                            : "bg-warning/15 text-warning"
-                      }`}
-                    >
-                      {decision}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {(row.flags ?? []).length > 0 ? (
+                        <span className="inline-block h-2 w-2 rounded-full bg-warning" />
+                      ) : null}
+                      <span
+                        className={`badge ${
+                          decision === "PASS"
+                            ? "bg-success/15 text-success"
+                            : decision === "BLOCK_ENTRIES"
+                              ? "bg-danger/15 text-danger"
+                              : "bg-warning/15 text-warning"
+                        }`}
+                      >
+                        {decision}
+                      </span>
+                    </div>
                   </div>
                   <p className="mt-1 text-muted">
                     Avg confidence {Number(row.avg_confidence ?? 0).toFixed(1)} | low-confidence{" "}
-                    {(Number(row.pct_low_confidence ?? 0) * 100).toFixed(1)}%
+                    {Number(row.low_confidence_symbols_count ?? 0)} symbols
                   </p>
                   <p className="mt-1 text-muted">
                     Risk scale {(Number(row.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
@@ -732,12 +817,108 @@ export default function OpsPage() {
                       )
                       .join(" | ") || "-"}
                   </p>
-                  {(row.reasons ?? []).length > 0 ? (
-                    <p className="mt-1 text-muted">Reasons: {(row.reasons ?? []).join(", ")}</p>
+                  {Number(row.confidence_drop_vs_prev ?? 0) !== 0 ? (
+                    <p className="mt-1 text-muted">
+                      Delta vs prev: {Number(row.confidence_drop_vs_prev).toFixed(2)}
+                    </p>
                   ) : null}
-                </div>
+                </button>
               );
             })}
+          </div>
+        )}
+      </DetailsDrawer>
+      <DetailsDrawer
+        open={showConfidenceDrilldown}
+        onClose={() => setShowConfidenceDrilldown(false)}
+        title={`Confidence Drilldown ${selectedTimelineDate ?? ""}`}
+      >
+        {!selectedTimelineDate ? (
+          <EmptyState title="No day selected" action="Pick a row from the confidence timeline." />
+        ) : confidenceDrilldownQuery.isLoading ? (
+          <LoadingState label="Loading confidence drilldown" />
+        ) : confidenceDrilldownQuery.isError ? (
+          <ErrorState
+            title="Could not load confidence drilldown"
+            action="Retry drilldown query."
+            onRetry={() => void confidenceDrilldownQuery.refetch()}
+          />
+        ) : !confidenceDrilldown?.summary ? (
+          <EmptyState title="No drilldown available" action="Run operate once to generate confidence rows." />
+        ) : (
+          <div className="space-y-3 text-sm">
+            <p>
+              <span className="text-muted">Date:</span> {confidenceDrilldown.summary.trading_date}
+            </p>
+            <p>
+              <span className="text-muted">Decision:</span>{" "}
+              <span className={`badge ${badgeTone(String(confidenceDrilldown.summary.gate_decision))}`}>
+                {String(confidenceDrilldown.summary.gate_decision)}
+              </span>
+            </p>
+            <p>
+              <span className="text-muted">Avg confidence:</span>{" "}
+              {Number(confidenceDrilldown.summary.avg_confidence ?? 0).toFixed(1)}
+            </p>
+            <p>
+              <span className="text-muted">Risk scale:</span>{" "}
+              {(Number(confidenceDrilldown.summary.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+            </p>
+            <p>
+              <span className="text-muted">Provider mix delta:</span>{" "}
+              {Object.entries(confidenceDrilldown.provider_mix_delta ?? {})
+                .map(([provider, value]) => `${provider} ${Number(value).toFixed(2)}`)
+                .join(" | ") || "-"}
+            </p>
+            <p>
+              <span className="text-muted">Missing symbols:</span>{" "}
+              {Number(confidenceDrilldown.missing_symbols?.length ?? 0)}
+            </p>
+            <div className="rounded-xl border border-border p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Worst symbols
+              </p>
+              {(confidenceDrilldown.worst_symbols_by_confidence ?? []).length === 0 ? (
+                <p className="text-xs text-muted">No low-confidence symbols for this day.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="text-left text-muted">
+                    <tr>
+                      <th className="px-2 py-1">Symbol</th>
+                      <th className="px-2 py-1">Confidence</th>
+                      <th className="px-2 py-1">Provider</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(confidenceDrilldown.worst_symbols_by_confidence ?? []).slice(0, 10).map((row) => (
+                      <tr key={`${row.symbol}-${row.provider ?? "n/a"}`} className="border-t border-border">
+                        <td className="px-2 py-1">{row.symbol}</td>
+                        <td className="px-2 py-1">{Number(row.confidence ?? 0).toFixed(1)}</td>
+                        <td className="px-2 py-1">{row.provider ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="rounded-xl border border-border p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Symbol diagnostics
+              </p>
+              {confidenceDrilldownSymbolsQuery.isLoading ? (
+                <LoadingState label="Loading symbol rows" />
+              ) : confidenceDrilldownSymbolsQuery.isError ? (
+                <ErrorState
+                  title="Could not load symbol diagnostics"
+                  action="Retry symbol drilldown query."
+                  onRetry={() => void confidenceDrilldownSymbolsQuery.refetch()}
+                />
+              ) : (
+                <p className="text-xs text-muted">
+                  Rows loaded: {Number(confidenceDrilldownSymbolsQuery.data?.rows?.length ?? 0)}
+                </p>
+              )}
+            </div>
           </div>
         )}
       </DetailsDrawer>
@@ -747,6 +928,29 @@ export default function OpsPage() {
           <div>
             <h2 className="text-xl font-semibold">Operate Mode</h2>
             <p className="mt-1 text-sm text-muted">Operational trust, guardrails, and explainable safety controls.</p>
+            {effectiveContext ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  {effectiveContext.trading_date}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  as-of {effectiveContext.data_asof_ist ?? "-"}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  {String(effectiveContext.confidence_gate_decision ?? "PASS")}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  scale {(Number(effectiveContext.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowEffectiveContext(true)}
+                  className="focus-ring rounded-full border border-border px-2 py-1 text-muted"
+                >
+                  Context
+                </button>
+              </div>
+            ) : null}
           </div>
           <span className={`badge ${badgeTone(mode)}`}>{mode}</span>
         </div>
@@ -843,7 +1047,12 @@ export default function OpsPage() {
           <div className="mt-2">
             <button
               type="button"
-              onClick={() => setShowConfidenceTrend(true)}
+              onClick={() => {
+                setShowConfidenceTrend(true);
+                if (!selectedTimelineDate && confidenceTimeline.length > 0) {
+                  setSelectedTimelineDate(String(confidenceTimeline[confidenceTimeline.length - 1]?.trading_date ?? ""));
+                }
+              }}
               className="focus-ring rounded-md border border-border px-2 py-1 text-xs text-muted"
             >
               View trend
@@ -1451,6 +1660,19 @@ export default function OpsPage() {
             </pre>
           </div>
         ) : null}
+      </DetailsDrawer>
+      <DetailsDrawer
+        open={showEffectiveContext}
+        onClose={() => setShowEffectiveContext(false)}
+        title="Effective Trading Context"
+      >
+        {effectiveContext ? (
+          <pre className="max-h-[360px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+{JSON.stringify(effectiveContext, null, 2)}
+          </pre>
+        ) : (
+          <EmptyState title="Context unavailable" action="Run operate once to populate effective context." />
+        )}
       </DetailsDrawer>
 
       {(statusQuery.isError || healthQuery.isError) && (

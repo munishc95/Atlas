@@ -39,6 +39,7 @@ from app.services.confidence_gate import (
     resolve_confidence_risk_scaling,
 )
 from app.services.confidence_agg import (
+    latest_daily_confidence_agg,
     serialize_daily_confidence_agg,
     upsert_daily_confidence_agg,
 )
@@ -63,6 +64,7 @@ from app.services.fast_mode import (
     resolve_seed,
 )
 from app.services.operate_events import emit_operate_event
+from app.services.effective_context import build_effective_trading_context
 from app.services.no_trade import evaluate_no_trade_gate
 from app.services.paper_sim_adapter import execute_paper_step_with_simulator
 from app.services.portfolio_risk import create_portfolio_risk_snapshot
@@ -87,6 +89,63 @@ FUTURE_KINDS = {"STOCK_FUT", "INDEX_FUT"}
 
 def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _paper_effective_context(
+    *,
+    session: Session,
+    settings: Settings,
+    state_settings: dict[str, Any],
+    bundle_id: int | None,
+    timeframe: str,
+    asof_dt: datetime,
+    provider_stage_status: str | None = None,
+    confidence_gate_snapshot: dict[str, Any] | None = None,
+    data_digest: str | None = None,
+    engine_version: str | None = None,
+    seed: int | None = None,
+    notes: list[str] | None = None,
+    store: DataStore | None = None,
+) -> dict[str, Any]:
+    agg_row = latest_daily_confidence_agg(
+        session,
+        bundle_id=(int(bundle_id) if isinstance(bundle_id, int) and bundle_id > 0 else None),
+        timeframe=str(timeframe),
+    )
+    gate_summary = (
+        dict(confidence_gate_snapshot.get("summary", {}))
+        if isinstance(confidence_gate_snapshot, dict)
+        and isinstance(confidence_gate_snapshot.get("summary", {}), dict)
+        else {}
+    )
+    return build_effective_trading_context(
+        session,
+        settings=settings,
+        bundle_id=(int(bundle_id) if isinstance(bundle_id, int) and bundle_id > 0 else None),
+        timeframe=str(timeframe),
+        asof_ts=asof_dt,
+        segment=str(
+            state_settings.get("trading_calendar_segment", settings.trading_calendar_segment)
+        ),
+        provider_stage_status=provider_stage_status,
+        confidence_gate_decision=(
+            str(confidence_gate_snapshot.get("decision"))
+            if isinstance(confidence_gate_snapshot, dict)
+            and confidence_gate_snapshot.get("decision") is not None
+            else None
+        ),
+        confidence_risk_scale=(
+            float(gate_summary.get("confidence_risk_scale"))
+            if gate_summary.get("confidence_risk_scale") is not None
+            else None
+        ),
+        agg_row=agg_row,
+        data_digest=data_digest,
+        engine_version=engine_version,
+        seed=(int(seed) if isinstance(seed, int) else None),
+        notes=notes or [],
+        store=store,
+    )
 
 
 def get_or_create_paper_state(session: Session, settings: Settings) -> PaperState:
@@ -238,6 +297,8 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
             "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
             "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+            "confidence_drop_warn_threshold": settings.confidence_drop_warn_threshold,
+            "confidence_provider_mix_shift_warn_pct": settings.confidence_provider_mix_shift_warn_pct,
             "confidence_risk_scaling_enabled": (
                 True if str(settings.operate_mode).strip().lower() == "live" else False
             ),
@@ -1839,6 +1900,37 @@ def _run_paper_step_with_simulator_engine(
         )
         generated_report_id = int(report_row.id) if report_row.id is not None else None
 
+    effective_context = _paper_effective_context(
+        session=session,
+        settings=settings,
+        state_settings=state_settings,
+        bundle_id=resolved_bundle_id,
+        timeframe=(resolved_timeframes[0] if resolved_timeframes else "1d"),
+        asof_dt=asof_dt,
+        provider_stage_status=(
+            str(payload.get("provider_stage_status"))
+            if payload.get("provider_stage_status") is not None
+            else None
+        ),
+        confidence_gate_snapshot=confidence_gate_snapshot,
+        data_digest=(
+            str(sim_execution.metadata.get("data_digest"))
+            if sim_execution.metadata.get("data_digest") is not None
+            else None
+        ),
+        engine_version=(
+            str(sim_execution.metadata.get("engine_version"))
+            if sim_execution.metadata.get("engine_version") is not None
+            else None
+        ),
+        seed=(
+            int(sim_execution.metadata.get("seed"))
+            if sim_execution.metadata.get("seed") is not None
+            else None
+        ),
+        notes=["paper_run_step"],
+    )
+
     return jsonable_encoder(
         {
             "status": "ok",
@@ -1950,6 +2042,7 @@ def _run_paper_step_with_simulator_engine(
             "state": _dump_model(state),
             "positions": [_dump_model(p) for p in live_positions],
             "orders": [_dump_model(o) for o in orders_after],
+            "effective_context": effective_context,
         }
     )
 
@@ -2303,6 +2396,37 @@ def _run_paper_step_shadow_only(
         and {int(row.id) for row in live_orders_after if row.id is not None} == live_order_ids
     )
 
+    effective_context = _paper_effective_context(
+        session=session,
+        settings=settings,
+        state_settings=state_settings,
+        bundle_id=resolved_bundle_id,
+        timeframe=(resolved_timeframes[0] if resolved_timeframes else "1d"),
+        asof_dt=asof_dt,
+        provider_stage_status=(
+            str(payload.get("provider_stage_status"))
+            if payload.get("provider_stage_status") is not None
+            else None
+        ),
+        confidence_gate_snapshot=confidence_gate_snapshot,
+        data_digest=(
+            str(sim_execution.metadata.get("data_digest"))
+            if sim_execution.metadata.get("data_digest") is not None
+            else None
+        ),
+        engine_version=(
+            str(sim_execution.metadata.get("engine_version"))
+            if sim_execution.metadata.get("engine_version") is not None
+            else None
+        ),
+        seed=(
+            int(sim_execution.metadata.get("seed"))
+            if sim_execution.metadata.get("seed") is not None
+            else None
+        ),
+        notes=["paper_run_step", "shadow_mode"],
+    )
+
     return jsonable_encoder(
         {
             "status": "ok",
@@ -2418,6 +2542,7 @@ def _run_paper_step_shadow_only(
             "simulated_positions": shadow_positions_after,
             "simulated_orders": sim_execution.orders_generated,
             "simulated_trades": sim_execution.trades_generated,
+            "effective_context": effective_context,
         }
     )
 
@@ -2463,6 +2588,9 @@ def run_paper_step(
 
     if state.kill_switch_active:
         _log(session, "kill_switch", {"active": True})
+        kill_timeframes = _resolve_timeframes(payload, policy)
+        kill_primary_timeframe = kill_timeframes[0] if kill_timeframes else "1d"
+        kill_bundle_id = _resolve_bundle_id(session, payload, policy, settings)
         run_row = PaperRun(
             bundle_id=None,
             policy_id=policy.get("policy_id"),
@@ -2511,6 +2639,22 @@ def run_paper_step(
         session.add(run_row)
         session.commit()
         session.refresh(run_row)
+        effective_context = _paper_effective_context(
+            session=session,
+            settings=settings,
+            state_settings=state_settings,
+            bundle_id=kill_bundle_id,
+            timeframe=kill_primary_timeframe,
+            asof_dt=asof_dt,
+            provider_stage_status=(
+                str(payload.get("provider_stage_status"))
+                if payload.get("provider_stage_status") is not None
+                else None
+            ),
+            confidence_gate_snapshot=None,
+            notes=["paper_run_step", "kill_switch_active"],
+            store=store,
+        )
         return jsonable_encoder(
             {
                 "status": "kill_switch_active",
@@ -2524,6 +2668,7 @@ def run_paper_step(
                 "paper_run_id": run_row.id,
                 "positions": [_dump_model(p) for p in get_positions(session)],
                 "orders": [_dump_model(o) for o in get_orders(session)],
+                "effective_context": effective_context,
             }
         )
 
@@ -4281,6 +4426,38 @@ def run_paper_step(
         )
         generated_report_id = int(report_row.id) if report_row.id is not None else None
 
+    effective_context = _paper_effective_context(
+        session=session,
+        settings=settings,
+        state_settings=state_settings,
+        bundle_id=resolved_bundle_id,
+        timeframe=(resolved_timeframes[0] if resolved_timeframes else "1d"),
+        asof_dt=asof_dt,
+        provider_stage_status=(
+            str(payload.get("provider_stage_status"))
+            if payload.get("provider_stage_status") is not None
+            else None
+        ),
+        confidence_gate_snapshot=confidence_gate_snapshot,
+        data_digest=(
+            str(run_summary.get("data_digest"))
+            if run_summary.get("data_digest") is not None
+            else None
+        ),
+        engine_version=(
+            str(run_summary.get("engine_version"))
+            if run_summary.get("engine_version") is not None
+            else None
+        ),
+        seed=(
+            int(run_summary.get("seed"))
+            if run_summary.get("seed") is not None
+            else None
+        ),
+        notes=["paper_run_step"],
+        store=store,
+    )
+
     return jsonable_encoder(
         {
             "status": "ok",
@@ -4371,6 +4548,7 @@ def run_paper_step(
             "state": _dump_model(state),
             "positions": [_dump_model(p) for p in live_positions],
             "orders": [_dump_model(o) for o in orders_after],
+            "effective_context": effective_context,
         }
     )
 

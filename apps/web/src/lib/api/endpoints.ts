@@ -15,6 +15,9 @@ import type {
   ApiDataProvenance,
   ApiConfidenceGateSnapshot,
   ApiDailyConfidenceAggregate,
+  ApiConfidenceTimeline,
+  ApiConfidenceDrilldown,
+  ApiConfidenceDrilldownSymbols,
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiProviderUpdateRun,
@@ -328,6 +331,29 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  confidenceTimeline: (bundleId: number, timeframe = "1d", limit = 60) =>
+    apiFetch<ApiConfidenceTimeline>(
+      `/api/confidence/timeline?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+    ),
+  confidenceDrilldown: (bundleId: number, timeframe = "1d", tradingDate: string) =>
+    apiFetch<ApiConfidenceDrilldown>(
+      `/api/confidence/drilldown?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}&trading_date=${encodeURIComponent(tradingDate)}`,
+    ),
+  confidenceDrilldownSymbols: (params: {
+    bundle_id: number;
+    timeframe?: string;
+    trading_date: string;
+    only?: "all" | "low" | "missing";
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    search.set("bundle_id", String(params.bundle_id));
+    search.set("trading_date", params.trading_date);
+    if (params.timeframe) search.set("timeframe", params.timeframe);
+    if (params.only) search.set("only", params.only);
+    if (typeof params.limit === "number") search.set("limit", String(params.limit));
+    return apiFetch<ApiConfidenceDrilldownSymbols>(`/api/confidence/drilldown/symbols?${search.toString()}`);
+  },
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
       `/api/data/quality/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,

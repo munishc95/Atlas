@@ -10,6 +10,25 @@ class DataEnvelope(BaseModel):
     meta: dict[str, Any] | None = None
 
 
+class EffectiveTradingContext(BaseModel):
+    bundle_id: int | None = None
+    timeframe: str = "1d"
+    trading_date: str
+    segment: str = "EQUITIES"
+    session_open_ist: str | None = None
+    session_close_ist: str | None = None
+    now_ist: str
+    data_asof_ist: str | None = None
+    provider_stage_status: str | None = None
+    confidence_gate_decision: str | None = None
+    confidence_risk_scale: float | None = None
+    agg_id: int | None = None
+    data_digest: str | None = None
+    engine_version: str | None = None
+    seed: int | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class ImportConfig(BaseModel):
     symbol: str
     timeframe: str = Field(default="1d")
@@ -345,6 +364,8 @@ class RuntimeSettingsRequest(BaseModel):
     confidence_gate_hard_floor: float | None = None
     confidence_gate_action_on_trigger: str | None = None
     confidence_gate_lookback_days: int | None = None
+    confidence_drop_warn_threshold: float | None = None
+    confidence_provider_mix_shift_warn_pct: float | None = None
     confidence_risk_scaling_enabled: bool | None = None
     confidence_risk_scale_exponent: float | None = None
     confidence_risk_scale_low_threshold: float | None = None

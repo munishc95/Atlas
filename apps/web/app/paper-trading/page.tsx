@@ -10,7 +10,7 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import { useJobStream } from "@/src/hooks/useJobStream";
-import type { ApiPaperSignalPreview } from "@/src/lib/api/types";
+import type { ApiEffectiveTradingContext, ApiPaperSignalPreview } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 function isTypingElement(target: EventTarget | null): boolean {
@@ -32,6 +32,7 @@ export default function PaperTradingPage() {
   const [preview, setPreview] = useState<ApiPaperSignalPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [whyOpen, setWhyOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [latestDecision, setLatestDecision] = useState<Record<string, unknown> | null>(null);
 
   const paperStateQuery = useQuery({
@@ -237,6 +238,10 @@ export default function PaperTradingPage() {
   const costSummary = (latestDecision?.cost_summary as Record<string, unknown> | undefined) ?? {};
   const riskScaled = Boolean(latestDecision?.risk_scaled);
   const reportId = Number(latestDecision?.report_id ?? 0);
+  const effectiveContext =
+    ((latestDecision?.effective_context as ApiEffectiveTradingContext | undefined) ??
+      (operateQuery.data?.effective_context as ApiEffectiveTradingContext | undefined) ??
+      null);
 
   const generateReportMutation = useMutation({
     mutationFn: async () =>
@@ -285,6 +290,29 @@ export default function PaperTradingPage() {
           Execution mode: {paperMode === "policy" ? "Policy mode" : "Single strategy mode"}
           {activePolicy ? ` (${activePolicy.name})` : ""}
         </p>
+        {effectiveContext ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full border border-border px-2 py-1 text-muted">
+              {effectiveContext.trading_date}
+            </span>
+            <span className="rounded-full border border-border px-2 py-1 text-muted">
+              as-of {effectiveContext.data_asof_ist ?? "-"}
+            </span>
+            <span className="rounded-full border border-border px-2 py-1 text-muted">
+              {String(effectiveContext.confidence_gate_decision ?? "PASS")}
+            </span>
+            <span className="rounded-full border border-border px-2 py-1 text-muted">
+              scale {(Number(effectiveContext.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+            </span>
+            <button
+              type="button"
+              onClick={() => setContextOpen(true)}
+              className="focus-ring rounded-full border border-border px-2 py-1 text-muted"
+            >
+              Context
+            </button>
+          </div>
+        ) : null}
         <p className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off {squareoffCutoff}) +
           Futures swing (if available).
@@ -719,6 +747,19 @@ export default function PaperTradingPage() {
               )}
             </div>
           </div>
+        )}
+      </DetailsDrawer>
+      <DetailsDrawer
+        open={contextOpen}
+        onClose={() => setContextOpen(false)}
+        title="Effective Trading Context"
+      >
+        {effectiveContext ? (
+          <pre className="max-h-[360px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+{JSON.stringify(effectiveContext, null, 2)}
+          </pre>
+        ) : (
+          <EmptyState title="Context unavailable" action="Run a paper step to populate context." />
         )}
       </DetailsDrawer>
     </div>

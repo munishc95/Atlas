@@ -255,6 +255,27 @@ def _ensure_indexes_and_columns() -> None:
             conn.execute(
                 text("ALTER TABLE upstoxtokenrequestrun ADD COLUMN resolution_reason VARCHAR(64)")
             )
+    if not _has_column("dailyconfidenceaggregate", "drop_points"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE dailyconfidenceaggregate ADD COLUMN drop_points FLOAT DEFAULT 0")
+            )
+    if not _has_column("dailyconfidenceaggregate", "mix_shift_score"):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE dailyconfidenceaggregate "
+                    "ADD COLUMN mix_shift_score FLOAT DEFAULT 0"
+                )
+            )
+    if not _has_column("dailyconfidenceaggregate", "flags_json"):
+        column_type = "TEXT" if is_sqlite else "JSON"
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE dailyconfidenceaggregate ADD COLUMN flags_json {column_type}"
+                )
+            )
 
     with engine.begin() as conn:
         conn.execute(

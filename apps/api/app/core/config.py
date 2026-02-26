@@ -167,6 +167,8 @@ class Settings(BaseSettings):
     confidence_gate_hard_floor: float = 55.0
     confidence_gate_action_on_trigger: str = "SHADOW_ONLY"
     confidence_gate_lookback_days: int = 1
+    confidence_drop_warn_threshold: float = 8.0
+    confidence_provider_mix_shift_warn_pct: float = 0.25
     confidence_risk_scaling_enabled: bool = True
     confidence_risk_scale_exponent: float = 1.0
     confidence_risk_scale_low_threshold: float = 0.35

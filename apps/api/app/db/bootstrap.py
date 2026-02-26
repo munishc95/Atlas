@@ -156,6 +156,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "confidence_gate_hard_floor": settings.confidence_gate_hard_floor,
                     "confidence_gate_action_on_trigger": settings.confidence_gate_action_on_trigger,
                     "confidence_gate_lookback_days": settings.confidence_gate_lookback_days,
+                    "confidence_drop_warn_threshold": settings.confidence_drop_warn_threshold,
+                    "confidence_provider_mix_shift_warn_pct": settings.confidence_provider_mix_shift_warn_pct,
                     "confidence_risk_scaling_enabled": (
                         True if str(settings.operate_mode).strip().lower() == "live" else False
                     ),

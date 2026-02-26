@@ -298,6 +298,14 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({
     timeout: 20_000,
   });
+  await expect(page.getByRole("button", { name: "Context" }).first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.getByRole("button", { name: "Context" }).first().click();
+  await expect(page.getByText(/Effective Trading Context/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/trading_date/i).first()).toBeVisible({ timeout: 20_000 });
+  await page.keyboard.press("Escape");
+
   await expect(page.getByRole("heading", { name: "Data Confidence" })).toBeVisible({
     timeout: 20_000,
   });
@@ -312,4 +320,8 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await page.getByRole("button", { name: "View trend" }).click();
   await expect(page.getByText(/Data Confidence Trend/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Risk scale/i).first()).toBeVisible({ timeout: 20_000 });
+  await page.locator("button").filter({ hasText: /Avg confidence/i }).first().click();
+  await expect(page.getByText(/Confidence Drilldown/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Worst symbols/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Provider mix delta:/i)).toBeVisible({ timeout: 20_000 });
 });

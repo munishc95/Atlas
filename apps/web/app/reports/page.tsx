@@ -10,6 +10,7 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import { atlasApi } from "@/src/lib/api/endpoints";
+import type { ApiEffectiveTradingContext } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 export default function ReportsPage() {
@@ -96,7 +97,11 @@ export default function ReportsPage() {
       string,
       unknown
     >;
-    return { summary, explainability, risk, confidenceRiskScaling };
+    const effectiveContext =
+      ((selectedReport.effective_context as ApiEffectiveTradingContext | undefined) ??
+        (content.effective_context as ApiEffectiveTradingContext | undefined) ??
+        null);
+    return { summary, explainability, risk, confidenceRiskScaling, effectiveContext };
   }, [selectedReport]);
 
   return (
@@ -289,10 +294,35 @@ export default function ReportsPage() {
             <p>
               <span className="text-muted">Mode:</span> {String(reportSummary.summary.mode ?? "LIVE")}
             </p>
+            {reportSummary.effectiveContext ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  {reportSummary.effectiveContext.trading_date}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  as-of {reportSummary.effectiveContext.data_asof_ist ?? "-"}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  {String(reportSummary.effectiveContext.confidence_gate_decision ?? "PASS")}
+                </span>
+                <span className="rounded-full border border-border px-2 py-1 text-muted">
+                  scale{" "}
+                  {(Number(reportSummary.effectiveContext.confidence_risk_scale ?? 1) * 100).toFixed(
+                    1,
+                  )}
+                  %
+                </span>
+              </div>
+            ) : null}
             <p>
               <span className="text-muted">Confidence risk scale:</span>{" "}
               {String(reportSummary.confidenceRiskScaling.scale ?? "-")}
             </p>
+            {reportSummary.effectiveContext ? (
+              <pre className="max-h-[220px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
+{JSON.stringify(reportSummary.effectiveContext, null, 2)}
+              </pre>
+            ) : null}
             {reportSummary.summary.shadow_note ? (
               <p className="rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                 {String(reportSummary.summary.shadow_note)}

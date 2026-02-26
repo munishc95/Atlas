@@ -100,6 +100,28 @@ export const qk = {
     ["confidenceAggLatest", bundleId ?? "all", timeframe ?? "all"] as const,
   confidenceAggHistory: (bundleId?: number | null, timeframe?: string | null, limit = 60) =>
     ["confidenceAggHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
+  confidenceTimeline: (bundleId?: number | null, timeframe?: string | null, limit = 60) =>
+    ["confidenceTimeline", bundleId ?? "all", timeframe ?? "all", limit] as const,
+  confidenceDrilldown: (
+    bundleId?: number | null,
+    timeframe?: string | null,
+    tradingDate?: string | null,
+  ) => ["confidenceDrilldown", bundleId ?? "all", timeframe ?? "all", tradingDate ?? "latest"] as const,
+  confidenceDrilldownSymbols: (
+    bundleId?: number | null,
+    timeframe?: string | null,
+    tradingDate?: string | null,
+    only: "all" | "low" | "missing" = "all",
+    limit = 200,
+  ) =>
+    [
+      "confidenceDrilldownSymbols",
+      bundleId ?? "all",
+      timeframe ?? "all",
+      tradingDate ?? "latest",
+      only,
+      limit,
+    ] as const,
   dailyReports: (date?: string, bundleId?: number | null, policyId?: number | null) =>
     ["dailyReports", date ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   dailyReport: (id: number | null) => ["dailyReport", id] as const,

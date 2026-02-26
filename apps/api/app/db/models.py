@@ -440,6 +440,9 @@ class DailyConfidenceAggregate(SQLModel, table=True):
     provider_mix_json: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
     low_confidence_symbols_count: int = 0
     low_confidence_days_count: int = 0
+    drop_points: float = 0.0
+    mix_shift_score: float = 0.0
+    flags_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     gate_decision: str = Field(default="PASS", index=True, max_length=24)
     gate_reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     confidence_risk_scale: float = 1.0

@@ -811,9 +811,23 @@ export default function UniverseDataPage() {
                 ? `Reasons: ${confidenceAggLatestQuery.data?.reasons.join(", ")}`
                 : "No confidence gate reasons for latest day."}
             </p>
-            <Link href="/ops" className="focus-ring inline-flex rounded-lg border border-border px-2 py-1 text-xs text-muted">
-              Open Ops confidence trend
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/ops" className="focus-ring inline-flex rounded-lg border border-border px-2 py-1 text-xs text-muted">
+                Open Ops confidence trend
+              </Link>
+              <Link
+                href={
+                  confidenceAggLatestQuery.data?.trading_date
+                    ? `/ops?confidence_date=${encodeURIComponent(
+                        String(confidenceAggLatestQuery.data.trading_date),
+                      )}`
+                    : "/ops"
+                }
+                className="focus-ring inline-flex rounded-lg border border-border px-2 py-1 text-xs text-muted"
+              >
+                Open drilldown
+              </Link>
+            </div>
             <div className="max-h-72 overflow-auto rounded-lg border border-border">
               <table className="w-full text-xs">
                 <thead className="bg-surface text-left text-muted">
