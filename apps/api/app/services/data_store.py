@@ -334,14 +334,23 @@ class DataStore:
         bundle = self.get_bundle(session, bundle_id)
         if bundle is None:
             return []
+        bundle_symbols = self._normalize_symbols(list(bundle.symbols_json or []))
         rows_stmt = select(Dataset.symbol).where(Dataset.bundle_id == bundle_id)
         if timeframe:
             rows_stmt = rows_stmt.where(Dataset.timeframe == timeframe)
         rows = session.exec(rows_stmt.order_by(Dataset.symbol.asc())).all()
         dataset_symbols = [str(item).upper() for item in rows if str(item).strip()]
+        # Use bundle membership as source-of-truth and include discovered dataset symbols.
+        # This lets provider updates fetch symbols that are declared in the bundle even
+        # before any OHLCV rows have been imported for them.
         if dataset_symbols:
-            return self._normalize_symbols(dataset_symbols)
-        return self._normalize_symbols(list(bundle.symbols_json or []))
+            merged = list(bundle_symbols)
+            known = set(bundle_symbols)
+            for symbol in self._normalize_symbols(dataset_symbols):
+                if symbol not in known:
+                    merged.append(symbol)
+            return self._normalize_symbols(merged)
+        return bundle_symbols
 
     def get_dataset_symbols(
         self,
