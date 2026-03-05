@@ -89,6 +89,7 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
       active_policy_id: null,
       data_updates_provider_enabled: true,
       data_updates_provider_kind: "MOCK",
+      data_updates_provider_nse_bhavcopy_enabled: true,
       data_updates_provider_timeframe_enabled: "1d",
       data_updates_provider_max_symbols_per_run: 5,
       data_updates_provider_max_calls_per_run: 20,
@@ -113,6 +114,41 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   mkdirSync(mappingDir, { recursive: true });
   const mappingPath = path.resolve(mappingDir, "upstox_instruments.csv");
   writeFileSync(mappingPath, "symbol,instrument_key\nNIFTY500,NSE_EQ|NIFTY500\n", "utf-8");
+
+  const backfillRunRes = await request.post(`${apiBase}/api/data/backfill/run`, {
+    data: {
+      bundle_id: bundleId,
+      timeframe: "1d",
+      provider_kind: "NSE_BHAVCOPY",
+      start_date: "2026-02-20",
+      end_date: "2026-02-28",
+      mode: "SINGLE",
+      dry_run: false,
+    },
+  });
+  expect(backfillRunRes.ok()).toBeTruthy();
+  const backfillRunBody = await backfillRunRes.json();
+  await waitForJob(request, apiBase, String(backfillRunBody?.data?.job_id), 180_000);
+  const backfillLatestRes = await request.get(
+    `${apiBase}/api/data/backfill/latest?bundle_id=${bundleId}&timeframe=1d`,
+  );
+  expect(backfillLatestRes.ok()).toBeTruthy();
+  const backfillLatestBody = await backfillLatestRes.json();
+  const backfillLatest = (backfillLatestBody?.data ?? {}) as Record<string, unknown>;
+  expect(String(backfillLatest.provider_kind ?? "")).toBe("NSE_BHAVCOPY");
+  expect(Number(backfillLatest.trading_days_planned ?? 0)).toBeGreaterThan(0);
+
+  const provenanceAfterBackfillRes = await request.get(
+    `${apiBase}/api/data/provenance?bundle_id=${bundleId}&timeframe=1d&limit=300`,
+  );
+  expect(provenanceAfterBackfillRes.ok()).toBeTruthy();
+  const provenanceAfterBackfillBody = await provenanceAfterBackfillRes.json();
+  const provenanceEntries = (provenanceAfterBackfillBody?.data?.entries ?? []) as Array<
+    Record<string, unknown>
+  >;
+  expect(
+    provenanceEntries.some((entry) => String(entry.source_provider ?? "") === "NSE_BHAVCOPY"),
+  ).toBeTruthy();
 
   const mappingImportRes = await request.post(`${apiBase}/api/providers/upstox/mapping/import`, {
     data: {
@@ -284,8 +320,12 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await expect(page.getByRole("heading", { name: "Universe & Data" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByText(/Provider status/i)).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/NSE_EOD/i).first()).toBeVisible({ timeout: 20_000 });
+  const providerStatusCard = page
+    .locator("div.rounded-xl.border")
+    .filter({ has: page.getByText(/Provider status/i) })
+    .first();
+  await expect(providerStatusCard).toBeVisible({ timeout: 20_000 });
+  await expect(providerStatusCard.getByText(/NSE_EOD/i)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "View provenance" }).first().click();
   await expect(page.getByText(/Data Provenance/i)).toBeVisible({ timeout: 20_000 });
 

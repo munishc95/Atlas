@@ -100,8 +100,9 @@ class Settings(BaseSettings):
     data_updates_provider_mode: str = "SINGLE"
     data_updates_provider_kind: str = "UPSTOX"
     data_updates_provider_priority_order: list[str] = Field(
-        default_factory=lambda: ["UPSTOX", "NSE_EOD", "INBOX"]
+        default_factory=lambda: ["UPSTOX", "NSE_BHAVCOPY", "NSE_EOD", "INBOX"]
     )
+    data_updates_provider_nse_bhavcopy_enabled: bool = True
     data_updates_provider_nse_eod_enabled: bool = True
     data_updates_provider_max_symbols_per_run: int = 120
     data_updates_provider_max_calls_per_run: int = 400
@@ -110,12 +111,23 @@ class Settings(BaseSettings):
     data_updates_provider_repair_last_n_trading_days: int = 3
     data_updates_provider_backfill_max_days: int = 30
     data_updates_provider_allow_partial_4h_ish: bool = False
+    historical_backfill_max_trading_days_per_run: int = 366
+    nse_bhavcopy_base_url: str = "https://nsearchives.nseindia.com"
+    nse_bhavcopy_path_template: str = "/products/content/sec_bhavdata_full_{DDMMYYYY}.csv"
+    nse_bhavcopy_timeout_seconds: float = 18.0
+    nse_bhavcopy_retry_max: int = 3
+    nse_bhavcopy_retry_backoff_seconds: float = 1.0
+    nse_bhavcopy_throttle_seconds: float = 0.4
+    nse_bhavcopy_series_filter: str = "EQ"
+    nse_bhavcopy_max_trading_days_per_call: int = 90
+    nse_bhavcopy_cache_dir: str = "data/cache/nse_bhavcopy"
     nse_eod_base_url: str = "https://www.nseindia.com"
     nse_eod_timeout_seconds: float = 12.0
     nse_eod_retry_max: int = 2
     nse_eod_retry_backoff_seconds: float = 0.8
     nse_eod_throttle_seconds: float = 0.8
     data_provenance_confidence_upstox: int = 95
+    data_provenance_confidence_nse_bhavcopy: int = 90
     data_provenance_confidence_nse_eod: int = 80
     data_provenance_confidence_inbox: int = 70
     data_quality_confidence_fail_threshold: int = 65
@@ -219,6 +231,7 @@ class Settings(BaseSettings):
         Path(self.calendar_data_root).mkdir(parents=True, exist_ok=True)
         Path(self.data_inbox_root).mkdir(parents=True, exist_ok=True)
         Path(self.secrets_root).mkdir(parents=True, exist_ok=True)
+        Path(self.nse_bhavcopy_cache_dir).mkdir(parents=True, exist_ok=True)
         Path(self.cred_key_path).parent.mkdir(parents=True, exist_ok=True)
 
 

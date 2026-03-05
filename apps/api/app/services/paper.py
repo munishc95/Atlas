@@ -246,6 +246,7 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "data_updates_provider_mode": settings.data_updates_provider_mode,
             "data_updates_provider_kind": settings.data_updates_provider_kind,
             "data_updates_provider_priority_order": settings.data_updates_provider_priority_order,
+            "data_updates_provider_nse_bhavcopy_enabled": settings.data_updates_provider_nse_bhavcopy_enabled,
             "data_updates_provider_nse_eod_enabled": settings.data_updates_provider_nse_eod_enabled,
             "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
             "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
@@ -253,10 +254,21 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "data_updates_provider_timeframes": settings.data_updates_provider_timeframes,
             "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
             "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
+            "historical_backfill_max_trading_days_per_run": settings.historical_backfill_max_trading_days_per_run,
             "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
             "data_provenance_confidence_upstox": settings.data_provenance_confidence_upstox,
+            "data_provenance_confidence_nse_bhavcopy": settings.data_provenance_confidence_nse_bhavcopy,
             "data_provenance_confidence_nse_eod": settings.data_provenance_confidence_nse_eod,
             "data_provenance_confidence_inbox": settings.data_provenance_confidence_inbox,
+            "nse_bhavcopy_base_url": settings.nse_bhavcopy_base_url,
+            "nse_bhavcopy_path_template": settings.nse_bhavcopy_path_template,
+            "nse_bhavcopy_timeout_seconds": settings.nse_bhavcopy_timeout_seconds,
+            "nse_bhavcopy_retry_max": settings.nse_bhavcopy_retry_max,
+            "nse_bhavcopy_retry_backoff_seconds": settings.nse_bhavcopy_retry_backoff_seconds,
+            "nse_bhavcopy_throttle_seconds": settings.nse_bhavcopy_throttle_seconds,
+            "nse_bhavcopy_series_filter": settings.nse_bhavcopy_series_filter,
+            "nse_bhavcopy_max_trading_days_per_call": settings.nse_bhavcopy_max_trading_days_per_call,
+            "nse_bhavcopy_cache_dir": settings.nse_bhavcopy_cache_dir,
             "data_quality_confidence_fail_threshold": settings.data_quality_confidence_fail_threshold,
             "coverage_missing_latest_warn_pct": settings.coverage_missing_latest_warn_pct,
             "coverage_missing_latest_fail_pct": settings.coverage_missing_latest_fail_pct,
@@ -4826,17 +4838,26 @@ def update_runtime_settings(
 ) -> dict[str, Any]:
     state = get_or_create_paper_state(session, settings)
     merged = dict(state.settings_json)
+    requested_mode: str | None = None
+    if "operate_mode" in payload:
+        requested_mode = str(payload.get("operate_mode", settings.operate_mode)).strip().lower()
     if "data_quality_stale_severity" in payload:
         merged["data_quality_stale_severity_override"] = True
-    if "operate_mode" in payload and "data_quality_stale_severity" not in payload:
-        requested_mode = str(payload.get("operate_mode", settings.operate_mode)).strip().lower()
+    if requested_mode is not None and "data_quality_stale_severity" not in payload:
         if requested_mode == "live":
             merged["data_quality_stale_severity"] = "FAIL"
             merged["data_quality_stale_severity_override"] = False
-    if "operate_mode" in payload and "data_quality_stale_severity" in payload:
-        requested_mode = str(payload.get("operate_mode", settings.operate_mode)).strip().lower()
+    if requested_mode is not None and "data_quality_stale_severity" in payload:
         if requested_mode == "live":
             merged["data_quality_stale_severity_override"] = True
+    if requested_mode is not None:
+        live_mode = requested_mode == "live"
+        if "risk_overlay_enabled" not in payload:
+            merged["risk_overlay_enabled"] = live_mode
+        if "confidence_gate_enabled" not in payload:
+            merged["confidence_gate_enabled"] = live_mode
+        if "confidence_risk_scaling_enabled" not in payload:
+            merged["confidence_risk_scaling_enabled"] = live_mode
     merged.update(payload)
     state.settings_json = merged
     session.add(state)

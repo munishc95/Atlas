@@ -24,6 +24,13 @@ def confidence_for_provider(
     token = _provider_token(provider)
     if token == "UPSTOX":
         return float(state.get("data_provenance_confidence_upstox", settings.data_provenance_confidence_upstox))
+    if token == "NSE_BHAVCOPY":
+        return float(
+            state.get(
+                "data_provenance_confidence_nse_bhavcopy",
+                settings.data_provenance_confidence_nse_bhavcopy,
+            )
+        )
     if token == "NSE_EOD":
         return float(state.get("data_provenance_confidence_nse_eod", settings.data_provenance_confidence_nse_eod))
     if token == "INBOX":
@@ -178,7 +185,7 @@ def provider_status_payload(
     *,
     settings: Settings,
 ) -> dict[str, Any]:
-    providers = ["UPSTOX", "NSE_EOD", "INBOX"]
+    providers = ["UPSTOX", "NSE_BHAVCOPY", "NSE_EOD", "INBOX"]
     latest_runs = list(
         session.exec(select(ProviderUpdateRun).order_by(ProviderUpdateRun.created_at.desc())).all()
     )
@@ -224,6 +231,7 @@ def provider_status_payload(
         "expires_at": upstox_meta.get("expires_at"),
         "last_verified_at": upstox_meta.get("last_verified_at"),
     }
+    rows["NSE_BHAVCOPY"]["enabled"] = bool(settings.data_updates_provider_nse_bhavcopy_enabled)
     rows["NSE_EOD"]["enabled"] = bool(settings.data_updates_provider_nse_eod_enabled)
     return {
         "providers": [rows[key] for key in sorted(rows.keys())],

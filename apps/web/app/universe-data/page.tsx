@@ -24,12 +24,25 @@ export default function UniverseDataPage() {
   const [bundleId, setBundleId] = useState<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [activeJobKind, setActiveJobKind] = useState<"import" | "updates" | "provider" | null>(null);
+  const [activeJobKind, setActiveJobKind] = useState<
+    "import" | "updates" | "provider" | "backfill" | null
+  >(null);
   const [showCoverageDrawer, setShowCoverageDrawer] = useState(false);
   const [showProvenanceDrawer, setShowProvenanceDrawer] = useState(false);
   const [showMappingDrawer, setShowMappingDrawer] = useState(false);
+  const [showBackfillHistoryDrawer, setShowBackfillHistoryDrawer] = useState(false);
   const [mappingPath, setMappingPath] = useState("data/inbox/_metadata/upstox_instruments.csv");
   const [mappingMode, setMappingMode] = useState<"UPSERT" | "REPLACE">("UPSERT");
+  const [backfillStartDate, setBackfillStartDate] = useState(() => {
+    const dt = new Date();
+    dt.setFullYear(dt.getFullYear() - 1);
+    return dt.toISOString().slice(0, 10);
+  });
+  const [backfillEndDate, setBackfillEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [backfillProviderKind, setBackfillProviderKind] = useState<
+    "NSE_BHAVCOPY" | "NSE_EOD" | "UPSTOX"
+  >("NSE_BHAVCOPY");
+  const [backfillMode, setBackfillMode] = useState<"SINGLE" | "FALLBACK">("SINGLE");
 
   const universeQuery = useQuery({
     queryKey: qk.universe,
@@ -82,6 +95,33 @@ export default function UniverseDataPage() {
       }
     },
     refetchInterval: 10_000,
+  });
+  const historicalBackfillLatestQuery = useQuery({
+    queryKey: qk.historicalBackfillLatest(bundleId, "1d"),
+    enabled: bundleId !== null,
+    queryFn: async () => {
+      try {
+        return (await atlasApi.historicalBackfillLatest(bundleId ?? undefined, "1d")).data;
+      } catch (error) {
+        if (error instanceof ApiClientError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    refetchInterval: 15_000,
+  });
+  const historicalBackfillHistoryQuery = useQuery({
+    queryKey: qk.historicalBackfillHistory(bundleId, "1d", 25),
+    enabled: bundleId !== null && showBackfillHistoryDrawer,
+    queryFn: async () =>
+      (
+        await atlasApi.historicalBackfillHistory({
+          bundle_id: bundleId ?? undefined,
+          timeframe: "1d",
+          limit: 25,
+        })
+      ).data,
   });
   const dataCoverageQuery = useQuery({
     queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100),
@@ -241,6 +281,35 @@ export default function UniverseDataPage() {
       toast.error(error.message || "Could not queue provider update job");
     },
   });
+  const historicalBackfillMutation = useMutation({
+    mutationFn: async () => {
+      if (!bundleId) {
+        throw new Error("Choose a bundle before running historical backfill.");
+      }
+      if (!backfillStartDate || !backfillEndDate) {
+        throw new Error("Choose start and end date for historical backfill.");
+      }
+      return (
+        await atlasApi.runHistoricalBackfill({
+          bundle_id: bundleId,
+          timeframe: "1d",
+          provider_kind: backfillProviderKind,
+          start_date: backfillStartDate,
+          end_date: backfillEndDate,
+          mode: backfillMode,
+          dry_run: false,
+        })
+      ).data;
+    },
+    onSuccess: (result) => {
+      setActiveJobId(result.job_id);
+      setActiveJobKind("backfill");
+      toast.success("Historical backfill job queued");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not queue historical backfill job");
+    },
+  });
   const providerToggleMutation = useMutation({
     mutationFn: async (enabled: boolean) =>
       (await atlasApi.updateSettings({ data_updates_provider_enabled: enabled })).data,
@@ -286,6 +355,8 @@ export default function UniverseDataPage() {
       if (bundleId) {
         queryClient.invalidateQueries({ queryKey: qk.dataUpdatesLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(bundleId, coverageTimeframe) });
+        queryClient.invalidateQueries({ queryKey: qk.historicalBackfillLatest(bundleId, "1d") });
+        queryClient.invalidateQueries({ queryKey: qk.historicalBackfillHistory(bundleId, "1d", 25) });
         queryClient.invalidateQueries({ queryKey: qk.dataCoverage(bundleId, coverageTimeframe, 100) });
         queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(bundleId, coverageTimeframe) });
         queryClient.invalidateQueries({
@@ -298,6 +369,8 @@ export default function UniverseDataPage() {
         toast.success("Data updates completed");
       } else if (activeJobKind === "provider") {
         toast.success("Provider updates completed");
+      } else if (activeJobKind === "backfill") {
+        toast.success("Historical backfill completed");
       } else {
         toast.success("Import completed");
       }
@@ -307,6 +380,8 @@ export default function UniverseDataPage() {
         toast.error("Data updates failed");
       } else if (activeJobKind === "provider") {
         toast.error("Provider updates failed");
+      } else if (activeJobKind === "backfill") {
+        toast.error("Historical backfill failed");
       } else {
         toast.error("Import failed");
       }
@@ -343,6 +418,8 @@ export default function UniverseDataPage() {
             ? "Data Updates Job"
             : activeJobKind === "provider"
               ? "Provider Updates Job"
+              : activeJobKind === "backfill"
+                ? "Historical Backfill Job"
               : "Import Job"
         }
       />
@@ -598,6 +675,91 @@ export default function UniverseDataPage() {
             </button>
           </div>
           <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
+            <p className="mb-1 font-medium text-foreground">Historical Backfill</p>
+            <p className="text-[11px]">
+              Populate long 1d history for training/backtests (recommended year-by-year).
+            </p>
+            <div className="mt-2 grid gap-2">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1">
+                  <span className="block text-[11px]">Start date</span>
+                  <input
+                    type="date"
+                    value={backfillStartDate}
+                    onChange={(event) => setBackfillStartDate(event.target.value)}
+                    className="focus-ring w-full rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="block text-[11px]">End date</span>
+                  <input
+                    type="date"
+                    value={backfillEndDate}
+                    onChange={(event) => setBackfillEndDate(event.target.value)}
+                    className="focus-ring w-full rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={backfillProviderKind}
+                  onChange={(event) =>
+                    setBackfillProviderKind(event.target.value as "NSE_BHAVCOPY" | "NSE_EOD" | "UPSTOX")
+                  }
+                  className="focus-ring rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+                >
+                  <option value="NSE_BHAVCOPY">NSE_BHAVCOPY</option>
+                  <option value="NSE_EOD">NSE_EOD</option>
+                  <option value="UPSTOX">UPSTOX</option>
+                </select>
+                <select
+                  value={backfillMode}
+                  onChange={(event) => setBackfillMode(event.target.value as "SINGLE" | "FALLBACK")}
+                  className="focus-ring rounded-lg border border-border bg-panel px-2 py-1 text-xs"
+                >
+                  <option value="SINGLE">SINGLE</option>
+                  <option value="FALLBACK">FALLBACK</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => historicalBackfillMutation.mutate()}
+                disabled={historicalBackfillMutation.isPending || !bundleId}
+                className="focus-ring rounded-lg border border-border px-2 py-1 text-xs text-muted disabled:opacity-60"
+              >
+                {historicalBackfillMutation.isPending ? "Queuing..." : "Run Historical Backfill"}
+              </button>
+            </div>
+            <div className="mt-2 rounded-lg border border-border p-2 text-[11px]">
+              <p>
+                Latest run:{" "}
+                <span className="font-semibold text-foreground">
+                  {historicalBackfillLatestQuery.data?.status ?? "Not run yet"}
+                </span>
+              </p>
+              <p>Provider: {historicalBackfillLatestQuery.data?.provider_kind ?? "-"}</p>
+              <p>
+                Planned/completed trading days:{" "}
+                {historicalBackfillLatestQuery.data
+                  ? `${historicalBackfillLatestQuery.data.trading_days_planned}/${historicalBackfillLatestQuery.data.trading_days_completed}`
+                  : "-"}
+              </p>
+              <p>
+                Bars added/updated:{" "}
+                {historicalBackfillLatestQuery.data
+                  ? `${historicalBackfillLatestQuery.data.bars_added_total}/${historicalBackfillLatestQuery.data.bars_updated_total}`
+                  : "-"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowBackfillHistoryDrawer(true)}
+              className="focus-ring mt-2 rounded-lg border border-border px-2 py-1 text-xs text-muted"
+            >
+              View backfill history
+            </button>
+          </div>
+          <div className="rounded-xl border border-border px-3 py-2 text-xs text-muted">
             <p className="mb-1 font-medium text-foreground">Provider status</p>
             {providersStatusQuery.isLoading ? (
               <p>Loading provider health...</p>
@@ -850,6 +1012,57 @@ export default function UniverseDataPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+      </DetailsDrawer>
+
+      <DetailsDrawer
+        open={showBackfillHistoryDrawer}
+        onClose={() => setShowBackfillHistoryDrawer(false)}
+        title="Historical Backfill Runs"
+      >
+        {historicalBackfillHistoryQuery.isLoading ? (
+          <LoadingState label="Loading backfill history" />
+        ) : historicalBackfillHistoryQuery.isError ? (
+          <ErrorState
+            title="Could not load backfill history"
+            action="Retry backfill history query."
+            onRetry={() => void historicalBackfillHistoryQuery.refetch()}
+          />
+        ) : (
+          <div className="space-y-2 text-sm">
+            {(historicalBackfillHistoryQuery.data ?? []).length === 0 ? (
+              <EmptyState title="No historical backfill runs yet" action="Run one from Universe & Data." />
+            ) : (
+              <div className="max-h-80 overflow-auto rounded-lg border border-border">
+                <table className="w-full text-xs">
+                  <thead className="bg-surface text-left text-muted">
+                    <tr>
+                      <th className="px-2 py-1">Created</th>
+                      <th className="px-2 py-1">Status</th>
+                      <th className="px-2 py-1">Provider</th>
+                      <th className="px-2 py-1">Range</th>
+                      <th className="px-2 py-1">Bars</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(historicalBackfillHistoryQuery.data ?? []).map((row) => (
+                      <tr key={String(row.id)} className="border-t border-border">
+                        <td className="px-2 py-1">{row.created_at}</td>
+                        <td className="px-2 py-1">{row.status}</td>
+                        <td className="px-2 py-1">{row.provider_kind}</td>
+                        <td className="px-2 py-1">
+                          {row.start_date} {"->"} {row.end_date}
+                        </td>
+                        <td className="px-2 py-1">
+                          +{row.bars_added_total} / ~{row.bars_updated_total}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </DetailsDrawer>

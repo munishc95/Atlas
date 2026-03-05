@@ -154,6 +154,16 @@ class ProviderUpdatesRunRequest(BaseModel):
     end: str | None = None
 
 
+class HistoricalBackfillRunRequest(BaseModel):
+    bundle_id: int
+    timeframe: str = "1d"
+    provider_kind: str = "NSE_BHAVCOPY"
+    start_date: str
+    end_date: str
+    mode: str = "SINGLE"
+    dry_run: bool = False
+
+
 class UpstoxMappingImportRequest(BaseModel):
     path: str = "data/inbox/_metadata/upstox_instruments.csv"
     mode: str = "UPSERT"
@@ -314,6 +324,7 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_mode: str | None = None
     data_updates_provider_kind: str | None = None
     data_updates_provider_priority_order: list[str] | None = None
+    data_updates_provider_nse_bhavcopy_enabled: bool | None = None
     data_updates_provider_nse_eod_enabled: bool | None = None
     data_updates_provider_max_symbols_per_run: int | None = None
     data_updates_provider_max_calls_per_run: int | None = None
@@ -321,8 +332,19 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_timeframes: list[str] | None = None
     data_updates_provider_repair_last_n_trading_days: int | None = None
     data_updates_provider_backfill_max_days: int | None = None
+    historical_backfill_max_trading_days_per_run: int | None = None
     data_updates_provider_allow_partial_4h_ish: bool | None = None
+    nse_bhavcopy_base_url: str | None = None
+    nse_bhavcopy_path_template: str | None = None
+    nse_bhavcopy_timeout_seconds: float | None = None
+    nse_bhavcopy_retry_max: int | None = None
+    nse_bhavcopy_retry_backoff_seconds: float | None = None
+    nse_bhavcopy_throttle_seconds: float | None = None
+    nse_bhavcopy_series_filter: str | None = None
+    nse_bhavcopy_max_trading_days_per_call: int | None = None
+    nse_bhavcopy_cache_dir: str | None = None
     data_provenance_confidence_upstox: int | None = None
+    data_provenance_confidence_nse_bhavcopy: int | None = None
     data_provenance_confidence_nse_eod: int | None = None
     data_provenance_confidence_inbox: int | None = None
     data_quality_confidence_fail_threshold: int | None = None

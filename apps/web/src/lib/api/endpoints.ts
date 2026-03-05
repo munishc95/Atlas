@@ -20,6 +20,7 @@ import type {
   ApiConfidenceDrilldownSymbols,
   ApiDataQualityReport,
   ApiDataUpdateRun,
+  ApiHistoricalBackfillRun,
   ApiProviderUpdateRun,
   ApiProvidersStatus,
   ApiProviderStatusTrend,
@@ -83,6 +84,19 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  runHistoricalBackfill: (payload: {
+    bundle_id: number;
+    timeframe?: "1d";
+    provider_kind?: "NSE_BHAVCOPY" | "NSE_EOD" | "UPSTOX" | string;
+    start_date: string;
+    end_date: string;
+    mode?: "SINGLE" | "FALLBACK";
+    dry_run?: boolean;
+  }) =>
+    apiFetch<JobStart>("/api/data/backfill/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   dataUpdatesLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataUpdateRun>(
       `/api/data/updates/latest?bundle_id=${bundleId}&timeframe=${encodeURIComponent(timeframe)}`,
@@ -111,6 +125,23 @@ export const atlasApi = {
     if (params?.days) search.set("days", String(params.days));
     return apiFetch<ApiProviderUpdateRun[]>(
       `/api/data/provider-updates/history${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  historicalBackfillLatest: (bundleId?: number, timeframe?: string) => {
+    const search = new URLSearchParams();
+    if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
+    if (timeframe) search.set("timeframe", timeframe);
+    return apiFetch<ApiHistoricalBackfillRun>(
+      `/api/data/backfill/latest${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  historicalBackfillHistory: (params?: { bundle_id?: number; timeframe?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (typeof params?.limit === "number") search.set("limit", String(params.limit));
+    return apiFetch<ApiHistoricalBackfillRun[]>(
+      `/api/data/backfill/history${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
   upstoxMappingStatus: (params?: { bundle_id?: number; timeframe?: string; sample_limit?: number }) => {

@@ -616,6 +616,42 @@ class ProviderUpdateItem(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class HistoricalBackfillRun(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_historicalbackfillrun_bundle_tf_created",
+            "bundle_id",
+            "timeframe",
+            "created_at",
+        ),
+        Index(
+            "ix_historicalbackfillrun_status_created",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    provider_kind: str = Field(default="NSE_BHAVCOPY", index=True, max_length=32)
+    mode: str = Field(default="SINGLE", index=True, max_length=16)
+    dry_run: bool = False
+    start_date: dt_date = Field(index=True)
+    end_date: dt_date = Field(index=True)
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    trading_days_planned: int = 0
+    trading_days_completed: int = 0
+    symbols_targeted: int = 0
+    bars_added_total: int = 0
+    bars_updated_total: int = 0
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    started_at: datetime | None = Field(default=None)
+    finished_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class DataProvenance(SQLModel, table=True):
     __table_args__ = (
         Index(

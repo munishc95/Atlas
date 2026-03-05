@@ -35,6 +35,7 @@ from app.jobs.queue import get_queue
 from app.jobs.tasks import (
     run_auto_eval_job,
     run_backtest_job,
+    run_historical_backfill_job,
     run_provider_updates_job,
     run_data_updates_job,
     run_data_quality_job,
@@ -50,6 +51,7 @@ from app.jobs.tasks import (
 )
 from app.schemas.api import (
     ConfidenceAggRecomputeRequest,
+    HistoricalBackfillRunRequest,
     AutoEvalRunRequest,
     BacktestRunRequest,
     CreatePolicyEnsembleRequest,
@@ -123,6 +125,11 @@ from app.services.confidence_gate import (
 from app.services.provider_updates import (
     get_latest_provider_update_run,
     list_provider_update_history,
+)
+from app.services.historical_backfill import (
+    get_latest_historical_backfill_run,
+    list_historical_backfill_runs,
+    serialize_historical_backfill_run,
 )
 from app.services.provider_mapping import (
     get_upstox_mapping_status,
@@ -559,6 +566,58 @@ def provider_updates_history(
         days=days,
     )
     return _data([row.model_dump() for row in rows])
+
+
+@router.post("/data/backfill/run")
+def run_historical_backfill(
+    payload: HistoricalBackfillRunRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload_dict = payload.model_dump()
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="historical_backfill",
+        task_path="app.jobs.tasks.run_historical_backfill_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_historical_backfill_job,
+    )
+
+
+@router.get("/data/backfill/latest")
+def latest_historical_backfill(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_latest_historical_backfill_run(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+    )
+    if row is None:
+        raise APIError(code="not_found", message="No historical backfill run found", status_code=404)
+    return _data(serialize_historical_backfill_run(row))
+
+
+@router.get("/data/backfill/history")
+def historical_backfill_history(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_historical_backfill_runs(
+        session,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    return _data([serialize_historical_backfill_run(row) for row in rows])
 
 
 @router.get("/providers/status")
@@ -3083,6 +3142,7 @@ def get_settings_payload(
         "data_updates_provider_mode": settings.data_updates_provider_mode,
         "data_updates_provider_kind": settings.data_updates_provider_kind,
         "data_updates_provider_priority_order": settings.data_updates_provider_priority_order,
+        "data_updates_provider_nse_bhavcopy_enabled": settings.data_updates_provider_nse_bhavcopy_enabled,
         "data_updates_provider_nse_eod_enabled": settings.data_updates_provider_nse_eod_enabled,
         "data_updates_provider_max_symbols_per_run": settings.data_updates_provider_max_symbols_per_run,
         "data_updates_provider_max_calls_per_run": settings.data_updates_provider_max_calls_per_run,
@@ -3090,10 +3150,21 @@ def get_settings_payload(
         "data_updates_provider_timeframes": settings.data_updates_provider_timeframes,
         "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
         "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
+        "historical_backfill_max_trading_days_per_run": settings.historical_backfill_max_trading_days_per_run,
         "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
         "data_provenance_confidence_upstox": settings.data_provenance_confidence_upstox,
+        "data_provenance_confidence_nse_bhavcopy": settings.data_provenance_confidence_nse_bhavcopy,
         "data_provenance_confidence_nse_eod": settings.data_provenance_confidence_nse_eod,
         "data_provenance_confidence_inbox": settings.data_provenance_confidence_inbox,
+        "nse_bhavcopy_base_url": settings.nse_bhavcopy_base_url,
+        "nse_bhavcopy_path_template": settings.nse_bhavcopy_path_template,
+        "nse_bhavcopy_timeout_seconds": settings.nse_bhavcopy_timeout_seconds,
+        "nse_bhavcopy_retry_max": settings.nse_bhavcopy_retry_max,
+        "nse_bhavcopy_retry_backoff_seconds": settings.nse_bhavcopy_retry_backoff_seconds,
+        "nse_bhavcopy_throttle_seconds": settings.nse_bhavcopy_throttle_seconds,
+        "nse_bhavcopy_series_filter": settings.nse_bhavcopy_series_filter,
+        "nse_bhavcopy_max_trading_days_per_call": settings.nse_bhavcopy_max_trading_days_per_call,
+        "nse_bhavcopy_cache_dir": settings.nse_bhavcopy_cache_dir,
         "data_quality_confidence_fail_threshold": settings.data_quality_confidence_fail_threshold,
         "upstox_persist_env_fallback": settings.upstox_persist_env_fallback,
         "upstox_auto_renew_enabled": settings.upstox_auto_renew_enabled,

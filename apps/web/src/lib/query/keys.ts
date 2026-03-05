@@ -58,6 +58,10 @@ export const qk = {
     ["providerUpdatesLatest", bundleId ?? "all", timeframe ?? "all"] as const,
   providerUpdatesHistory: (bundleId?: number | null, timeframe?: string | null, days = 7) =>
     ["providerUpdatesHistory", bundleId ?? "all", timeframe ?? "all", days] as const,
+  historicalBackfillLatest: (bundleId?: number | null, timeframe?: string | null) =>
+    ["historicalBackfillLatest", bundleId ?? "all", timeframe ?? "all"] as const,
+  historicalBackfillHistory: (bundleId?: number | null, timeframe?: string | null, limit = 20) =>
+    ["historicalBackfillHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
   upstoxMappingStatus: (bundleId?: number | null, timeframe?: string | null, sampleLimit = 20) =>
     ["upstoxMappingStatus", bundleId ?? "all", timeframe ?? "all", sampleLimit] as const,
   upstoxMappingMissing: (bundleId?: number | null, timeframe?: string | null, limit = 50) =>

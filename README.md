@@ -341,6 +341,46 @@ New frontend page:
 
 - `Ops` page (`/ops`) with current mode (`NORMAL` / `SAFE MODE`), latest quality report, recent operate events, and quick actions.
 
+## Historical NSE Bhavcopy Backfill (v4.0)
+
+Atlas now supports local-first long-range 1d history backfill using a new `NSE_BHAVCOPY` provider:
+
+- Fetches bhavcopy-style daily files (all symbols/day), filters to bundle symbols, and normalizes to:
+  - `datetime/open/high/low/close/volume`
+- Uses trading-calendar aware day iteration, retry/backoff, throttling, and local cache:
+  - cache root: `data/cache/nse_bhavcopy`
+- Integrates with existing provider update pipeline:
+  - provider fallback mode
+  - provenance source tracking (`NSE_BHAVCOPY`)
+  - confidence aggregates and gate inputs
+
+New APIs:
+
+- `POST /api/data/backfill/run`
+- `GET /api/data/backfill/latest?bundle_id=&timeframe=1d`
+- `GET /api/data/backfill/history?bundle_id=&timeframe=1d&limit=`
+
+Universe & Data UI:
+
+- New **Historical Backfill** card for start/end date, provider, mode, and run history.
+
+Recommended usage (safe and bounded):
+
+1. Backfill year-by-year (or smaller) instead of huge date ranges.
+2. Run backfill in `SINGLE` mode with `NSE_BHAVCOPY` first.
+3. Use `FALLBACK` mode only when you want alternate provider fill-ins.
+
+Key settings:
+
+- `ATLAS_NSE_BHAVCOPY_BASE_URL`
+- `ATLAS_NSE_BHAVCOPY_PATH_TEMPLATE`
+- `ATLAS_NSE_BHAVCOPY_MAX_TRADING_DAYS_PER_CALL`
+- `ATLAS_HISTORICAL_BACKFILL_MAX_TRADING_DAYS_PER_RUN`
+
+Fast mode behavior:
+
+- In `ATLAS_FAST_MODE=1` or `ATLAS_E2E_FAST=1`, bhavcopy provider uses deterministic synthetic bars and does not call network.
+
 ## Shadow-Only Safe Mode + Local Scheduler (v2.1)
 
 Atlas v2.1 adds operator-safe automation while keeping live paper state protected:

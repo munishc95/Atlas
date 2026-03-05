@@ -92,6 +92,18 @@ export default function OpsPage() {
     queryFn: async () => (await atlasApi.providersStatus()).data,
     refetchInterval: 8_000,
   });
+  const historicalBackfillLatestQuery = useQuery({
+    queryKey: qk.historicalBackfillLatest(activeBundleId, "1d"),
+    enabled: Boolean(activeBundleId),
+    queryFn: async () => {
+      try {
+        return (await atlasApi.historicalBackfillLatest(activeBundleId ?? undefined, "1d")).data;
+      } catch {
+        return null;
+      }
+    },
+    refetchInterval: 12_000,
+  });
   const confidenceAggLatestQuery = useQuery({
     queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe),
     enabled: Boolean(activeBundleId),
@@ -413,6 +425,7 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
       queryClient.invalidateQueries({ queryKey: qk.providersStatus });
+      queryClient.invalidateQueries({ queryKey: qk.historicalBackfillLatest(activeBundleId, "1d") });
       queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe) });
       queryClient.invalidateQueries({ queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30) });
       queryClient.invalidateQueries({ queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60) });
@@ -530,6 +543,7 @@ export default function OpsPage() {
   const latestUpdate = healthQuery.data?.latest_data_update ?? statusQuery.data?.latest_data_update ?? null;
   const latestProviderUpdate =
     healthQuery.data?.latest_provider_update ?? statusQuery.data?.latest_provider_update ?? null;
+  const latestBackfillRun = historicalBackfillLatestQuery.data ?? null;
   const eventCounts = healthQuery.data?.recent_event_counts_24h ?? {};
   const autoRunEnabled = Boolean(healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled);
   const autoRunTimeIst = String(
@@ -1396,6 +1410,15 @@ export default function OpsPage() {
             <p>Mapping missing: {mappingMissingCount}</p>
             <p>API calls: {Number(latestProviderUpdate?.api_calls ?? 0)}</p>
             <p>Duration: {Number(latestProviderUpdate?.duration_seconds ?? 0).toFixed(2)}s</p>
+            <p>
+              Last backfill:{" "}
+              <span className="font-semibold text-foreground">
+                {latestBackfillRun?.status ?? "Not run"}
+              </span>{" "}
+              {latestBackfillRun
+                ? `(${latestBackfillRun.provider_kind}, ${latestBackfillRun.start_date} -> ${latestBackfillRun.end_date})`
+                : ""}
+            </p>
             <div className="mt-2 space-y-1">
               {providerRows.map((row) => (
                 <p key={String(row.provider)}>

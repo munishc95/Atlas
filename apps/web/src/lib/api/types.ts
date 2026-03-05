@@ -446,6 +446,28 @@ export type ApiProviderUpdateRun = {
   ended_at?: string | null;
 };
 
+export type ApiHistoricalBackfillRun = {
+  id: number;
+  bundle_id?: number | null;
+  timeframe: string;
+  provider_kind: string;
+  mode: "SINGLE" | "FALLBACK" | string;
+  dry_run: boolean;
+  start_date: string;
+  end_date: string;
+  status: string;
+  trading_days_planned: number;
+  trading_days_completed: number;
+  symbols_targeted: number;
+  bars_added_total: number;
+  bars_updated_total: number;
+  warnings_json: Array<Record<string, unknown>>;
+  errors_json: Array<Record<string, unknown>>;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+};
+
 export type ApiDataProvenanceEntry = {
   id?: number | null;
   symbol: string;

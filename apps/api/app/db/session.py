@@ -570,6 +570,18 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_historicalbackfillrun_bundle_tf_created "
+                "ON historicalbackfillrun (bundle_id, timeframe, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_historicalbackfillrun_status_created "
+                "ON historicalbackfillrun (status, created_at)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_mappingimportrun_provider_created "
                 "ON mappingimportrun (provider, created_at)"
             )

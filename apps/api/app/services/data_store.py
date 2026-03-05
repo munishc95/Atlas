@@ -390,6 +390,8 @@ class DataStore:
         rows: list[tuple[str, float]] = []
         for symbol in symbols:
             frame = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
+            if frame.empty:
+                continue
             rows.append((symbol, self._symbol_adv(frame, lookback)))
         return sorted(rows, key=lambda item: (-item[1], item[0]))
 

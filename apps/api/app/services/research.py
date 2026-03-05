@@ -110,6 +110,17 @@ def _sample_symbols_by_adv(
     return [symbol for symbol, _ in scored[:limit]]
 
 
+def _latest_dataset_id_for_timeframe(session: Session, *, timeframe: str) -> int | None:
+    row = session.exec(
+        select(Dataset)
+        .where(Dataset.timeframe == timeframe)
+        .order_by(Dataset.created_at.desc())
+    ).first()
+    if row is None or row.id is None:
+        return None
+    return int(row.id)
+
+
 def _avg(values: list[float]) -> float:
     if not values:
         return 0.0
@@ -358,16 +369,6 @@ def execute_research_run(
     }
 
     _emit(progress_cb, 8, "Creating research run")
-    resolved_bundle_id: int | None = None
-    try:
-        if requested_bundle_id is not None:
-            parsed_bundle = int(requested_bundle_id)
-            if parsed_bundle > 0:
-                resolved_bundle_id = parsed_bundle
-    except (TypeError, ValueError):
-        resolved_bundle_id = None
-    if resolved_bundle_id is None:
-        resolved_bundle_id = prefer_sample_bundle_id(session, settings=settings)
     resolved_dataset_id: int | None = None
     try:
         if payload.get("dataset_id") is not None:
@@ -376,12 +377,27 @@ def execute_research_run(
                 resolved_dataset_id = parsed_dataset
     except (TypeError, ValueError):
         resolved_dataset_id = None
-    if resolved_dataset_id is None and resolved_bundle_id is None:
+    resolved_bundle_id: int | None = None
+    try:
+        if requested_bundle_id is not None:
+            parsed_bundle = int(requested_bundle_id)
+            if parsed_bundle > 0:
+                resolved_bundle_id = parsed_bundle
+    except (TypeError, ValueError):
+        resolved_bundle_id = None
+    if resolved_dataset_id is None:
         resolved_dataset_id = prefer_sample_dataset_id(
             session,
             settings=settings,
             timeframe=primary_timeframe,
         )
+    if resolved_dataset_id is None and resolved_bundle_id is None:
+        resolved_dataset_id = _latest_dataset_id_for_timeframe(
+            session,
+            timeframe=primary_timeframe,
+        )
+    if resolved_bundle_id is None and resolved_dataset_id is None:
+        resolved_bundle_id = prefer_sample_bundle_id(session, settings=settings)
 
     run = ResearchRun(
         dataset_id=resolved_dataset_id,
@@ -449,28 +465,12 @@ def execute_research_run(
             run.bundle_id = dataset.bundle_id
             session.add(run)
             session.commit()
-            symbols = store.sample_bundle_symbols(
-                session=session,
-                bundle_id=int(dataset.bundle_id),
-                timeframe=timeframes[0],
-                symbol_scope=symbol_scope,
-                max_symbols_scan=max_symbols,
-                seed=seed,
-            )
-        else:
-            if dataset.timeframe not in timeframes:
-                timeframes = [dataset.timeframe, *timeframes]
-                run.timeframes_json = timeframes
-                session.add(run)
-                session.commit()
-            symbols = store.sample_dataset_symbols(
-                session=session,
-                dataset_id=run.dataset_id,
-                timeframe=timeframes[0],
-                symbol_scope=symbol_scope,
-                max_symbols_scan=max_symbols,
-                seed=seed,
-            )
+        if dataset.timeframe not in timeframes:
+            timeframes = [dataset.timeframe, *timeframes]
+            run.timeframes_json = timeframes
+            session.add(run)
+            session.commit()
+        symbols = [dataset.symbol.upper()]
     else:
         symbols = _sample_symbols_by_adv(
             session=session,

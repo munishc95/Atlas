@@ -138,6 +138,13 @@ def _provider_enabled_for_token(
     overrides: dict[str, Any],
 ) -> bool:
     provider = str(token).strip().upper()
+    if provider == "NSE_BHAVCOPY":
+        return bool(
+            overrides.get(
+                "data_updates_provider_nse_bhavcopy_enabled",
+                settings.data_updates_provider_nse_bhavcopy_enabled,
+            )
+        )
     if provider == "NSE_EOD":
         return bool(
             overrides.get(

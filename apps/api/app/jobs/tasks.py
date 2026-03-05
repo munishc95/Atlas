@@ -19,6 +19,7 @@ from app.services.fast_mode import prefer_sample_bundle_id
 from app.services.effective_context import build_effective_trading_context
 from app.services.confidence_agg import latest_daily_confidence_agg
 from app.services.data_updates import run_data_updates
+from app.services.historical_backfill import run_historical_backfill, serialize_historical_backfill_run
 from app.services.provider_updates import run_provider_updates
 from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
@@ -439,6 +440,60 @@ def run_provider_updates_job(
             )
 
 
+def run_historical_backfill_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    started = time.perf_counter()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Historical backfill started")
+            result = _execute_with_retry(
+                fn=lambda: _historical_backfill_result(
+                    session=session,
+                    settings=settings,
+                    store=store,
+                    payload=payload,
+                    job_id=job_id,
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="historical_backfill",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Historical backfill finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="historical_backfill",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+            )
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Historical backfill failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="historical_backfill", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "historical_backfill_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="historical_backfill",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
+            )
+
+
 def run_upstox_token_request_job(
     job_id: str,
     payload: dict[str, Any] | None = None,
@@ -605,6 +660,43 @@ def _provider_updates_result(
         "created_at": row.created_at.isoformat(),
         "ended_at": row.ended_at.isoformat() if row.ended_at is not None else None,
     }
+
+
+def _historical_backfill_result(
+    *,
+    session: Session,
+    settings,
+    store: DataStore,
+    payload: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    bundle_id = int(payload.get("bundle_id") or 0)
+    if bundle_id <= 0:
+        raise ValueError("bundle_id is required for historical backfill run")
+    timeframe = str(payload.get("timeframe") or "1d")
+    provider_kind = str(payload.get("provider_kind") or "NSE_BHAVCOPY")
+    mode = str(payload.get("mode") or "SINGLE")
+    start_date = payload.get("start_date")
+    end_date = payload.get("end_date")
+    if not start_date or not end_date:
+        raise ValueError("start_date and end_date are required for historical backfill run")
+    state = session.get(PaperState, 1)
+    overrides = dict(state.settings_json or {}) if state is not None else {}
+    row = run_historical_backfill(
+        session=session,
+        settings=settings,
+        store=store,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        provider_kind=provider_kind,
+        mode=mode,
+        start_date=str(start_date),
+        end_date=str(end_date),
+        dry_run=bool(payload.get("dry_run", False)),
+        overrides=overrides,
+        correlation_id=job_id,
+    )
+    return serialize_historical_backfill_run(row)
 
 
 def _data_quality_result(
