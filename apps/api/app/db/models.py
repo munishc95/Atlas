@@ -652,6 +652,88 @@ class HistoricalBackfillRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class CorporateAction(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_corporateaction_symbol_ex_date", "symbol", "ex_date"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    symbol: str = Field(index=True, max_length=64)
+    ex_date: dt_date = Field(index=True)
+    action_type: str = Field(index=True, max_length=24)
+    ratio_num: float = 1.0
+    ratio_den: float = 1.0
+    cash_amount: float | None = None
+    source: str = Field(default="manual", max_length=128)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class BundleMembershipHistory(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_bundlemembershiphistory_bundle_symbol_from",
+            "bundle_id",
+            "symbol",
+            "effective_from",
+        ),
+        Index(
+            "ix_bundlemembershiphistory_bundle_effective_window",
+            "bundle_id",
+            "effective_from",
+            "effective_to",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    symbol: str = Field(index=True, max_length=64)
+    effective_from: dt_date = Field(index=True)
+    effective_to: dt_date | None = Field(default=None, index=True)
+    source: str = Field(default="manual", max_length=128)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class TrainDataset(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_traindataset_bundle_created", "bundle_id", "created_at"),
+        Index("ix_traindataset_status_updated", "status", "updated_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True, max_length=128)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    start_date: dt_date = Field(index=True)
+    end_date: dt_date = Field(index=True)
+    adjustment_mode: str = Field(default="RAW", max_length=16)
+    membership_mode: str = Field(default="CURRENT", max_length=16)
+    feature_config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    label_config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    status: str = Field(default="CREATED", index=True, max_length=16)
+    row_count: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class TrainDatasetRun(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_traindatasetrun_dataset_started", "dataset_id", "started_at"),
+        Index("ix_traindatasetrun_status_started", "status", "started_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    dataset_id: int = Field(foreign_key="traindataset.id", index=True)
+    status: str = Field(default="QUEUED", index=True, max_length=16)
+    started_at: datetime | None = Field(default=None, index=True)
+    finished_at: datetime | None = Field(default=None, index=True)
+    row_count: int = 0
+    output_path: str | None = Field(default=None, max_length=1024)
+    warnings_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    errors_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
 class DataProvenance(SQLModel, table=True):
     __table_args__ = (
         Index(

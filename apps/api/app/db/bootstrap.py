@@ -111,6 +111,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
                     "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
                     "historical_backfill_max_trading_days_per_run": settings.historical_backfill_max_trading_days_per_run,
+                    "data_adjustment_mode": settings.data_adjustment_mode,
+                    "universe_membership_mode": settings.universe_membership_mode,
                     "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
                     "data_provenance_confidence_upstox": settings.data_provenance_confidence_upstox,
                     "data_provenance_confidence_nse_bhavcopy": settings.data_provenance_confidence_nse_bhavcopy,

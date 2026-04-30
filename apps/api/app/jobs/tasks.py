@@ -30,6 +30,10 @@ from app.services.paper import run_paper_step
 from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
+from app.services.train_dataset import (
+    build_train_dataset,
+    serialize_train_dataset_run,
+)
 from app.services.upstox_auth import token_status as upstox_token_status
 from app.services.upstox_token_request import request_token_run, serialize_request_run
 from app.services.walkforward import execute_walkforward
@@ -42,6 +46,8 @@ def _store() -> DataStore:
         parquet_root=settings.parquet_root,
         duckdb_path=settings.duckdb_path,
         feature_cache_root=settings.feature_cache_root,
+        adjustment_mode_default=settings.data_adjustment_mode,
+        membership_mode_default=settings.universe_membership_mode,
     )
 
 
@@ -491,6 +497,67 @@ def run_historical_backfill_job(
                 job_kind="historical_backfill",
                 duration_seconds=time.perf_counter() - started,
                 status="FAILED",
+            )
+
+
+def run_train_dataset_build_job(
+    job_id: str,
+    payload: dict[str, Any],
+    max_runtime_seconds: int | None = None,
+) -> None:
+    settings = get_settings()
+    store = _store()
+    started = time.perf_counter()
+    with Session(engine) as session:
+        try:
+            update_job(session, job_id, status="RUNNING", progress=10)
+            append_job_log(session, job_id, "Train dataset build started")
+            dataset_id = int(payload.get("dataset_id") or 0)
+            force = bool(payload.get("force", False))
+            result = _execute_with_retry(
+                fn=lambda: serialize_train_dataset_run(
+                    build_train_dataset(
+                        session,
+                        settings=settings,
+                        store=store,
+                        dataset_id=dataset_id,
+                        force=force,
+                        correlation_id=job_id,
+                    )
+                ),
+                settings=settings,
+                session=session,
+                job_id=job_id,
+                job_name="train_dataset_build",
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            update_job(session, job_id, status="SUCCEEDED", progress=100, result=result)
+            append_job_log(session, job_id, "Train dataset build finished")
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="train_dataset_build",
+                duration_seconds=time.perf_counter() - started,
+                status="SUCCEEDED",
+                extra={"dataset_id": dataset_id},
+            )
+        except Exception as exc:  # noqa: BLE001
+            append_job_log(session, job_id, f"Train dataset build failed: {exc}")
+            _emit_job_error_event(session, job_id=job_id, job_type="train_dataset_build", exc=exc)
+            update_job(
+                session,
+                job_id,
+                status="FAILED",
+                progress=100,
+                result={"error": {"code": "train_dataset_build_failed", "message": str(exc)}},
+            )
+            _emit_job_duration_event(
+                session,
+                job_id=job_id,
+                job_kind="train_dataset_build",
+                duration_seconds=time.perf_counter() - started,
+                status="FAILED",
+                extra={"dataset_id": payload.get("dataset_id")},
             )
 
 

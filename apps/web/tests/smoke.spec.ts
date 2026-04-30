@@ -76,7 +76,11 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   const bundlesRes = await request.get(`${apiBase}/api/universes`);
   expect(bundlesRes.ok()).toBeTruthy();
   const bundlesBody = await bundlesRes.json();
-  const bundles = (bundlesBody?.data ?? []) as Array<{ id?: number; symbols?: string[] }>;
+  const bundles = (bundlesBody?.data ?? []) as Array<{
+    id?: number;
+    name?: string;
+    symbols?: string[];
+  }>;
   const targetBundle =
     bundles.find((bundle) => (bundle.symbols ?? []).includes("NIFTY500")) ?? bundles[0];
   const bundleId = Number(targetBundle?.id ?? 0);
@@ -149,6 +153,59 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   expect(
     provenanceEntries.some((entry) => String(entry.source_provider ?? "") === "NSE_BHAVCOPY"),
   ).toBeTruthy();
+
+  const trainDatasetName = `smoke-train-${Date.now()}`;
+  const trainDatasetCreateRes = await request.post(`${apiBase}/api/train-datasets`, {
+    data: {
+      name: trainDatasetName,
+      bundle_id: bundleId,
+      timeframe: "1d",
+      start_date: "2026-02-20",
+      end_date: "2026-02-28",
+      adjustment_mode: "ADJUSTED",
+      membership_mode: "HISTORICAL",
+      feature_config_json: {
+        return_1d: true,
+        return_5d: true,
+        atr_14: true,
+        rsi_14: true,
+        ema_20: true,
+      },
+      label_config_json: {
+        future_return_5d: true,
+      },
+    },
+  });
+  expect(trainDatasetCreateRes.ok()).toBeTruthy();
+  const trainDatasetCreateBody = await trainDatasetCreateRes.json();
+  const trainDatasetId = Number(trainDatasetCreateBody?.data?.id ?? 0);
+  expect(trainDatasetId > 0).toBeTruthy();
+  const trainDatasetBuildRes = await request.post(
+    `${apiBase}/api/train-datasets/${trainDatasetId}/build`,
+    { data: { force: true } },
+  );
+  expect(trainDatasetBuildRes.ok()).toBeTruthy();
+  const trainDatasetBuildBody = await trainDatasetBuildRes.json();
+  await waitForJob(request, apiBase, String(trainDatasetBuildBody?.data?.job_id), 180_000);
+  const trainDatasetLatestRunRes = await request.get(
+    `${apiBase}/api/train-datasets/${trainDatasetId}/latest-run`,
+  );
+  expect(trainDatasetLatestRunRes.ok()).toBeTruthy();
+  const trainDatasetLatestRunBody = await trainDatasetLatestRunRes.json();
+  const trainDatasetRun = (trainDatasetLatestRunBody?.data ?? {}) as Record<string, unknown>;
+  expect(String(trainDatasetRun.status ?? "")).toBe("SUCCEEDED");
+  expect(Number(trainDatasetRun.row_count ?? 0)).toBeGreaterThan(0);
+  expect(String(trainDatasetRun.output_path ?? "")).toContain("train_datasets");
+
+  await page.goto("/train-datasets");
+  await expect(page.getByRole("heading", { name: "Train Datasets" })).toBeVisible({
+    timeout: 20_000,
+  });
+  const trainDatasetRow = page.getByRole("row").filter({ hasText: trainDatasetName }).first();
+  await expect(trainDatasetRow).toBeVisible({ timeout: 20_000 });
+  await trainDatasetRow.getByRole("button", { name: "View" }).click();
+  await expect(page.getByText(/Latest build/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Output path/i)).toBeVisible({ timeout: 20_000 });
 
   const mappingImportRes = await request.post(`${apiBase}/api/providers/upstox/mapping/import`, {
     data: {

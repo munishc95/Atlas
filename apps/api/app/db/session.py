@@ -582,6 +582,48 @@ def _ensure_indexes_and_columns() -> None:
         )
         conn.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_corporateaction_symbol_ex_date "
+                "ON corporateaction (symbol, ex_date)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_bundlemembershiphistory_bundle_symbol_from "
+                "ON bundlemembershiphistory (bundle_id, symbol, effective_from)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_bundlemembershiphistory_bundle_effective_window "
+                "ON bundlemembershiphistory (bundle_id, effective_from, effective_to)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_traindataset_bundle_created "
+                "ON traindataset (bundle_id, created_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_traindataset_status_updated "
+                "ON traindataset (status, updated_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_traindatasetrun_dataset_started "
+                "ON traindatasetrun (dataset_id, started_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_traindatasetrun_status_started "
+                "ON traindatasetrun (status, started_at)"
+            )
+        )
+        conn.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_mappingimportrun_provider_created "
                 "ON mappingimportrun (provider, created_at)"
             )

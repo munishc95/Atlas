@@ -12,6 +12,7 @@ export const navItems: NavItem[] = [
   { href: "/evaluations", label: "Evaluations" },
   { href: "/ensembles", label: "Ensembles" },
   { href: "/replay", label: "Replay" },
+  { href: "/train-datasets", label: "Train Datasets" },
   { href: "/reports", label: "Reports" },
   { href: "/ops", label: "Ops" },
   { href: "/paper-trading", label: "Paper Trading" },

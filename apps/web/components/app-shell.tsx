@@ -141,6 +141,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         keywords: ["blend", "weights", "allocation"],
       },
       { id: "nav:replay", label: "Go to Replay", keywords: ["deterministic", "reproduce"] },
+      {
+        id: "nav:train-datasets",
+        label: "Go to Train Datasets",
+        keywords: ["dataset", "features", "labels", "parquet"],
+      },
       { id: "nav:reports", label: "Go to Reports", keywords: ["daily", "operate", "health"] },
       { id: "nav:ops", label: "Go to Ops", keywords: ["safe mode", "events", "data quality"] },
       { id: "nav:paper", label: "Go to Paper Trading", keywords: ["orders", "positions"] },
@@ -167,6 +172,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (id === "nav:evaluations") return router.push("/evaluations");
     if (id === "nav:ensembles") return router.push("/ensembles");
     if (id === "nav:replay") return router.push("/replay");
+    if (id === "nav:train-datasets") return router.push("/train-datasets");
     if (id === "nav:reports") return router.push("/reports");
     if (id === "nav:ops") return router.push("/ops");
     if (id === "nav:paper") return router.push("/paper-trading");

@@ -164,6 +164,32 @@ class HistoricalBackfillRunRequest(BaseModel):
     dry_run: bool = False
 
 
+class CorporateActionsImportRequest(BaseModel):
+    path: str = "data/inbox/_metadata/corporate_actions.csv"
+    mode: str = "UPSERT"
+
+
+class MembershipHistoryImportRequest(BaseModel):
+    path: str = "data/inbox/_metadata/nifty500_membership_history.csv"
+    mode: str = "UPSERT"
+
+
+class TrainDatasetCreateRequest(BaseModel):
+    name: str
+    bundle_id: int
+    timeframe: str = "1d"
+    start_date: str
+    end_date: str
+    adjustment_mode: str = "RAW"
+    membership_mode: str = "CURRENT"
+    feature_config_json: dict[str, Any] = Field(default_factory=dict)
+    label_config_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrainDatasetBuildRequest(BaseModel):
+    force: bool = False
+
+
 class UpstoxMappingImportRequest(BaseModel):
     path: str = "data/inbox/_metadata/upstox_instruments.csv"
     mode: str = "UPSERT"
@@ -333,6 +359,8 @@ class RuntimeSettingsRequest(BaseModel):
     data_updates_provider_repair_last_n_trading_days: int | None = None
     data_updates_provider_backfill_max_days: int | None = None
     historical_backfill_max_trading_days_per_run: int | None = None
+    data_adjustment_mode: str | None = None
+    universe_membership_mode: str | None = None
     data_updates_provider_allow_partial_4h_ish: bool | None = None
     nse_bhavcopy_base_url: str | None = None
     nse_bhavcopy_path_template: str | None = None

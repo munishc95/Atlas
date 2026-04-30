@@ -140,7 +140,13 @@ def execute_backtest(
     if job_id:
         append_job_log(session, job_id, f"Loading OHLCV for {symbol} ({timeframe})")
 
-    frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe, start=start_dt, end=end_dt)
+    frame = store.load_ohlcv(
+        symbol=symbol,
+        timeframe=timeframe,
+        start=start_dt,
+        end=end_dt,
+        session=session,
+    )
     if frame.empty:
         raise APIError(
             code="missing_data", message="No data available for requested symbol/timeframe"

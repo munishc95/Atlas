@@ -83,7 +83,12 @@ def _trading_days(
     start_date: date,
     end_date: date,
 ) -> list[date]:
-    symbols = store.get_bundle_symbols(session, bundle_id, timeframe=timeframe)
+    symbols = store.get_bundle_symbols(
+        session,
+        bundle_id,
+        timeframe=timeframe,
+        asof_date=end_date,
+    )
     if not symbols:
         raise APIError(
             code="missing_data",
@@ -95,6 +100,7 @@ def _trading_days(
         timeframe=timeframe,
         start=_utc_datetime(start_date),
         end=_utc_datetime(end_date, end=True),
+        session=session,
     )
     if frame.empty:
         raise APIError(

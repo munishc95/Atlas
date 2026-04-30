@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     data_inbox_root: str = "data/inbox"
     sample_data_root: str = "data/sample"
     secrets_root: str = "data/secrets"
+    train_datasets_root: str = "data/exports/train_datasets"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "atlas"
     jobs_inline: bool = False
@@ -112,6 +113,8 @@ class Settings(BaseSettings):
     data_updates_provider_backfill_max_days: int = 30
     data_updates_provider_allow_partial_4h_ish: bool = False
     historical_backfill_max_trading_days_per_run: int = 366
+    data_adjustment_mode: str = "RAW"
+    universe_membership_mode: str = "CURRENT"
     nse_bhavcopy_base_url: str = "https://nsearchives.nseindia.com"
     nse_bhavcopy_path_template: str = "/products/content/sec_bhavdata_full_{DDMMYYYY}.csv"
     nse_bhavcopy_timeout_seconds: float = 18.0
@@ -231,6 +234,7 @@ class Settings(BaseSettings):
         Path(self.calendar_data_root).mkdir(parents=True, exist_ok=True)
         Path(self.data_inbox_root).mkdir(parents=True, exist_ok=True)
         Path(self.secrets_root).mkdir(parents=True, exist_ok=True)
+        Path(self.train_datasets_root).mkdir(parents=True, exist_ok=True)
         Path(self.nse_bhavcopy_cache_dir).mkdir(parents=True, exist_ok=True)
         Path(self.cred_key_path).parent.mkdir(parents=True, exist_ok=True)
 

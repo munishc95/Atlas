@@ -1,0 +1,3 @@
+symbol,effective_from,effective_to,source
+ALPHA,2026-01-01,2026-01-05,test_fixture
+BETA,2026-01-03,,test_fixture

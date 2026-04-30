@@ -381,6 +381,53 @@ Fast mode behavior:
 
 - In `ATLAS_FAST_MODE=1` or `ATLAS_E2E_FAST=1`, bhavcopy provider uses deterministic synthetic bars and does not call network.
 
+## Adjusted History + Train Datasets (v4.1)
+
+Atlas can now keep raw EOD bars immutable while deriving research-ready adjusted views and materialized training datasets.
+
+Corporate actions:
+
+- Place a local file at `data/inbox/_metadata/corporate_actions.csv`.
+- Expected columns: `symbol,ex_date,action_type,ratio_num,ratio_den,cash_amount,source`.
+- Supported adjustment actions in v4.1: `SPLIT` and `BONUS`. `DIVIDEND` is stored as metadata and not price-adjusted yet.
+- Import via `POST /api/corporate-actions/import` with `{"path":"data/inbox/_metadata/corporate_actions.csv","mode":"UPSERT"}`.
+- Set `data_adjustment_mode=ADJUSTED` to have research/data reads derive adjusted 1d bars on read. Raw parquet remains unchanged.
+
+Historical universe membership:
+
+- Place a local file at `data/inbox/_metadata/nifty500_membership_history.csv`.
+- Expected columns: `symbol,effective_from,effective_to`; leave `effective_to` empty for current members.
+- Import via `POST /api/universes/{bundle_id}/membership-history/import`.
+- Set `universe_membership_mode=HISTORICAL` so research/replay/walk-forward/train datasets use as-of bundle membership when available.
+- If no membership history exists, Atlas falls back to the bundle's current `symbols_json` and records a warning where relevant.
+
+Train dataset registry:
+
+- Open `Train Datasets` in the sidebar.
+- Choose bundle, `1d`, date range, `RAW` or `ADJUSTED`, and `CURRENT` or `HISTORICAL` membership.
+- Click `Create Dataset`, then `Build Dataset`.
+- Atlas writes parquet outputs under `data/exports/train_datasets`.
+- Base columns include `symbol`, `trading_date`, OHLCV, dominant provider, confidence, simple returns/ATR/RSI/EMA features, and optional `future_return_5d`.
+
+Useful endpoints:
+
+- `POST /api/corporate-actions/import`
+- `GET /api/corporate-actions/status`
+- `GET /api/corporate-actions?symbol=&limit=`
+- `GET /api/data/adjustment/status?bundle_id=&timeframe=`
+- `POST /api/universes/{bundle_id}/membership-history/import`
+- `POST /api/train-datasets`
+- `GET /api/train-datasets`
+- `POST /api/train-datasets/{id}/build`
+- `GET /api/train-datasets/{id}/latest-run`
+- `GET /api/train-datasets/{id}/download-info`
+
+Environment settings:
+
+- `ATLAS_TRAIN_DATASETS_ROOT`
+- `ATLAS_DATA_ADJUSTMENT_MODE`
+- `ATLAS_UNIVERSE_MEMBERSHIP_MODE`
+
 ## Shadow-Only Safe Mode + Local Scheduler (v2.1)
 
 Atlas v2.1 adds operator-safe automation while keeping live paper state protected:

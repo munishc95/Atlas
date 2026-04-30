@@ -237,6 +237,8 @@ export default function SettingsPage() {
         confidence_risk_scaling_enabled: form.confidence_risk_scaling_enabled === "true",
         confidence_risk_scale_exponent: Number(form.confidence_risk_scale_exponent),
         confidence_risk_scale_low_threshold: Number(form.confidence_risk_scale_low_threshold),
+        data_adjustment_mode: String(form.data_adjustment_mode || "RAW").toUpperCase(),
+        universe_membership_mode: String(form.universe_membership_mode || "CURRENT").toUpperCase(),
         four_hour_bars: form.four_hour_bars,
       };
       return (await atlasApi.updateSettings(payload)).data;
@@ -576,6 +578,8 @@ export default function SettingsPage() {
       { key: "confidence_risk_scaling_enabled", label: "Confidence risk scaling enabled (true/false)" },
       { key: "confidence_risk_scale_exponent", label: "Confidence risk scale exponent" },
       { key: "confidence_risk_scale_low_threshold", label: "Confidence risk low-scale warning threshold" },
+      { key: "data_adjustment_mode", label: "Data adjustment mode (RAW/ADJUSTED)" },
+      { key: "universe_membership_mode", label: "Universe membership mode (CURRENT/HISTORICAL)" },
       { key: "four_hour_bars", label: "Session bars" },
     ],
     [],

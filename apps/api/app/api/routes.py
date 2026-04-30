@@ -36,6 +36,7 @@ from app.jobs.tasks import (
     run_auto_eval_job,
     run_backtest_job,
     run_historical_backfill_job,
+    run_train_dataset_build_job,
     run_provider_updates_job,
     run_data_updates_job,
     run_data_quality_job,
@@ -50,6 +51,7 @@ from app.jobs.tasks import (
     run_walkforward_job,
 )
 from app.schemas.api import (
+    CorporateActionsImportRequest,
     ConfidenceAggRecomputeRequest,
     HistoricalBackfillRunRequest,
     AutoEvalRunRequest,
@@ -61,6 +63,7 @@ from app.schemas.api import (
     ProviderUpdatesRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
+    MembershipHistoryImportRequest,
     OperateRunRequest,
     PaperSignalsPreviewRequest,
     PaperRunStepRequest,
@@ -71,12 +74,20 @@ from app.schemas.api import (
     ReplayRunRequest,
     ResearchRunRequest,
     RuntimeSettingsRequest,
+    TrainDatasetBuildRequest,
+    TrainDatasetCreateRequest,
     UpstoxTokenExchangeRequest,
     UpstoxTokenRequestCreateRequest,
     UpstoxMappingImportRequest,
     WalkForwardRunRequest,
 )
 from app.services.data_store import DataStore
+from app.services.corporate_actions import (
+    corporate_actions_status,
+    import_corporate_actions,
+    list_corporate_actions,
+    serialize_corporate_action,
+)
 from app.services.auto_evaluation import (
     get_auto_eval_run,
     list_auto_eval_runs,
@@ -136,6 +147,15 @@ from app.services.provider_mapping import (
     import_upstox_mapping_file,
     list_upstox_missing_symbols,
 )
+from app.services.train_dataset import (
+    create_train_dataset,
+    dataset_download_info,
+    get_latest_train_dataset_run,
+    get_train_dataset,
+    list_train_datasets,
+    serialize_train_dataset,
+    serialize_train_dataset_run,
+)
 from app.services.upstox_auth import (
     build_fake_access_token,
     build_authorization_url,
@@ -157,6 +177,7 @@ from app.services.upstox_auth import (
     validate_oauth_state,
     verify_access_token,
 )
+from app.services.universe_history import import_bundle_membership_history
 from app.services.upstox_token_request import (
     auto_renew_meta,
     check_notifier_rate_limit,
@@ -243,6 +264,8 @@ def get_store(settings: Settings = Depends(get_settings)) -> DataStore:
         parquet_root=settings.parquet_root,
         duckdb_path=settings.duckdb_path,
         feature_cache_root=settings.feature_cache_root,
+        adjustment_mode_default=settings.data_adjustment_mode,
+        membership_mode_default=settings.universe_membership_mode,
     )
 
 
@@ -618,6 +641,177 @@ def historical_backfill_history(
         limit=limit,
     )
     return _data([serialize_historical_backfill_run(row) for row in rows])
+
+
+@router.post("/corporate-actions/import")
+def corporate_actions_import(
+    payload: CorporateActionsImportRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return _data(
+        import_corporate_actions(
+            session,
+            path=payload.path,
+            mode=payload.mode,
+        )
+    )
+
+
+@router.get("/corporate-actions/status")
+def corporate_actions_status_route(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str = Query(default="1d"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    bundle_symbols: list[str] = []
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        bundle_symbols = store.get_bundle_symbols(
+            session,
+            int(bundle_id),
+            timeframe=str(timeframe),
+        )
+    state = get_or_create_paper_state(session, settings)
+    state_settings = dict(state.settings_json or {})
+    adjustment_mode = str(
+        state_settings.get("data_adjustment_mode", settings.data_adjustment_mode)
+    ).upper()
+    return _data(
+        corporate_actions_status(
+            session,
+            bundle_symbols=bundle_symbols,
+            adjustment_mode=adjustment_mode,
+        )
+    )
+
+
+@router.get("/corporate-actions")
+def corporate_actions_list(
+    symbol: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_corporate_actions(session, symbol=symbol, limit=limit)
+    return _data([serialize_corporate_action(row) for row in rows])
+
+
+@router.get("/data/adjustment/status")
+def data_adjustment_status(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str = Query(default="1d"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    state = get_or_create_paper_state(session, settings)
+    state_settings = dict(state.settings_json or {})
+    resolved_adjustment_mode = str(
+        state_settings.get("data_adjustment_mode", settings.data_adjustment_mode)
+    ).upper()
+    bundle_symbols: list[str] = []
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        bundle_symbols = store.get_bundle_symbols(
+            session,
+            int(bundle_id),
+            timeframe=str(timeframe),
+        )
+    status_payload = corporate_actions_status(
+        session,
+        bundle_symbols=bundle_symbols,
+        adjustment_mode=resolved_adjustment_mode,
+    )
+    status_payload["timeframe"] = str(timeframe)
+    status_payload["bundle_id"] = int(bundle_id) if isinstance(bundle_id, int) else None
+    return _data(status_payload)
+
+
+@router.post("/universes/{bundle_id}/membership-history/import")
+def import_universe_membership_history(
+    bundle_id: int,
+    payload: MembershipHistoryImportRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return _data(
+        import_bundle_membership_history(
+            session,
+            bundle_id=int(bundle_id),
+            path=payload.path,
+            mode=payload.mode,
+        )
+    )
+
+
+@router.post("/train-datasets")
+def create_train_dataset_route(
+    payload: TrainDatasetCreateRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = create_train_dataset(session, payload=payload.model_dump())
+    return _data(serialize_train_dataset(row))
+
+
+@router.get("/train-datasets")
+def list_train_dataset_rows(
+    limit: int = Query(default=100, ge=1, le=500),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_train_datasets(session, limit=limit)
+    return _data([serialize_train_dataset(row) for row in rows])
+
+
+@router.get("/train-datasets/{dataset_id}")
+def get_train_dataset_route(
+    dataset_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_train_dataset(session, int(dataset_id))
+    if row is None:
+        raise APIError(code="not_found", message="Train dataset not found.", status_code=404)
+    return _data(serialize_train_dataset(row))
+
+
+@router.post("/train-datasets/{dataset_id}/build")
+def build_train_dataset_route(
+    dataset_id: int,
+    payload: TrainDatasetBuildRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = get_train_dataset(session, int(dataset_id))
+    if row is None:
+        raise APIError(code="not_found", message="Train dataset not found.", status_code=404)
+    payload_dict = {"dataset_id": int(dataset_id), "force": bool(payload.force)}
+    return _enqueue_or_inline(
+        session=session,
+        settings=settings,
+        job_type="train_dataset_build",
+        task_path="app.jobs.tasks.run_train_dataset_build_job",
+        task_args=[payload_dict],
+        idempotency_key=idempotency_key,
+        request_hash=hash_payload(payload_dict),
+        inline_runner=run_train_dataset_build_job,
+    )
+
+
+@router.get("/train-datasets/{dataset_id}/latest-run")
+def latest_train_dataset_run_route(
+    dataset_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    row = get_latest_train_dataset_run(session, dataset_id=int(dataset_id))
+    if row is None:
+        raise APIError(code="not_found", message="No train dataset run found.", status_code=404)
+    return _data(serialize_train_dataset_run(row))
+
+
+@router.get("/train-datasets/{dataset_id}/download-info")
+def train_dataset_download_info_route(
+    dataset_id: int,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return _data(dataset_download_info(session, dataset_id=int(dataset_id)))
 
 
 @router.get("/providers/status")
@@ -3151,6 +3345,8 @@ def get_settings_payload(
         "data_updates_provider_repair_last_n_trading_days": settings.data_updates_provider_repair_last_n_trading_days,
         "data_updates_provider_backfill_max_days": settings.data_updates_provider_backfill_max_days,
         "historical_backfill_max_trading_days_per_run": settings.historical_backfill_max_trading_days_per_run,
+        "data_adjustment_mode": settings.data_adjustment_mode,
+        "universe_membership_mode": settings.universe_membership_mode,
         "data_updates_provider_allow_partial_4h_ish": settings.data_updates_provider_allow_partial_4h_ish,
         "data_provenance_confidence_upstox": settings.data_provenance_confidence_upstox,
         "data_provenance_confidence_nse_bhavcopy": settings.data_provenance_confidence_nse_bhavcopy,

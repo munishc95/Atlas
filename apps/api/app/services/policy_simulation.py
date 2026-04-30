@@ -228,6 +228,7 @@ def simulate_policy_on_bundle(
         symbol_scope=symbol_scope,
         max_symbols_scan=max_scan,
         seed=seed,
+        asof_date=end_date,
     )
     if not symbols:
         raise APIError(
@@ -242,7 +243,13 @@ def simulate_policy_on_bundle(
     normalized_curves: list[pd.Series] = []
     metadata_rows: list[dict[str, Any]] = []
     for symbol in sorted(symbols):
-        frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe, start=start_dt, end=end_dt)
+        frame = store.load_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start_dt,
+            end=end_dt,
+            session=session,
+        )
         if len(frame) < 60:
             continue
         signals = generate_signal_sides(strategy_key, frame, params=params)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date as dt_date, datetime
 import hashlib
 from pathlib import Path
 
@@ -10,7 +10,7 @@ import pandas as pd
 from sqlmodel import Session, select
 
 from app.core.exceptions import APIError
-from app.db.models import Dataset, DatasetBundle, Instrument, Symbol
+from app.db.models import Dataset, DatasetBundle, Instrument, PaperState, Symbol
 from app.engine.indicators import adx, atr, bollinger_bands, ema, keltner_channels, rsi
 
 
@@ -22,6 +22,8 @@ class DataStore:
         parquet_root: str,
         duckdb_path: str,
         feature_cache_root: str | None = None,
+        adjustment_mode_default: str = "RAW",
+        membership_mode_default: str = "CURRENT",
     ) -> None:
         self.parquet_root = Path(parquet_root)
         self.parquet_root.mkdir(parents=True, exist_ok=True)
@@ -32,8 +34,51 @@ class DataStore:
         )
         self.feature_cache_root.mkdir(parents=True, exist_ok=True)
         self.duckdb_path = duckdb_path
+        self.adjustment_mode_default = str(adjustment_mode_default or "RAW").strip().upper()
+        self.membership_mode_default = str(membership_mode_default or "CURRENT").strip().upper()
         self._adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
         self._bundle_adv_cache: dict[tuple[int, str, int], list[tuple[str, float]]] = {}
+
+    def _runtime_setting(
+        self,
+        session: Session | None,
+        *,
+        key: str,
+        default: str,
+    ) -> str:
+        if session is not None:
+            state = session.get(PaperState, 1)
+            if state is not None:
+                value = dict(state.settings_json or {}).get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip().upper()
+        return str(default or "").strip().upper()
+
+    def _resolve_adjustment_mode(
+        self,
+        session: Session | None,
+        adjustment_mode: str | None,
+    ) -> str:
+        if isinstance(adjustment_mode, str) and adjustment_mode.strip():
+            return adjustment_mode.strip().upper()
+        return self._runtime_setting(
+            session,
+            key="data_adjustment_mode",
+            default=self.adjustment_mode_default,
+        )
+
+    def _resolve_membership_mode(
+        self,
+        session: Session | None,
+        membership_mode: str | None,
+    ) -> str:
+        if isinstance(membership_mode, str) and membership_mode.strip():
+            return membership_mode.strip().upper()
+        return self._runtime_setting(
+            session,
+            key="universe_membership_mode",
+            default=self.membership_mode_default,
+        )
 
     def _connect_duckdb(self) -> duckdb.DuckDBPyConnection:
         # Windows can keep file handles locked when another local process has opened the DB;
@@ -330,10 +375,31 @@ class DataStore:
         bundle_id: int,
         *,
         timeframe: str | None = None,
+        asof_date: dt_date | datetime | None = None,
+        membership_mode: str | None = None,
     ) -> list[str]:
         bundle = self.get_bundle(session, bundle_id)
         if bundle is None:
             return []
+        resolved_membership_mode = self._resolve_membership_mode(session, membership_mode)
+        if resolved_membership_mode == "HISTORICAL" and asof_date is not None:
+            from app.services.universe_history import (
+                active_bundle_symbols,
+                bundle_has_membership_history,
+            )
+
+            ts = pd.Timestamp(asof_date)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            asof_day = ts.date()
+            if bundle_has_membership_history(session, bundle_id=int(bundle_id)):
+                return active_bundle_symbols(
+                    session,
+                    bundle_id=int(bundle_id),
+                    asof_date=asof_day,
+                )
         bundle_symbols = self._normalize_symbols(list(bundle.symbols_json or []))
         rows_stmt = select(Dataset.symbol).where(Dataset.bundle_id == bundle_id)
         if timeframe:
@@ -358,6 +424,8 @@ class DataStore:
         dataset_id: int,
         *,
         timeframe: str | None = None,
+        asof_date: dt_date | datetime | None = None,
+        membership_mode: str | None = None,
     ) -> list[str]:
         dataset = self.get_dataset(session, dataset_id)
         if dataset is None:
@@ -365,7 +433,13 @@ class DataStore:
 
         target_timeframe = timeframe or dataset.timeframe
         if dataset.bundle_id is not None:
-            scoped = self.get_bundle_symbols(session, dataset.bundle_id, timeframe=target_timeframe)
+            scoped = self.get_bundle_symbols(
+                session,
+                dataset.bundle_id,
+                timeframe=target_timeframe,
+                asof_date=asof_date,
+                membership_mode=membership_mode,
+            )
             if scoped:
                 return scoped
 
@@ -405,8 +479,16 @@ class DataStore:
         max_symbols_scan: int,
         adv_lookback: int = 20,
         seed: int = 7,
+        asof_date: dt_date | datetime | None = None,
+        membership_mode: str | None = None,
     ) -> list[str]:
-        symbols = self.get_bundle_symbols(session, bundle_id, timeframe=timeframe)
+        symbols = self.get_bundle_symbols(
+            session,
+            bundle_id,
+            timeframe=timeframe,
+            asof_date=asof_date,
+            membership_mode=membership_mode,
+        )
         if not symbols:
             return []
         scope = str(symbol_scope or "liquid").lower()
@@ -436,6 +518,8 @@ class DataStore:
         max_symbols_scan: int,
         adv_lookback: int = 20,
         seed: int = 7,
+        asof_date: dt_date | datetime | None = None,
+        membership_mode: str | None = None,
     ) -> list[str]:
         dataset = self.get_dataset(session, dataset_id)
         if dataset is None:
@@ -449,9 +533,17 @@ class DataStore:
                 max_symbols_scan=max_symbols_scan,
                 adv_lookback=adv_lookback,
                 seed=seed,
+                asof_date=asof_date,
+                membership_mode=membership_mode,
             )
 
-        symbols = self.get_dataset_symbols(session, dataset_id, timeframe=timeframe)
+        symbols = self.get_dataset_symbols(
+            session,
+            dataset_id,
+            timeframe=timeframe,
+            asof_date=asof_date,
+            membership_mode=membership_mode,
+        )
         if not symbols:
             return []
 
@@ -478,6 +570,8 @@ class DataStore:
         timeframe: str,
         start: datetime | None = None,
         end: datetime | None = None,
+        session: Session | None = None,
+        adjustment_mode: str | None = None,
     ) -> pd.DataFrame:
         path = self._parquet_path(symbol, timeframe)
         if not path.exists():
@@ -501,6 +595,17 @@ class DataStore:
             frame = conn.execute(query, params).df()
 
         frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
+        resolved_adjustment_mode = self._resolve_adjustment_mode(session, adjustment_mode)
+        if resolved_adjustment_mode == "ADJUSTED" and str(timeframe).strip().lower() == "1d":
+            from app.services.corporate_actions import apply_adjustment_mode
+
+            adjusted, _ = apply_adjustment_mode(
+                session,
+                symbol=symbol,
+                frame=frame,
+                adjustment_mode=resolved_adjustment_mode,
+            ) if session is not None else (frame, [])
+            return adjusted
         return frame
 
     def _compute_feature_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
@@ -683,7 +788,7 @@ class DataStore:
         instrument = self.get_instrument(session, instrument_id)
         if instrument is None:
             return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
-        frame = self.load_ohlcv(symbol=instrument.symbol, timeframe=timeframe)
+        frame = self.load_ohlcv(symbol=instrument.symbol, timeframe=timeframe, session=session)
         if frame.empty:
             return frame
         if asof is not None:

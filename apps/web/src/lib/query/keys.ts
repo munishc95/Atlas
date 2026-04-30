@@ -62,6 +62,16 @@ export const qk = {
     ["historicalBackfillLatest", bundleId ?? "all", timeframe ?? "all"] as const,
   historicalBackfillHistory: (bundleId?: number | null, timeframe?: string | null, limit = 20) =>
     ["historicalBackfillHistory", bundleId ?? "all", timeframe ?? "all", limit] as const,
+  corporateActionsStatus: (bundleId?: number | null, timeframe?: string | null) =>
+    ["corporateActionsStatus", bundleId ?? "all", timeframe ?? "all"] as const,
+  corporateActions: (symbol?: string | null, limit = 100) =>
+    ["corporateActions", symbol ?? "all", limit] as const,
+  dataAdjustmentStatus: (bundleId?: number | null, timeframe?: string | null) =>
+    ["dataAdjustmentStatus", bundleId ?? "all", timeframe ?? "all"] as const,
+  trainDatasets: (limit = 100) => ["trainDatasets", limit] as const,
+  trainDataset: (id: number | null) => ["trainDataset", id] as const,
+  trainDatasetLatestRun: (id: number | null) => ["trainDatasetLatestRun", id] as const,
+  trainDatasetDownloadInfo: (id: number | null) => ["trainDatasetDownloadInfo", id] as const,
   upstoxMappingStatus: (bundleId?: number | null, timeframe?: string | null, sampleLimit = 20) =>
     ["upstoxMappingStatus", bundleId ?? "all", timeframe ?? "all", sampleLimit] as const,
   upstoxMappingMissing: (bundleId?: number | null, timeframe?: string | null, limit = 50) =>

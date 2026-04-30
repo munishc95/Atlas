@@ -2569,6 +2569,8 @@ def run_paper_step(
         parquet_root=settings.parquet_root,
         duckdb_path=settings.duckdb_path,
         feature_cache_root=settings.feature_cache_root,
+        adjustment_mode_default=settings.data_adjustment_mode,
+        membership_mode_default=settings.universe_membership_mode,
     )
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
@@ -4592,6 +4594,8 @@ def preview_policy_signals(
         parquet_root=settings.parquet_root,
         duckdb_path=settings.duckdb_path,
         feature_cache_root=settings.feature_cache_root,
+        adjustment_mode_default=settings.data_adjustment_mode,
+        membership_mode_default=settings.universe_membership_mode,
     )
 
     timeframes = _resolve_timeframes(payload, policy)

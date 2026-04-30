@@ -18,6 +18,8 @@ import type {
   ApiConfidenceTimeline,
   ApiConfidenceDrilldown,
   ApiConfidenceDrilldownSymbols,
+  ApiCorporateAction,
+  ApiCorporateActionsStatus,
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiHistoricalBackfillRun,
@@ -41,6 +43,8 @@ import type {
   ApiUpstoxTokenStatus,
   ApiResearchCandidate,
   ApiResearchRun,
+  ApiTrainDataset,
+  ApiTrainDatasetRun,
   ApiPolicyEvaluation,
   ApiPolicyShadowRun,
   ApiReplayRun,
@@ -144,6 +148,72 @@ export const atlasApi = {
       `/api/data/backfill/history${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
+  importCorporateActions: (payload: { path: string; mode?: "UPSERT" | "REPLACE" }) =>
+    apiFetch<Record<string, unknown>>("/api/corporate-actions/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  corporateActionsStatus: (params?: { bundle_id?: number; timeframe?: string }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    return apiFetch<ApiCorporateActionsStatus>(
+      `/api/corporate-actions/status${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  corporateActions: (params?: { symbol?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.symbol) search.set("symbol", params.symbol);
+    if (typeof params?.limit === "number") search.set("limit", String(params.limit));
+    return apiFetch<ApiCorporateAction[]>(
+      `/api/corporate-actions${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  dataAdjustmentStatus: (params?: { bundle_id?: number; timeframe?: string }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    return apiFetch<ApiCorporateActionsStatus>(
+      `/api/data/adjustment/status${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  importMembershipHistory: (bundleId: number, payload: { path: string; mode?: "UPSERT" | "REPLACE" }) =>
+    apiFetch<Record<string, unknown>>(`/api/universes/${bundleId}/membership-history/import`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  trainDatasets: (limit = 100) =>
+    apiFetch<ApiTrainDataset[]>(`/api/train-datasets?limit=${limit}`),
+  createTrainDataset: (payload: {
+    name: string;
+    bundle_id: number;
+    timeframe?: string;
+    start_date: string;
+    end_date: string;
+    adjustment_mode?: "RAW" | "ADJUSTED";
+    membership_mode?: "CURRENT" | "HISTORICAL";
+    feature_config_json?: Record<string, unknown>;
+    label_config_json?: Record<string, unknown>;
+  }) =>
+    apiFetch<ApiTrainDataset>("/api/train-datasets", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  trainDatasetById: (id: number) => apiFetch<ApiTrainDataset>(`/api/train-datasets/${id}`),
+  buildTrainDataset: (id: number, payload?: { force?: boolean }) =>
+    apiFetch<JobStart>(`/api/train-datasets/${id}/build`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  trainDatasetLatestRun: (id: number) =>
+    apiFetch<ApiTrainDatasetRun>(`/api/train-datasets/${id}/latest-run`),
+  trainDatasetDownloadInfo: (id: number) =>
+    apiFetch<{
+      dataset: ApiTrainDataset;
+      latest_run?: ApiTrainDatasetRun | null;
+      file_exists: boolean;
+      file_size_bytes: number;
+    }>(`/api/train-datasets/${id}/download-info`),
   upstoxMappingStatus: (params?: { bundle_id?: number; timeframe?: string; sample_limit?: number }) => {
     const search = new URLSearchParams();
     if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));

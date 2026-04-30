@@ -99,7 +99,7 @@ def _sample_symbols_by_adv(
 
     scored: list[tuple[str, float]] = []
     for symbol in symbols:
-        frame = store.load_ohlcv(symbol=symbol, timeframe=primary_timeframe)
+        frame = store.load_ohlcv(symbol=symbol, timeframe=primary_timeframe, session=session)
         if frame.empty:
             continue
         adv = (frame["close"] * frame["volume"]).tail(20).mean()

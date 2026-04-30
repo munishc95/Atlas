@@ -92,7 +92,7 @@ def execute_walkforward(
     template = get_template(str(payload["strategy_template"]))
 
     _emit(progress_cb, 12, f"Loading OHLCV for {symbol} ({timeframe})")
-    frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe)
+    frame = store.load_ohlcv(symbol=symbol, timeframe=timeframe, session=session)
     if frame.empty:
         raise APIError(code="missing_data", message="No data available for walk-forward run")
 

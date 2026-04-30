@@ -468,6 +468,61 @@ export type ApiHistoricalBackfillRun = {
   created_at: string;
 };
 
+export type ApiCorporateAction = {
+  id: number | null;
+  symbol: string;
+  ex_date: string;
+  action_type: string;
+  ratio_num: number;
+  ratio_den: number;
+  cash_amount?: number | null;
+  source: string;
+  created_at: string;
+};
+
+export type ApiCorporateActionsStatus = {
+  action_count: number;
+  action_counts_by_type: Record<string, number>;
+  symbols_with_actions: number;
+  bundle_symbol_count: number;
+  bundle_symbols_with_actions: number;
+  bundle_coverage_pct: number;
+  adjustment_mode: string;
+  timeframe?: string;
+  bundle_id?: number | null;
+};
+
+export type ApiTrainDataset = {
+  id: number;
+  name: string;
+  bundle_id: number;
+  timeframe: string;
+  start_date: string;
+  end_date: string;
+  adjustment_mode: string;
+  membership_mode: string;
+  feature_config_json: Record<string, unknown>;
+  label_config_json: Record<string, unknown>;
+  status: string;
+  row_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiTrainDatasetRun = {
+  id: number;
+  dataset_id: number;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  row_count: number;
+  output_path?: string | null;
+  warnings_json: Array<Record<string, unknown>>;
+  errors_json: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ApiDataProvenanceEntry = {
   id?: number | null;
   symbol: string;
