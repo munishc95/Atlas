@@ -174,6 +174,8 @@ class Settings(BaseSettings):
     no_trade_min_breadth_pct: float = 35.0
     no_trade_min_trend_strength: float = 15.0
     no_trade_cooldown_trading_days: int = 2
+    event_risk_enabled: bool = True
+    event_risk_calendar_path: str = "data/reference/event_risk_calendar.csv"
     confidence_gate_enabled: bool = True
     confidence_gate_avg_threshold: float = 70.0
     confidence_gate_low_symbol_threshold: float = 65.0

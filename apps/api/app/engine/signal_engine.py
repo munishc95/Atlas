@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import hashlib
 import time
 from typing import Any, Literal
@@ -10,8 +10,10 @@ import numpy as np
 import pandas as pd
 from sqlmodel import Session
 
-from app.engine.indicators import atr
+from app.engine.indicators import atr, sma
+from app.services.corporate_actions import list_symbol_actions
 from app.services.data_store import DataStore
+from app.services.event_risk import evaluate_event_risk
 from app.strategies.templates import (
     generate_signal_sides,
     get_template,
@@ -23,9 +25,10 @@ from app.strategies.templates import (
 SignalMode = Literal["paper", "preview"]
 
 DEFAULT_RANKING_WEIGHTS: dict[str, float] = {
-    "signal": 0.65,
+    "signal": 0.50,
     "liquidity": 0.25,
     "stability": 0.10,
+    "quality": 0.15,
 }
 
 
@@ -187,6 +190,214 @@ def _signal_sides_for_template(
     }
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(np.nan_to_num(float(value), nan=default, posinf=default, neginf=default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _status_min(left: str, right: str) -> str:
+    rank = {"FAIL": 0, "WARN": 1, "PASS": 2}
+    left_norm = str(left or "PASS").upper()
+    right_norm = str(right or "PASS").upper()
+    return left_norm if rank.get(left_norm, 2) <= rank.get(right_norm, 2) else right_norm
+
+
+def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, Any]:
+    rows: list[dict[str, float]] = []
+    for frame in frames.values():
+        if len(frame) < 220:
+            continue
+        clean = frame.copy().sort_values("datetime").reset_index(drop=True)
+        close = pd.to_numeric(clean["close"], errors="coerce")
+        sma50 = sma(close, 50)
+        sma200 = sma(close, 200)
+        if pd.isna(close.iloc[-1]) or pd.isna(sma50.iloc[-1]) or pd.isna(sma200.iloc[-1]):
+            continue
+        previous_idx = max(0, len(clean) - 6)
+        rows.append(
+            {
+                "above50": 1.0 if float(close.iloc[-1]) > float(sma50.iloc[-1]) else 0.0,
+                "above200": 1.0 if float(close.iloc[-1]) > float(sma200.iloc[-1]) else 0.0,
+                "above50_prev": (
+                    1.0 if float(close.iloc[previous_idx]) > float(sma50.iloc[previous_idx]) else 0.0
+                ),
+                "above200_prev": (
+                    1.0
+                    if float(close.iloc[previous_idx]) > float(sma200.iloc[previous_idx])
+                    else 0.0
+                ),
+                "ret20": (
+                    (float(close.iloc[-1]) / float(close.iloc[-21]) - 1.0) * 100.0
+                    if len(close) >= 21 and float(close.iloc[-21]) > 0
+                    else 0.0
+                ),
+            }
+        )
+    if not rows:
+        return {
+            "status": "PASS",
+            "flags": [],
+            "symbols": 0,
+            "breadth50": 0.0,
+            "breadth200": 0.0,
+            "breadth50_chg5": 0.0,
+            "breadth200_chg5": 0.0,
+            "avg_ret20": 0.0,
+        }
+
+    context = pd.DataFrame(rows)
+    breadth50 = float(context["above50"].mean() * 100.0)
+    breadth200 = float(context["above200"].mean() * 100.0)
+    breadth50_chg5 = float((context["above50"].mean() - context["above50_prev"].mean()) * 100.0)
+    breadth200_chg5 = float((context["above200"].mean() - context["above200_prev"].mean()) * 100.0)
+    avg_ret20 = float(context["ret20"].mean())
+
+    flags: list[str] = []
+    if breadth50 <= 25.0 or avg_ret20 <= -5.0 or breadth50_chg5 <= -15.0:
+        flags.append("market_breadth_breakdown")
+    elif breadth50 <= 35.0:
+        flags.append("market_breadth_weak")
+    if breadth50_chg5 <= -10.0 or breadth200_chg5 <= -8.0:
+        flags.append("market_breadth_deteriorating")
+    if avg_ret20 <= -3.0:
+        flags.append("market_momentum_negative")
+
+    hard_flags = {"market_breadth_breakdown"}
+    status = "FAIL" if any(flag in hard_flags for flag in flags) else ("WARN" if flags else "PASS")
+    return {
+        "status": status,
+        "flags": flags,
+        "symbols": int(len(rows)),
+        "breadth50": breadth50,
+        "breadth200": breadth200,
+        "breadth50_chg5": breadth50_chg5,
+        "breadth200_chg5": breadth200_chg5,
+        "avg_ret20": avg_ret20,
+    }
+
+
+def _upcoming_action_quality(
+    *,
+    session: Session,
+    symbol: str,
+    decision_day: date,
+    lookahead_days: int = 7,
+) -> dict[str, Any]:
+    end_day = decision_day + timedelta(days=max(0, int(lookahead_days)))
+    actions = [
+        action
+        for action in list_symbol_actions(session, symbol=symbol)
+        if decision_day <= action.ex_date <= end_day
+    ]
+    if not actions:
+        return {"status": "PASS", "flags": [], "actions": []}
+    serialized = [
+        {
+            "type": str(action.action_type).upper(),
+            "ex_date": action.ex_date.isoformat(),
+        }
+        for action in actions
+    ]
+    flags = [
+        f"upcoming_corporate_action:{item['type'].lower()}:{item['ex_date']}"
+        for item in serialized
+    ]
+    hard = any(item["type"] == "DEMERGER" for item in serialized)
+    return {
+        "status": "FAIL" if hard else "WARN",
+        "flags": flags,
+        "actions": serialized,
+    }
+
+
+def _candidate_quality(
+    *,
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    decision_idx: int,
+    side: str,
+    template_key: str,
+) -> dict[str, Any]:
+    """Score signal-bar quality without using bars after the decision close."""
+
+    row = frame.iloc[decision_idx]
+    high = _safe_float(row.get("high"))
+    low = _safe_float(row.get("low"))
+    close = _safe_float(row.get("close"))
+    volume = _safe_float(row.get("volume"))
+    bar_range = max(0.0, high - low)
+    raw_close_location = 0.5 if bar_range <= 0 else (close - low) / bar_range
+    close_location = raw_close_location if side == "BUY" else 1.0 - raw_close_location
+    close_location = max(0.0, min(1.0, close_location))
+
+    volume_ma = _safe_float(frame["volume"].iloc[: decision_idx + 1].tail(20).mean())
+    volume_ratio = volume / volume_ma if volume_ma > 0 else 0.0
+
+    atr_value = 0.0
+    if "atr_14" in features.columns and decision_idx < len(features):
+        atr_value = _safe_float(features["atr_14"].iloc[decision_idx])
+    if atr_value <= 0:
+        atr_value = _safe_float(atr(frame, period=14).iloc[decision_idx])
+    atr_pct = atr_value / close if close > 0 and atr_value > 0 else 0.0
+    range_atr = bar_range / atr_value if atr_value > 0 else 0.0
+    close_history = pd.to_numeric(
+        frame["close"].iloc[max(0, decision_idx - 260) : decision_idx + 1],
+        errors="coerce",
+    )
+    recent_gap_pct = float(
+        np.nan_to_num(close_history.pct_change().abs().max(), nan=0.0, posinf=0.0, neginf=0.0)
+    )
+
+    stability_component = 1.0 - min(1.0, max(0.0, atr_pct) / 0.07)
+    volume_component = min(1.0, max(0.0, volume_ratio) / 1.5)
+    range_component = 1.0 - min(1.0, max(0.0, range_atr - 2.5) / 2.0)
+    score = (
+        0.45 * close_location
+        + 0.20 * volume_component
+        + 0.25 * stability_component
+        + 0.10 * range_component
+    )
+
+    flags: list[str] = []
+    if close_location < 0.35:
+        flags.append("weak_signal_bar_close")
+    if atr_pct > 0.06:
+        flags.append("extreme_volatility")
+    if range_atr > 2.5 and close_location < 0.60:
+        flags.append("blowoff_reversal_bar")
+    if template_key in {"trend_breakout", "squeeze_breakout"} and volume_ratio < 0.75:
+        flags.append("low_breakout_volume")
+    if recent_gap_pct > 0.35:
+        flags.append("recent_price_discontinuity")
+
+    hard_flags = {
+        "weak_signal_bar_close",
+        "extreme_volatility",
+        "blowoff_reversal_bar",
+        "recent_price_discontinuity",
+    }
+    status = "PASS"
+    if any(flag in hard_flags for flag in flags):
+        status = "FAIL"
+    elif flags or score < 0.55:
+        status = "WARN"
+
+    return {
+        "quality_score": float(score),
+        "quality_status": status,
+        "quality_flags": flags,
+        "quality_metrics": {
+            "close_location": float(close_location),
+            "volume_ratio": float(volume_ratio),
+            "atr_pct": float(atr_pct),
+            "range_atr": float(range_atr),
+            "recent_gap_pct": float(recent_gap_pct),
+        },
+    }
+
+
 def _resolve_symbols(
     *,
     session: Session,
@@ -197,6 +408,7 @@ def _resolve_symbols(
     symbol_scope: str,
     max_symbols_scan: int,
     seed: int,
+    asof_date: datetime | date | None,
 ) -> tuple[list[str], int]:
     if bundle_id is not None:
         total_symbols = store.get_bundle_symbols(session, bundle_id, timeframe=timeframe)
@@ -207,6 +419,7 @@ def _resolve_symbols(
             symbol_scope=symbol_scope,
             max_symbols_scan=max_symbols_scan,
             seed=seed,
+            asof_date=asof_date,
         )
         return selected, len(total_symbols)
     if dataset_id is not None:
@@ -218,6 +431,7 @@ def _resolve_symbols(
             symbol_scope=symbol_scope,
             max_symbols_scan=max_symbols_scan,
             seed=seed,
+            asof_date=asof_date,
         )
         return selected, len(total_symbols)
     return [], 0
@@ -239,6 +453,7 @@ def generate_signals_for_policy(
     symbol_scope: str = "liquid",
     ranking_weights: dict[str, float] | None = None,
     max_runtime_seconds: int | None = None,
+    event_risk_overrides: dict[str, Any] | None = None,
 ) -> SignalGenerationResult:
     resolved_timeframes = [str(value).strip() for value in (timeframes or []) if str(value).strip()]
     if not resolved_timeframes:
@@ -263,6 +478,7 @@ def generate_signals_for_policy(
         symbol_scope=symbol_scope,
         max_symbols_scan=max_symbols_scan,
         seed=seed,
+        asof_date=asof,
     )
     if not symbols:
         return SignalGenerationResult(
@@ -283,7 +499,7 @@ def generate_signals_for_policy(
 
     weights = dict(DEFAULT_RANKING_WEIGHTS)
     if isinstance(ranking_weights, dict):
-        for key in ("signal", "liquidity", "stability"):
+        for key in ("signal", "liquidity", "stability", "quality"):
             value = ranking_weights.get(key)
             if isinstance(value, (int, float)):
                 weights[key] = float(value)
@@ -293,7 +509,7 @@ def generate_signals_for_policy(
             scan_truncated = True
             break
         base = _filtered_frame(
-            store.load_ohlcv(symbol=symbol, timeframe=primary_timeframe), asof_ts
+            store.load_ohlcv(symbol=symbol, timeframe=primary_timeframe, session=session), asof_ts
         )
         if len(base) < 50:
             continue
@@ -306,12 +522,15 @@ def generate_signals_for_policy(
             frame = (
                 base
                 if timeframe == primary_timeframe
-                else _filtered_frame(store.load_ohlcv(symbol=symbol, timeframe=timeframe), asof_ts)
+                else _filtered_frame(
+                    store.load_ohlcv(symbol=symbol, timeframe=timeframe, session=session),
+                    asof_ts,
+                )
             )
             if len(frame) < 50:
                 continue
             features = _filtered_frame(
-                store.load_features(symbol=symbol, timeframe=timeframe),
+                store.load_features(symbol=symbol, timeframe=timeframe, session=session),
                 asof_ts,
             )
             if len(features) < 50:
@@ -397,12 +616,20 @@ def generate_signals_for_policy(
                         )
                         if futures_instrument is not None:
                             fut_frame = _filtered_frame(
-                                store.load_ohlcv(symbol=futures_instrument.symbol, timeframe=timeframe),
+                                store.load_ohlcv(
+                                    symbol=futures_instrument.symbol,
+                                    timeframe=timeframe,
+                                    session=session,
+                                ),
                                 asof_ts,
                             )
                             if len(fut_frame) >= 2:
                                 fut_features = _filtered_frame(
-                                    store.load_features(symbol=futures_instrument.symbol, timeframe=timeframe),
+                                    store.load_features(
+                                        symbol=futures_instrument.symbol,
+                                        timeframe=timeframe,
+                                        session=session,
+                                    ),
                                     asof_ts,
                                 )
                                 if len(fut_features) >= 2:
@@ -458,10 +685,44 @@ def generate_signals_for_policy(
                     )
                     liquidity_component = float(np.tanh(np.log1p(max(0.0, adv)) / 20.0))
                     stability_component = 1.0 - min(1.0, max(0.0, atr_pct) * 15.0)
+                    quality = _candidate_quality(
+                        frame=frame,
+                        features=features,
+                        decision_idx=decision_idx,
+                        side=side,
+                        template_key=template_key,
+                    )
+                    decision_day = pd.Timestamp(frame.iloc[decision_idx]["datetime"]).date()
+                    action_quality = _upcoming_action_quality(
+                        session=session,
+                        symbol=underlying_symbol,
+                        decision_day=decision_day,
+                    )
+                    event_quality = evaluate_event_risk(
+                        asof_date=decision_day,
+                        symbol=underlying_symbol,
+                        overrides=event_risk_overrides,
+                    )
+                    quality_flags = (
+                        list(quality["quality_flags"])
+                        + list(action_quality["flags"])
+                        + list(event_quality["flags"])
+                    )
+                    quality_status = _status_min(
+                        _status_min(str(quality["quality_status"]), str(action_quality["status"])),
+                        str(event_quality["status"]),
+                    )
+                    quality_metrics = dict(quality["quality_metrics"])
+                    if action_quality["actions"]:
+                        quality_metrics["upcoming_corporate_actions"] = action_quality["actions"]
+                    if event_quality["events"]:
+                        quality_metrics["event_risk_events"] = event_quality["events"]
+                    quality_score = float(quality["quality_score"])
                     ranking_score = (
                         weights["signal"] * raw_strength
                         + weights["liquidity"] * liquidity_component
                         + weights["stability"] * stability_component
+                        + weights["quality"] * quality_score
                     )
 
                     ranked.append(
@@ -478,6 +739,10 @@ def generate_signals_for_policy(
                             "raw_signal_strength": raw_strength,
                             "adv": adv,
                             "vol_scale": max(0.0, atr_pct),
+                            "quality_score": quality_score,
+                            "quality_status": quality_status,
+                            "quality_flags": quality_flags,
+                            "quality_metrics": quality_metrics,
                             "signal_at": str(frame.iloc[decision_idx]["datetime"]),
                             "fill_at": str(chosen_frame.iloc[chosen_fill_idx]["datetime"]),
                             "source_mode": mode,
@@ -505,10 +770,22 @@ def generate_signals_for_policy(
         )
 
     corr_map = _corr_map(primary_frames)
+    market_context = _market_context_from_frames(primary_frames)
     for row in ranked:
         symbol = str(row["symbol"])
         if symbol in corr_map and corr_map[symbol]:
             row["correlations"] = corr_map[symbol]
+        row["market_context"] = market_context
+        if market_context["status"] != "PASS":
+            existing_flags = [str(flag) for flag in row.get("quality_flags", [])]
+            for flag in market_context["flags"]:
+                if flag not in existing_flags:
+                    existing_flags.append(str(flag))
+            row["quality_flags"] = existing_flags
+            row["quality_status"] = _status_min(
+                str(row.get("quality_status", "PASS")),
+                str(market_context["status"]),
+            )
 
     ranked.sort(
         key=lambda row: (

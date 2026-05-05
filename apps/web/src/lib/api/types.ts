@@ -141,6 +141,11 @@ export type ApiPaperSignal = {
   stop_distance: number;
   target_price?: number | null;
   signal_strength: number;
+  quality_score?: number;
+  quality_status?: "PASS" | "WARN" | "FAIL" | string;
+  quality_flags?: string[];
+  quality_metrics?: Record<string, unknown>;
+  market_context?: Record<string, unknown>;
   adv: number;
   vol_scale: number;
   explanation?: string;
@@ -166,6 +171,10 @@ export type ApiPaperSignalPreview = {
   evaluated_candidates?: number;
   total_symbols?: number;
   signals: ApiPaperSignal[];
+  candidate_quality?: {
+    counts?: Record<string, number>;
+    fail_reasons?: Record<string, number>;
+  };
   skipped_signals?: Array<Record<string, unknown>>;
   ensemble?: ApiPolicyEnsemble | null;
 };

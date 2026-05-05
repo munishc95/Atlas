@@ -1,0 +1,62 @@
+param(
+    [int]$BundleId = 3674,
+    [int]$LookbackDays = 10,
+    [int]$CorporateActionLookbackDays = 180,
+    [double]$ThrottleSeconds = 0.05,
+    [switch]$RunQuality
+)
+
+$ErrorActionPreference = "Stop"
+
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$LogsRoot = Join-Path $RepoRoot "data\logs"
+New-Item -ItemType Directory -Force -Path $LogsRoot | Out-Null
+
+$RunDate = Get-Date
+$StartDate = $RunDate.Date.AddDays(-1 * [Math]::Max(1, $LookbackDays)).ToString("yyyy-MM-dd")
+$CorporateActionStartDate = $RunDate.Date.AddDays(-1 * [Math]::Max(1, $CorporateActionLookbackDays)).ToString("yyyy-MM-dd")
+$EndDate = $RunDate.Date.ToString("yyyy-MM-dd")
+$LogPath = Join-Path $LogsRoot ("daily-free-data-update-{0}.log" -f $RunDate.ToString("yyyyMMdd-HHmmss"))
+
+Set-Location $RepoRoot
+$env:PYTHONPATH = Join-Path $RepoRoot "apps\api"
+
+$ImportArgs = @(
+    "scripts/free_nse_bhavcopy_backfill.py",
+    "--bundle-id", "$BundleId",
+    "--start-date", $StartDate,
+    "--end-date", $EndDate,
+    "--throttle-seconds", "$ThrottleSeconds"
+)
+
+if (-not $RunQuality) {
+    $ImportArgs += "--skip-quality"
+}
+
+Start-Transcript -Path $LogPath -Append | Out-Null
+try {
+    Write-Host "Atlas free NSE daily update"
+    Write-Host "Repo: $RepoRoot"
+    Write-Host "Bundle: $BundleId"
+    Write-Host "Window: $StartDate to $EndDate"
+    Write-Host "Corporate action window: $CorporateActionStartDate to $EndDate"
+    Write-Host "Log: $LogPath"
+    & python @ImportArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Importer exited with code $LASTEXITCODE"
+    }
+    & python @(
+        "scripts/free_nse_corporate_actions_import.py",
+        "--bundle-id", "$BundleId",
+        "--start-date", $CorporateActionStartDate,
+        "--end-date", $EndDate,
+        "--mode", "UPSERT"
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw "Corporate action importer exited with code $LASTEXITCODE"
+    }
+    Write-Host "Atlas free NSE daily update finished"
+}
+finally {
+    Stop-Transcript | Out-Null
+}

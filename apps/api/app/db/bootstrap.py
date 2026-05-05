@@ -160,6 +160,8 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
                     "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
                     "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
+                    "event_risk_enabled": settings.event_risk_enabled,
+                    "event_risk_calendar_path": settings.event_risk_calendar_path,
                     "confidence_gate_enabled": (
                         True if str(settings.operate_mode).strip().lower() == "live" else False
                     ),

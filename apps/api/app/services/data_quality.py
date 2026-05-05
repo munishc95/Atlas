@@ -337,6 +337,7 @@ def run_data_quality_report(
     stale_severity = _stale_severity(settings=settings, overrides=state)
     segment = _calendar_segment(settings=settings, overrides=state)
     operate_mode = str(state.get("operate_mode", settings.operate_mode)).strip().lower()
+    adjustment_mode = str(state.get("data_adjustment_mode", settings.data_adjustment_mode)).strip().upper()
     low_confidence_threshold = max(
         0.0,
         min(
@@ -357,7 +358,12 @@ def run_data_quality_report(
     coverage_values: list[float] = []
 
     for symbol in symbols:
-        frame = store.load_ohlcv(symbol=symbol, timeframe=tf)
+        frame = store.load_ohlcv(
+            symbol=symbol,
+            timeframe=tf,
+            session=session,
+            adjustment_mode=adjustment_mode,
+        )
         if not frame.empty:
             frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
             symbol_last = frame["datetime"].max().to_pydatetime()

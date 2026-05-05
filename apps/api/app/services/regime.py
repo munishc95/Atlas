@@ -50,7 +50,7 @@ def classify_regime(frame: pd.DataFrame) -> str:
 def regime_policy(regime: str, base_risk: float, base_max_positions: int) -> dict[str, Any]:
     if regime == REGIME_TREND_UP:
         return {
-            "allowed_templates": ["trend_breakout", "pullback_trend"],
+            "allowed_templates": ["trend_breakout", "squeeze_breakout"],
             "risk_per_trade": base_risk,
             "max_positions": base_max_positions,
         }

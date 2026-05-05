@@ -26,7 +26,7 @@ from app.strategies.templates import list_templates
 ProgressCallback = Callable[[int, str | None], None]
 
 REGIME_TEMPLATE_PREFS: dict[str, list[str]] = {
-    "TREND_UP": ["trend_breakout", "pullback_trend"],
+    "TREND_UP": ["trend_breakout", "squeeze_breakout"],
     "RANGE": ["pullback_trend", "squeeze_breakout"],
     "HIGH_VOL": ["squeeze_breakout", "pullback_trend"],
     "RISK_OFF": [],

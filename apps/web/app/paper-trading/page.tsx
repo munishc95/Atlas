@@ -21,6 +21,13 @@ function isTypingElement(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
+function qualityBadgeClass(status: string | undefined): string {
+  const token = String(status ?? "PASS").toUpperCase();
+  if (token === "FAIL") return "bg-danger/15 text-danger";
+  if (token === "WARN") return "bg-warning/15 text-warning";
+  return "bg-success/15 text-success";
+}
+
 export default function PaperTradingPage() {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -94,7 +101,7 @@ export default function PaperTradingPage() {
     onSuccess: (payload) => {
       setPreview(payload);
       setPreviewOpen(true);
-      toast.success(`Preview ready (${payload.generated_signals_count} signals)`);
+      toast.success(`Preview ready (${payload.generated_signals_count} candidates)`);
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not preview signals");
@@ -644,7 +651,13 @@ export default function PaperTradingPage() {
               <span className="text-muted">Regime:</span> {preview.regime}
             </p>
             <p>
-              <span className="text-muted">Generated:</span> {preview.generated_signals_count}
+              <span className="text-muted">Generated candidates:</span> {preview.generated_signals_count}
+            </p>
+            <p>
+              <span className="text-muted">Candidate quality:</span>{" "}
+              PASS {preview.candidate_quality?.counts?.PASS ?? 0} / WARN{" "}
+              {preview.candidate_quality?.counts?.WARN ?? 0} / FAIL{" "}
+              {preview.candidate_quality?.counts?.FAIL ?? 0}
             </p>
             <p>
               <span className="text-muted">Policy status:</span> {preview.policy_status ?? "-"} /{" "}
@@ -667,6 +680,8 @@ export default function PaperTradingPage() {
                     <th className="px-2 py-2">Instrument</th>
                     <th className="px-2 py-2">Template</th>
                     <th className="px-2 py-2">Strength</th>
+                    <th className="px-2 py-2">Quality</th>
+                    <th className="px-2 py-2">Flags</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -679,6 +694,14 @@ export default function PaperTradingPage() {
                       </td>
                       <td className="px-2 py-2">{signal.template}</td>
                       <td className="px-2 py-2">{signal.signal_strength.toFixed(3)}</td>
+                      <td className="px-2 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}>
+                          {signal.quality_status ?? "PASS"} {signal.quality_score?.toFixed(2) ?? ""}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-muted">
+                        {(signal.quality_flags ?? []).slice(0, 2).join(", ") || "-"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

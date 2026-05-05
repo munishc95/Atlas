@@ -863,7 +863,12 @@ def _resolve_execution_policy(
             "BUY": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
             "SELL": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
         },
-        "ranking_weights": {"signal": 1.0},
+        "ranking_weights": {
+            "signal": 0.55,
+            "liquidity": 0.25,
+            "stability": 0.10,
+            "quality": 0.20,
+        },
     }
 
     if policy_override_id is None and str(state_settings.get("paper_mode", "strategy")) != "policy":
@@ -3160,6 +3165,7 @@ def run_paper_step(
                             else None
                         ),
                         max_runtime_seconds=max_runtime_seconds,
+                        event_risk_overrides=state_settings,
                     )
                     scan_truncated_any = scan_truncated_any or bool(member_result.scan_truncated)
                     scanned_symbols_total += int(member_result.scanned_symbols)
@@ -3276,6 +3282,7 @@ def run_paper_step(
                     symbol_scope=symbol_scope,
                     ranking_weights=ranking_weights if isinstance(ranking_weights, dict) else None,
                     max_runtime_seconds=max_runtime_seconds,
+                    event_risk_overrides=state_settings,
                 )
                 provided_signals = list(generated_meta.signals)
                 generated_signals_count = len(provided_signals)
@@ -3510,6 +3517,18 @@ def run_paper_step(
                     }
                 )
                 continue
+
+        if str(signal.get("quality_status", "PASS")).upper() == "FAIL":
+            skipped_signals.append(
+                {
+                    **base_meta,
+                    "reason": "candidate_quality_fail",
+                    "quality_score": signal.get("quality_score"),
+                    "quality_flags": signal.get("quality_flags", []),
+                    "quality_metrics": signal.get("quality_metrics", {}),
+                }
+            )
+            continue
 
         if symbol in inactive_symbols or underlying_symbol in inactive_symbols:
             skipped_signals.append({**base_meta, "reason": "inactive_symbol_data_gap"})
@@ -4742,6 +4761,7 @@ def preview_policy_signals(
                 symbol_scope=symbol_scope,
                 ranking_weights=member_policy.get("ranking_weights", {}),
                 max_runtime_seconds=max_runtime_seconds,
+                event_risk_overrides=state_settings,
             )
             scan_truncated_any = scan_truncated_any or bool(member_generated.scan_truncated)
             scanned_symbols_total += int(member_generated.scanned_symbols)
@@ -4790,12 +4810,25 @@ def preview_policy_signals(
             symbol_scope=symbol_scope,
             ranking_weights=policy.get("ranking_weights", {}),
             max_runtime_seconds=max_runtime_seconds,
+            event_risk_overrides=state_settings,
         )
     ensemble_payload = (
         serialize_policy_ensemble(session, active_ensemble, include_members=True)
         if active_ensemble is not None
         else None
     )
+    quality_counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0}
+    quality_fail_reasons: dict[str, int] = {}
+    for signal in generated.signals:
+        status = str(signal.get("quality_status", "PASS")).strip().upper()
+        if status not in quality_counts:
+            status = "WARN"
+        quality_counts[status] += 1
+        if status == "FAIL":
+            for flag in signal.get("quality_flags", []) or []:
+                key = str(flag or "").strip()
+                if key:
+                    quality_fail_reasons[key] = int(quality_fail_reasons.get(key, 0)) + 1
 
     return {
         "regime": regime,
@@ -4808,6 +4841,10 @@ def preview_policy_signals(
         "generated_signals_count": len(generated.signals),
         "selected_signals_count": 0,
         "signals": generated.signals,
+        "candidate_quality": {
+            "counts": quality_counts,
+            "fail_reasons": quality_fail_reasons,
+        },
         "bundle_id": bundle_id,
         "dataset_id": dataset_id,
         "timeframes": timeframes,

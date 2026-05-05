@@ -454,16 +454,45 @@ class DataStore:
         adv = (frame["close"] * frame["volume"]).tail(lookback).mean()
         return float(np.nan_to_num(float(adv), nan=0.0))
 
+    def _asof_end_datetime(self, asof_date: dt_date | datetime | None) -> datetime | None:
+        if asof_date is None:
+            return None
+        if isinstance(asof_date, datetime):
+            ts = asof_date
+        else:
+            ts = datetime(
+                asof_date.year,
+                asof_date.month,
+                asof_date.day,
+                23,
+                59,
+                59,
+                tzinfo=UTC,
+            )
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=UTC)
+        return ts.astimezone(UTC)
+
     def _rank_by_adv(
         self,
         symbols: list[str],
         *,
         timeframe: str,
         lookback: int,
+        session: Session | None = None,
+        asof_date: dt_date | datetime | None = None,
+        adjustment_mode: str | None = None,
     ) -> list[tuple[str, float]]:
         rows: list[tuple[str, float]] = []
+        end = self._asof_end_datetime(asof_date)
         for symbol in symbols:
-            frame = self.load_ohlcv(symbol=symbol, timeframe=timeframe)
+            frame = self.load_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                end=end,
+                session=session,
+                adjustment_mode=adjustment_mode,
+            )
             if frame.empty:
                 continue
             rows.append((symbol, self._symbol_adv(frame, lookback)))
@@ -502,10 +531,17 @@ class DataStore:
             return ordered[:limit]
 
         cache_key = (bundle_id, timeframe, adv_lookback)
-        scored = self._bundle_adv_cache.get(cache_key)
+        scored = None if asof_date is not None else self._bundle_adv_cache.get(cache_key)
         if scored is None:
-            scored = self._rank_by_adv(symbols, timeframe=timeframe, lookback=adv_lookback)
-            self._bundle_adv_cache[cache_key] = scored
+            scored = self._rank_by_adv(
+                symbols,
+                timeframe=timeframe,
+                lookback=adv_lookback,
+                session=session,
+                asof_date=asof_date,
+            )
+            if asof_date is None:
+                self._bundle_adv_cache[cache_key] = scored
         return [symbol for symbol, _ in scored[:limit]]
 
     def sample_dataset_symbols(
@@ -558,10 +594,17 @@ class DataStore:
             return ordered[:limit]
 
         cache_key = (dataset_id, timeframe, adv_lookback)
-        scored = self._adv_cache.get(cache_key)
+        scored = None if asof_date is not None else self._adv_cache.get(cache_key)
         if scored is None:
-            scored = self._rank_by_adv(symbols, timeframe=timeframe, lookback=adv_lookback)
-            self._adv_cache[cache_key] = scored
+            scored = self._rank_by_adv(
+                symbols,
+                timeframe=timeframe,
+                lookback=adv_lookback,
+                session=session,
+                asof_date=asof_date,
+            )
+            if asof_date is None:
+                self._adv_cache[cache_key] = scored
         return [symbol for symbol, _ in scored[:limit]]
 
     def load_ohlcv(
@@ -652,7 +695,16 @@ class DataStore:
             computed.to_parquet(path, index=False)
             return computed
 
-        cached = pd.read_parquet(path)
+        try:
+            cached = pd.read_parquet(path)
+        except Exception:  # noqa: BLE001
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            computed = self._compute_feature_frame(base)
+            computed.to_parquet(path, index=False)
+            return computed
         if cached.empty:
             computed = self._compute_feature_frame(base)
             computed.to_parquet(path, index=False)
@@ -690,7 +742,23 @@ class DataStore:
         timeframe: str,
         start: datetime | None = None,
         end: datetime | None = None,
+        session: Session | None = None,
+        adjustment_mode: str | None = None,
     ) -> pd.DataFrame:
+        resolved_adjustment_mode = self._resolve_adjustment_mode(session, adjustment_mode)
+        if resolved_adjustment_mode == "ADJUSTED" and str(timeframe).strip().lower() == "1d":
+            frame = self.load_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                session=session,
+                adjustment_mode=resolved_adjustment_mode,
+            )
+            if frame.empty:
+                return pd.DataFrame()
+            return self._compute_feature_frame(frame)
+
         self.update_feature_cache(symbol=symbol, timeframe=timeframe)
         path = self._feature_path(symbol, timeframe)
         if not path.exists():

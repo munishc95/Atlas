@@ -1,0 +1,6 @@
+event_date,scope,symbol,event_type,severity,title,source,blackout_before_days,blackout_after_days
+2024-06-04,MARKET,,ELECTION_RESULT,BLOCK,India general election result,manual_seed,1,1
+2024-07-23,MARKET,,UNION_BUDGET,WARN,Union Budget 2024,manual_seed,1,0
+2025-02-01,MARKET,,UNION_BUDGET,WARN,Union Budget 2025,manual_seed,1,0
+2026-02-01,MARKET,,UNION_BUDGET,WARN,Union Budget 2026,manual_seed,1,0
+2026-04-30,SYMBOL,VEDL,DEMERGER,BLOCK,Vedanta demerger ex-date,NSE_CORPORATE_ACTIONS,7,1

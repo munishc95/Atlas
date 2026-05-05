@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date as dt_date, datetime
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 import json
@@ -13,7 +13,7 @@ from app.core.exceptions import APIError
 from app.db.models import CorporateAction
 
 
-SUPPORTED_ACTION_TYPES = {"SPLIT", "BONUS", "DIVIDEND"}
+SUPPORTED_ACTION_TYPES = {"SPLIT", "BONUS", "DIVIDEND", "DEMERGER"}
 
 
 @dataclass(frozen=True)

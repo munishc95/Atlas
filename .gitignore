@@ -21,9 +21,14 @@ __pycache__/
 *.duckdb.wal
 data/parquet/
 data/features/
+data/cache/
+data/exports/
 data/inbox/
+data/logs/
 data/secrets/
 apps/api/.atlas/
+apps/web/.atlas/
+exports/
 
 # IDE
 .vscode/

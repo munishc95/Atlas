@@ -318,7 +318,10 @@ class NseBhavcopyProvider(BaseProvider):
         high_col = _first_existing(column_map, ["HIGH", "HIGHPRICE"])
         low_col = _first_existing(column_map, ["LOW", "LOWPRICE"])
         close_col = _first_existing(column_map, ["CLOSE", "CLOSEPRICE", "LAST"])
-        volume_col = _first_existing(column_map, ["TOTTRDQTY", "TOTTRD_QTY", "VOLUME"])
+        volume_col = _first_existing(
+            column_map,
+            ["TOTTRDQTY", "TOTTRD_QTY", "TTL_TRD_QNTY", "TTLTRDQNTY", "VOLUME"],
+        )
         date_col = _first_existing(column_map, ["TIMESTAMP", "DATE1", "DATE", "TRADINGDATE"])
         required = [symbol_col, open_col, high_col, low_col, close_col, volume_col]
         if any(column is None for column in required):
