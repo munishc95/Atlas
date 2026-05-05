@@ -131,6 +131,10 @@ def test_signal_engine_uses_asof_without_lookahead() -> None:
         assert any(signal.get("side") == "BUY" for signal in with_fill.signals)
         top = with_fill.signals[0]
         assert str(top.get("signal_at")) < str(top.get("fill_at"))
+        assert float(top["stop_price"]) < float(top["entry_price"])
+        assert float(top["target_1_price"]) > float(top["entry_price"])
+        assert float(top["target_2_price"]) > float(top["target_1_price"])
+        assert float(top["risk_per_share"]) == float(top["stop_distance"])
 
 
 def test_signal_engine_falls_back_for_older_dataset_outside_live_window() -> None:

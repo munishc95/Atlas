@@ -341,6 +341,14 @@ def test_preview_does_not_create_orders() -> None:
         assert response.status_code == 200
         payload = response.json()["data"]
         assert payload["generated_signals_count"] >= 1
+        assert payload["trade_plan"]["risk_amount"] > 0
+        first_signal = payload["signals"][0]
+        assert first_signal["entry_price"] > 0
+        assert first_signal["stop_price"] > 0
+        assert first_signal["target_1_price"] > 0
+        assert first_signal["target_2_price"] > first_signal["target_1_price"]
+        assert first_signal["planned_qty"] > 0
+        assert first_signal["planned_risk_amount"] > 0
         after = client.get("/api/paper/orders").json()["data"]
         assert len(after) == len(before)
 

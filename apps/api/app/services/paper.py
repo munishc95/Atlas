@@ -712,6 +712,66 @@ def _position_size_lots(
     return int(np.floor(risk_amount / (stop_distance * lot_size)))
 
 
+def _preview_trade_plan(
+    signal: dict[str, Any],
+    *,
+    equity: float,
+    risk_per_trade: float,
+) -> dict[str, Any]:
+    row = dict(signal)
+    side = str(row.get("side", "BUY")).strip().upper()
+    entry_price = float(row.get("entry_price") or row.get("price") or 0.0)
+    stop_distance = float(row.get("stop_distance") or row.get("risk_per_share") or 0.0)
+    lot_size = max(1, int(row.get("lot_size", 1) or 1))
+    instrument_kind = str(row.get("instrument_kind", "EQUITY_CASH")).upper()
+    risk_budget = max(0.0, float(equity) * max(0.0, float(risk_per_trade)))
+
+    if entry_price > 0 and stop_distance > 0:
+        if "stop_price" not in row or row.get("stop_price") in {None, 0}:
+            row["stop_price"] = (
+                max(0.0, entry_price - stop_distance)
+                if side == "BUY"
+                else entry_price + stop_distance
+            )
+        if "target_1_price" not in row or row.get("target_1_price") in {None, 0}:
+            row["target_1_price"] = (
+                entry_price + stop_distance
+                if side == "BUY"
+                else max(0.0, entry_price - stop_distance)
+            )
+        if "target_2_price" not in row or row.get("target_2_price") in {None, 0}:
+            row["target_2_price"] = (
+                entry_price + (2.0 * stop_distance)
+                if side == "BUY"
+                else max(0.0, entry_price - (2.0 * stop_distance))
+            )
+
+    if _is_futures_kind(instrument_kind):
+        qty_lots = _position_size_lots(equity, risk_per_trade, stop_distance, lot_size)
+        qty = qty_lots * lot_size
+    else:
+        qty = _adjust_qty_for_lot(
+            _position_size(equity, risk_per_trade, stop_distance),
+            lot_size,
+        )
+        qty_lots = max(1, int(np.floor(qty / lot_size))) if qty > 0 else 0
+
+    row["risk_budget"] = float(risk_budget)
+    row["risk_per_share"] = float(stop_distance)
+    row["planned_qty"] = int(qty)
+    row["planned_qty_lots"] = int(qty_lots)
+    row["planned_position_value"] = float(qty * entry_price) if entry_price > 0 else 0.0
+    row["planned_risk_amount"] = float(qty * stop_distance) if stop_distance > 0 else 0.0
+    row["position_size_status"] = (
+        "OK"
+        if qty > 0
+        else "ZERO_QTY_RISK_CAP"
+        if entry_price > 0 and stop_distance > 0
+        else "INVALID_PRICE_OR_STOP"
+    )
+    return row
+
+
 def _is_futures_kind(instrument_kind: str) -> bool:
     return str(instrument_kind).upper() in FUTURE_KINDS
 
@@ -4823,9 +4883,23 @@ def preview_policy_signals(
         if active_ensemble is not None
         else None
     )
+    trade_plan_context = {
+        "equity": float(state.equity),
+        "risk_per_trade": float(policy.get("risk_per_trade", 0.0)),
+        "risk_amount": float(state.equity) * float(policy.get("risk_per_trade", 0.0)),
+        "max_positions": int(policy.get("max_positions", 0)),
+    }
+    planned_signals = [
+        _preview_trade_plan(
+            dict(signal),
+            equity=float(state.equity),
+            risk_per_trade=float(policy.get("risk_per_trade", 0.0)),
+        )
+        for signal in generated.signals
+    ]
     quality_counts: dict[str, int] = {"PASS": 0, "WARN": 0, "FAIL": 0}
     quality_fail_reasons: dict[str, int] = {}
-    for signal in generated.signals:
+    for signal in planned_signals:
         status = str(signal.get("quality_status", "PASS")).strip().upper()
         if status not in quality_counts:
             status = "WARN"
@@ -4844,9 +4918,10 @@ def preview_policy_signals(
         "health_status": policy.get("health_status"),
         "health_reasons": policy.get("health_reasons", []),
         "signals_source": "generated",
-        "generated_signals_count": len(generated.signals),
+        "generated_signals_count": len(planned_signals),
         "selected_signals_count": 0,
-        "signals": generated.signals,
+        "signals": planned_signals,
+        "trade_plan": trade_plan_context,
         "candidate_quality": {
             "counts": quality_counts,
             "fail_reasons": quality_fail_reasons,

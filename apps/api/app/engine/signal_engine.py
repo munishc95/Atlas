@@ -120,6 +120,35 @@ def _load_signal_frame(
     )
 
 
+def _trade_plan_prices(side: str, entry_price: float, stop_distance: float) -> dict[str, float]:
+    normalized_side = str(side or "BUY").strip().upper()
+    if entry_price <= 0 or stop_distance <= 0:
+        return {
+            "entry_price": float(entry_price),
+            "stop_price": 0.0,
+            "target_1_price": 0.0,
+            "target_2_price": 0.0,
+            "risk_per_share": 0.0,
+        }
+    if normalized_side == "SELL":
+        stop_price = entry_price + stop_distance
+        target_1 = max(0.0, entry_price - stop_distance)
+        target_2 = max(0.0, entry_price - (2.0 * stop_distance))
+    else:
+        stop_price = max(0.0, entry_price - stop_distance)
+        target_1 = entry_price + stop_distance
+        target_2 = entry_price + (2.0 * stop_distance)
+    return {
+        "entry_price": float(entry_price),
+        "stop_price": float(stop_price),
+        "target_1_price": float(target_1),
+        "target_2_price": float(target_2),
+        "target_1_r": 1.0,
+        "target_2_r": 2.0,
+        "risk_per_share": float(stop_distance),
+    }
+
+
 def _normalize_templates(values: list[str] | None) -> list[str]:
     available = {template.key for template in list_templates()}
     selected = [str(value).strip() for value in (values or []) if str(value).strip()]
@@ -809,6 +838,7 @@ def generate_signals_for_policy(
                         + weights["stability"] * stability_component
                         + weights["quality"] * quality_score
                     )
+                    trade_plan_prices = _trade_plan_prices(side, price, stop_distance)
 
                     ranked.append(
                         {
@@ -818,6 +848,7 @@ def generate_signals_for_policy(
                             "template": template_key,
                             "timeframe": timeframe,
                             "price": price,
+                            **trade_plan_prices,
                             "stop_distance": stop_distance,
                             "target_price": target_price,
                             "signal_strength": float(ranking_score),

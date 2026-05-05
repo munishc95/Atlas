@@ -138,8 +138,21 @@ export type ApiPaperSignal = {
   instrument_kind?: string;
   lot_size?: number;
   price: number;
+  entry_price?: number;
+  stop_price?: number;
   stop_distance: number;
   target_price?: number | null;
+  target_1_price?: number | null;
+  target_2_price?: number | null;
+  target_1_r?: number;
+  target_2_r?: number;
+  risk_budget?: number;
+  risk_per_share?: number;
+  planned_qty?: number;
+  planned_qty_lots?: number;
+  planned_position_value?: number;
+  planned_risk_amount?: number;
+  position_size_status?: string;
   signal_strength: number;
   quality_score?: number;
   quality_status?: "PASS" | "WARN" | "FAIL" | string;
@@ -171,6 +184,12 @@ export type ApiPaperSignalPreview = {
   evaluated_candidates?: number;
   total_symbols?: number;
   signals: ApiPaperSignal[];
+  trade_plan?: {
+    equity?: number;
+    risk_per_trade?: number;
+    risk_amount?: number;
+    max_positions?: number;
+  };
   candidate_quality?: {
     counts?: Record<string, number>;
     fail_reasons?: Record<string, number>;

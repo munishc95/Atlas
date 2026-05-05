@@ -28,6 +28,22 @@ function qualityBadgeClass(status: string | undefined): string {
   return "bg-success/15 text-success";
 }
 
+function formatMoney(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `INR ${value.toLocaleString("en-IN", {
+    maximumFractionDigits: value >= 100 ? 0 : 2,
+    minimumFractionDigits: value >= 100 ? 0 : 2,
+  })}`;
+}
+
+function formatNumber(value: number | null | undefined, digits = 2): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("en-IN", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  });
+}
+
 export default function PaperTradingPage() {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -671,6 +687,13 @@ export default function PaperTradingPage() {
               {preview.scanned_symbols ?? 0}/{preview.total_symbols ?? 0}
               {preview.scan_truncated ? " (truncated)" : ""}
             </p>
+            <p>
+              <span className="text-muted">Trade plan:</span> equity{" "}
+              {formatMoney(preview.trade_plan?.equity)}, risk/trade{" "}
+              {formatMoney(preview.trade_plan?.risk_amount)} (
+              {((preview.trade_plan?.risk_per_trade ?? 0) * 100).toFixed(2)}%), max positions{" "}
+              {preview.trade_plan?.max_positions ?? "-"}
+            </p>
             <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
               <table className="w-full text-xs">
                 <thead className="bg-surface text-left text-muted">
@@ -679,21 +702,51 @@ export default function PaperTradingPage() {
                     <th className="px-2 py-2">Side</th>
                     <th className="px-2 py-2">Instrument</th>
                     <th className="px-2 py-2">Template</th>
-                    <th className="px-2 py-2">Strength</th>
+                    <th className="px-2 py-2">Plan</th>
+                    <th className="px-2 py-2">Size</th>
                     <th className="px-2 py-2">Quality</th>
                     <th className="px-2 py-2">Flags</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.signals.slice(0, 50).map((signal) => (
-                    <tr key={`${signal.symbol}-${signal.template}-${signal.timeframe}`} className="border-t border-border">
+                  {preview.signals.slice(0, 50).map((signal, index) => (
+                    <tr
+                      key={`${signal.symbol}-${signal.template}-${signal.timeframe}-${index}`}
+                      className="border-t border-border"
+                    >
                       <td className="px-2 py-2">{signal.symbol}</td>
                       <td className="px-2 py-2">{signal.side}</td>
                       <td className="px-2 py-2">
                         {signal.instrument_kind ?? "EQUITY_CASH"} ({signal.lot_size ?? 1})
                       </td>
                       <td className="px-2 py-2">{signal.template}</td>
-                      <td className="px-2 py-2">{signal.signal_strength.toFixed(3)}</td>
+                      <td className="px-2 py-2 tabular-nums">
+                        <div className="grid min-w-[156px] grid-cols-2 gap-x-3 gap-y-1">
+                          <span className="text-muted">Entry</span>
+                          <span>{formatNumber(signal.entry_price ?? signal.price)}</span>
+                          <span className="text-muted">Stop</span>
+                          <span>{formatNumber(signal.stop_price)}</span>
+                          <span className="text-muted">T1</span>
+                          <span>{formatNumber(signal.target_1_price)}</span>
+                          <span className="text-muted">T2</span>
+                          <span>{formatNumber(signal.target_2_price)}</span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 tabular-nums">
+                        <div className="grid min-w-[150px] grid-cols-2 gap-x-3 gap-y-1">
+                          <span className="text-muted">Qty</span>
+                          <span>{signal.planned_qty ?? 0}</span>
+                          <span className="text-muted">Risk</span>
+                          <span>{formatMoney(signal.planned_risk_amount)}</span>
+                          <span className="text-muted">Value</span>
+                          <span>{formatMoney(signal.planned_position_value)}</span>
+                          <span className="text-muted">Strength</span>
+                          <span>{signal.signal_strength.toFixed(3)}</span>
+                        </div>
+                        {signal.position_size_status && signal.position_size_status !== "OK" ? (
+                          <p className="mt-1 text-[10px] text-warning">Risk cap gives 0 qty</p>
+                        ) : null}
+                      </td>
                       <td className="px-2 py-2">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}>
                           {signal.quality_status ?? "PASS"} {signal.quality_score?.toFixed(2) ?? ""}
