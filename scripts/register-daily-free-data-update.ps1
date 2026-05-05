@@ -2,7 +2,11 @@ param(
     [string]$TaskName = "Atlas Free NSE Daily Update",
     [string]$StartTime = "18:45",
     [int]$BundleId = 3674,
-    [int]$LookbackDays = 10
+    [int]$LookbackDays = 10,
+    [int]$CorporateActionLookbackDays = 180,
+    [int]$EventRiskLookbackDays = 30,
+    [int]$EventRiskForwardDays = 120,
+    [switch]$SkipEventRisk
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,8 +25,15 @@ $ActionArgs = @(
     "-ExecutionPolicy", "Bypass",
     "-File", "`"$UpdateScript`"",
     "-BundleId", "$BundleId",
-    "-LookbackDays", "$LookbackDays"
-) -join " "
+    "-LookbackDays", "$LookbackDays",
+    "-CorporateActionLookbackDays", "$CorporateActionLookbackDays",
+    "-EventRiskLookbackDays", "$EventRiskLookbackDays",
+    "-EventRiskForwardDays", "$EventRiskForwardDays"
+)
+if ($SkipEventRisk) {
+    $ActionArgs += "-SkipEventRisk"
+}
+$ActionArgs = $ActionArgs -join " "
 
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ActionArgs -WorkingDirectory $RepoRoot
 $Trigger = New-ScheduledTaskTrigger -Daily -At $At
@@ -40,7 +51,7 @@ Register-ScheduledTask `
     -Trigger $Trigger `
     -Settings $Settings `
     -Principal $Principal `
-    -Description "Pulls free NSE bhavcopy EOD data into Atlas using a rolling recent window." `
+    -Description "Pulls free NSE bhavcopy, corporate actions, and event-risk data into Atlas." `
     -Force | Out-Null
 
 $Task = Get-ScheduledTask -TaskName $TaskName

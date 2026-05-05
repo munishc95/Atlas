@@ -278,6 +278,29 @@ def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, An
     }
 
 
+def _market_context_quality_for_side(
+    market_context: dict[str, Any],
+    *,
+    side: str,
+) -> dict[str, Any]:
+    side_norm = str(side or "BUY").upper()
+    flags = [str(flag) for flag in market_context.get("flags", [])]
+    status = str(market_context.get("status", "PASS")).upper()
+    if side_norm == "SELL":
+        bearish_flags = {
+            "market_breadth_breakdown",
+            "market_breadth_weak",
+            "market_breadth_deteriorating",
+            "market_momentum_negative",
+        }
+        adverse_flags = [flag for flag in flags if flag not in bearish_flags]
+        return {
+            "status": status if adverse_flags else "PASS",
+            "flags": adverse_flags,
+        }
+    return {"status": status, "flags": flags}
+
+
 def _upcoming_action_quality(
     *,
     session: Session,
@@ -776,15 +799,19 @@ def generate_signals_for_policy(
         if symbol in corr_map and corr_map[symbol]:
             row["correlations"] = corr_map[symbol]
         row["market_context"] = market_context
-        if market_context["status"] != "PASS":
+        market_quality = _market_context_quality_for_side(
+            market_context,
+            side=str(row.get("side", "BUY")),
+        )
+        if market_quality["status"] != "PASS":
             existing_flags = [str(flag) for flag in row.get("quality_flags", [])]
-            for flag in market_context["flags"]:
+            for flag in market_quality["flags"]:
                 if flag not in existing_flags:
                     existing_flags.append(str(flag))
             row["quality_flags"] = existing_flags
             row["quality_status"] = _status_min(
                 str(row.get("quality_status", "PASS")),
-                str(market_context["status"]),
+                str(market_quality["status"]),
             )
 
     ranked.sort(

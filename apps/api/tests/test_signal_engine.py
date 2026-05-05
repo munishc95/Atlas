@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
@@ -8,7 +9,11 @@ from sqlmodel import Session
 
 from app.core.config import get_settings
 from app.db.session import engine
-from app.engine.signal_engine import _market_context_from_frames, generate_signals_for_policy
+from app.engine.signal_engine import (
+    _market_context_from_frames,
+    _market_context_quality_for_side,
+    generate_signals_for_policy,
+)
 from app.services.data_store import DataStore
 from app.services.event_risk import evaluate_event_risk
 
@@ -243,6 +248,20 @@ def test_market_context_flags_breadth_breakdown() -> None:
     assert "market_breadth_breakdown" in context["flags"]
 
 
+def test_bearish_market_context_does_not_fail_sell_candidates() -> None:
+    context = {
+        "status": "FAIL",
+        "flags": ["market_breadth_breakdown", "market_momentum_negative"],
+    }
+
+    buy_quality = _market_context_quality_for_side(context, side="BUY")
+    sell_quality = _market_context_quality_for_side(context, side="SELL")
+
+    assert buy_quality["status"] == "FAIL"
+    assert sell_quality["status"] == "PASS"
+    assert sell_quality["flags"] == []
+
+
 def test_event_risk_calendar_blocks_known_market_event() -> None:
     risk = evaluate_event_risk(asof_date=pd.Timestamp("2024-06-03").date(), symbol="RELIANCE")
 
@@ -259,3 +278,33 @@ def test_event_risk_can_be_disabled_by_override() -> None:
 
     assert risk["status"] == "PASS"
     assert risk["flags"] == []
+
+
+def test_event_risk_loads_manual_and_generated_calendars(tmp_path: Path) -> None:
+    manual = tmp_path / "manual.csv"
+    generated = tmp_path / "generated.csv"
+    header = (
+        "event_date,scope,symbol,event_type,severity,title,source,"
+        "blackout_before_days,blackout_after_days\n"
+    )
+    manual.write_text(
+        header + "2026-05-11,MARKET,,MACRO,WARN,Market event,manual,1,0\n",
+        encoding="utf-8",
+    )
+    generated.write_text(
+        header + "2026-05-12,SYMBOL,ABC,RESULTS,BLOCK,ABC results,generated,2,1\n",
+        encoding="utf-8",
+    )
+
+    risk = evaluate_event_risk(
+        asof_date=pd.Timestamp("2026-05-11").date(),
+        symbol="ABC",
+        overrides={
+            "event_risk_calendar_path": str(manual),
+            "event_risk_generated_calendar_path": str(generated),
+        },
+    )
+
+    assert risk["status"] == "FAIL"
+    assert "event_risk:macro:market:2026-05-11" in risk["flags"]
+    assert "event_risk:results:ABC:2026-05-12" in risk["flags"]

@@ -90,14 +90,29 @@ def _status_min(left: str, right: str) -> str:
     return left_norm if STATUS_RANK.get(left_norm, 2) <= STATUS_RANK.get(right_norm, 2) else right_norm
 
 
-def _calendar_path(settings: Settings, overrides: dict[str, Any] | None = None) -> Path:
+def _calendar_paths(settings: Settings, overrides: dict[str, Any] | None = None) -> list[Path]:
     scope = dict(overrides or {})
-    configured = str(
+    manual = str(
         scope.get("event_risk_calendar_path")
         or getattr(settings, "event_risk_calendar_path", "")
         or ""
     ).strip()
-    return Path(configured or "data/reference/event_risk_calendar.csv")
+    generated = str(
+        scope.get("event_risk_generated_calendar_path")
+        or getattr(settings, "event_risk_generated_calendar_path", "")
+        or ""
+    ).strip()
+    paths: list[Path] = [Path(manual or "data/reference/event_risk_calendar.csv")]
+    if generated:
+        paths.append(Path(generated))
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            deduped.append(path)
+            seen.add(key)
+    return deduped
 
 
 def load_event_risk_calendar(
@@ -109,10 +124,10 @@ def load_event_risk_calendar(
     enabled = bool(scope.get("event_risk_enabled", getattr(resolved, "event_risk_enabled", True)))
     if not enabled:
         return []
-    path = _calendar_path(resolved, scope)
-    if not path.exists():
+    frames = [pd.read_csv(path) for path in _calendar_paths(resolved, scope) if path.exists()]
+    if not frames:
         return []
-    frame = pd.read_csv(path)
+    frame = pd.concat(frames, ignore_index=True)
     if frame.empty:
         return []
     frame.columns = [str(column).strip().lower() for column in frame.columns]
@@ -146,7 +161,18 @@ def load_event_risk_calendar(
                 blackout_after_days=_coerce_int(row.get("blackout_after_days"), 0),
             )
         )
-    return sorted(rows, key=lambda item: (item.event_date, item.scope, item.symbol, item.event_type))
+    unique: dict[tuple[date, str, str, str, str], EventRisk] = {}
+    for event in rows:
+        unique[
+            (
+                event.event_date,
+                event.scope,
+                event.symbol,
+                event.event_type,
+                event.source,
+            )
+        ] = event
+    return sorted(unique.values(), key=lambda item: (item.event_date, item.scope, item.symbol, item.event_type))
 
 
 def evaluate_event_risk(

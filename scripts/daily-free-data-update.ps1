@@ -2,8 +2,11 @@ param(
     [int]$BundleId = 3674,
     [int]$LookbackDays = 10,
     [int]$CorporateActionLookbackDays = 180,
+    [int]$EventRiskLookbackDays = 30,
+    [int]$EventRiskForwardDays = 120,
     [double]$ThrottleSeconds = 0.05,
-    [switch]$RunQuality
+    [switch]$RunQuality,
+    [switch]$SkipEventRisk
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +18,8 @@ New-Item -ItemType Directory -Force -Path $LogsRoot | Out-Null
 $RunDate = Get-Date
 $StartDate = $RunDate.Date.AddDays(-1 * [Math]::Max(1, $LookbackDays)).ToString("yyyy-MM-dd")
 $CorporateActionStartDate = $RunDate.Date.AddDays(-1 * [Math]::Max(1, $CorporateActionLookbackDays)).ToString("yyyy-MM-dd")
+$EventRiskStartDate = $RunDate.Date.AddDays(-1 * [Math]::Max(1, $EventRiskLookbackDays)).ToString("yyyy-MM-dd")
+$EventRiskEndDate = $RunDate.Date.AddDays([Math]::Max(1, $EventRiskForwardDays)).ToString("yyyy-MM-dd")
 $EndDate = $RunDate.Date.ToString("yyyy-MM-dd")
 $LogPath = Join-Path $LogsRoot ("daily-free-data-update-{0}.log" -f $RunDate.ToString("yyyyMMdd-HHmmss"))
 
@@ -40,6 +45,9 @@ try {
     Write-Host "Bundle: $BundleId"
     Write-Host "Window: $StartDate to $EndDate"
     Write-Host "Corporate action window: $CorporateActionStartDate to $EndDate"
+    if (-not $SkipEventRisk) {
+        Write-Host "Event risk window: $EventRiskStartDate to $EventRiskEndDate"
+    }
     Write-Host "Log: $LogPath"
     & python @ImportArgs
     if ($LASTEXITCODE -ne 0) {
@@ -54,6 +62,17 @@ try {
     )
     if ($LASTEXITCODE -ne 0) {
         throw "Corporate action importer exited with code $LASTEXITCODE"
+    }
+    if (-not $SkipEventRisk) {
+        & python @(
+            "scripts/free_event_risk_sync.py",
+            "--bundle-id", "$BundleId",
+            "--start-date", $EventRiskStartDate,
+            "--end-date", $EventRiskEndDate
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Event-risk sync exited with code $LASTEXITCODE"
+        }
     }
     Write-Host "Atlas free NSE daily update finished"
 }
