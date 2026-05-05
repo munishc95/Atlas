@@ -261,6 +261,10 @@ class ReplayRunRequest(BaseModel):
     end_date: str
     seed: int | None = None
     window_days: int | None = None
+    include_signal_audit: bool | None = None
+    audit_offsets_days: list[int] | None = None
+    audit_min_upside_pct: float | None = None
+    audit_max_signals_per_checkpoint: int | None = None
 
 
 class RuntimeSettingsRequest(BaseModel):

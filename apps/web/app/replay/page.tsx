@@ -23,6 +23,24 @@ function priorIso(days: number): string {
   return now.toISOString().slice(0, 10);
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
+}
+
+function pct(value: unknown): string {
+  const number = typeof value === "number" ? value : Number(value ?? 0);
+  return `${(number * 100).toFixed(1)}%`;
+}
+
+function pctPoints(value: unknown): string {
+  const number = typeof value === "number" ? value : Number(value ?? 0);
+  return `${number.toFixed(2)}%`;
+}
+
 export default function ReplayPage() {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -32,6 +50,9 @@ export default function ReplayPage() {
   const [startDate, setStartDate] = useState(priorIso(90));
   const [endDate, setEndDate] = useState(todayIso());
   const [seed, setSeed] = useState("7");
+  const [includeSignalAudit, setIncludeSignalAudit] = useState(true);
+  const [auditMinUpsidePct, setAuditMinUpsidePct] = useState("2");
+  const [auditMaxSignals, setAuditMaxSignals] = useState("25");
 
   const universesQuery = useQuery({
     queryKey: qk.universes,
@@ -77,6 +98,10 @@ export default function ReplayPage() {
           start_date: startDate,
           end_date: endDate,
           seed: Number(seed) || 7,
+          include_signal_audit: includeSignalAudit,
+          audit_offsets_days: [7, 14, 30],
+          audit_min_upside_pct: Number(auditMinUpsidePct) || 2,
+          audit_max_signals_per_checkpoint: Number(auditMaxSignals) || 25,
         })
       ).data,
     onSuccess: (data) => {
@@ -111,6 +136,18 @@ export default function ReplayPage() {
     const final = (summary.final ?? {}) as Record<string, unknown>;
     return (final.metrics ?? {}) as Record<string, unknown>;
   }, [selectedRun?.summary_json]);
+  const selectedSignalAudit = useMemo(() => {
+    const summary = asRecord(selectedRun?.summary_json);
+    return asRecord(summary.signal_audit);
+  }, [selectedRun?.summary_json]);
+  const selectedAuditSummary = useMemo(
+    () => asRecord(selectedSignalAudit.summary),
+    [selectedSignalAudit],
+  );
+  const selectedAuditCheckpoints = useMemo(
+    () => asArray(selectedSignalAudit.checkpoints),
+    [selectedSignalAudit],
+  );
 
   return (
     <div className="space-y-5">
@@ -176,6 +213,36 @@ export default function ReplayPage() {
               className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm"
               value={seed}
               onChange={(event) => setSeed(event.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              className="focus-ring h-4 w-4 rounded border-border"
+              checked={includeSignalAudit}
+              onChange={(event) => setIncludeSignalAudit(event.target.checked)}
+            />
+            Signal audit
+          </label>
+          <label className="text-xs text-muted">
+            Upside threshold %
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm"
+              value={auditMinUpsidePct}
+              onChange={(event) => setAuditMinUpsidePct(event.target.value)}
+            />
+          </label>
+          <label className="text-xs text-muted">
+            Max audit signals
+            <input
+              type="number"
+              min={1}
+              className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2 text-sm"
+              value={auditMaxSignals}
+              onChange={(event) => setAuditMaxSignals(event.target.value)}
             />
           </label>
         </div>
@@ -274,6 +341,55 @@ export default function ReplayPage() {
             <p>
               <span className="text-muted">Calmar:</span> {String(selectedFinalMetrics.calmar ?? "-")}
             </p>
+            {selectedSignalAudit.enabled ? (
+              <div className="space-y-3 border-t border-border pt-3">
+                <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  <div>
+                    <p className="text-muted">Eligible</p>
+                    <p className="text-base font-semibold">{String(selectedAuditSummary.eligible_count ?? 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Upside hit</p>
+                    <p className="text-base font-semibold">{pct(selectedAuditSummary.worked_rate)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Positive close</p>
+                    <p className="text-base font-semibold">{pct(selectedAuditSummary.positive_close_rate)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted">Stop hit</p>
+                    <p className="text-base font-semibold">{pct(selectedAuditSummary.stop_hit_rate)}</p>
+                  </div>
+                </div>
+                <div className="overflow-hidden rounded-xl border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-surface text-left text-muted">
+                      <tr>
+                        <th className="px-2 py-1.5">Checkpoint</th>
+                        <th className="px-2 py-1.5">Signals</th>
+                        <th className="px-2 py-1.5">Upside</th>
+                        <th className="px-2 py-1.5">Avg return</th>
+                        <th className="px-2 py-1.5">Avg drawdown</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedAuditCheckpoints.map((checkpoint) => {
+                        const summary = asRecord(checkpoint.summary);
+                        return (
+                          <tr key={String(checkpoint.asof_date)} className="border-t border-border">
+                            <td className="px-2 py-1.5">{String(checkpoint.asof_date ?? "-")}</td>
+                            <td className="px-2 py-1.5">{String(summary.eligible_count ?? 0)}</td>
+                            <td className="px-2 py-1.5">{pct(summary.worked_rate)}</td>
+                            <td className="px-2 py-1.5">{pctPoints(summary.avg_close_return_pct)}</td>
+                            <td className="px-2 py-1.5">{pctPoints(summary.avg_max_adverse_pct)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <a
                 href={atlasApi.replayExportJsonUrl(selectedRun.id)}

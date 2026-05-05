@@ -770,6 +770,10 @@ export const atlasApi = {
     end_date?: string;
     seed?: number;
     window_days?: number;
+    include_signal_audit?: boolean;
+    audit_offsets_days?: number[];
+    audit_min_upside_pct?: number;
+    audit_max_signals_per_checkpoint?: number;
   }) =>
     apiFetch<JobStart>("/api/replay/run", {
       method: "POST",
