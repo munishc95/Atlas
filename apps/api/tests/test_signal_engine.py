@@ -133,6 +133,47 @@ def test_signal_engine_uses_asof_without_lookahead() -> None:
         assert str(top.get("signal_at")) < str(top.get("fill_at"))
 
 
+def test_signal_engine_falls_back_for_older_dataset_outside_live_window() -> None:
+    provider = f"sig-old-{uuid4().hex[:8]}"
+    symbol = f"OLDWIN_{uuid4().hex[:6].upper()}"
+    store = _store()
+    frame = _flat_frame(90)
+    decision_idx = len(frame) - 2
+    frame.loc[decision_idx, ["open", "high", "low", "close"]] = [115.0, 122.0, 114.0, 121.0]
+    frame.loc[decision_idx, "volume"] = 2_200_000
+    frame.loc[len(frame) - 1, ["open", "high", "low", "close"]] = [121.5, 122.5, 120.0, 121.8]
+
+    with Session(engine) as session:
+        dataset = store.save_ohlcv(
+            session=session,
+            symbol=symbol,
+            timeframe="1d",
+            frame=frame,
+            provider=provider,
+        )
+        assert dataset.id is not None
+        result = generate_signals_for_policy(
+            session=session,
+            store=store,
+            dataset_id=dataset.id,
+            asof=pd.Timestamp("2026-05-05", tz="UTC"),
+            timeframes=["1d"],
+            allowed_templates=["trend_breakout"],
+            params_overrides={
+                "trend_breakout": {
+                    "trend_period": 10,
+                    "breakout_lookback": 15,
+                    "direction": "both",
+                }
+            },
+            symbol_scope="all",
+            max_symbols_scan=5,
+            seed=29,
+        )
+
+    assert any(signal.get("side") == "BUY" for signal in result.signals)
+
+
 def test_signal_engine_flags_weak_breakout_candidate_quality() -> None:
     provider = f"sig-quality-{uuid4().hex[:8]}"
     symbol = f"WEAKBRK_{uuid4().hex[:6].upper()}"

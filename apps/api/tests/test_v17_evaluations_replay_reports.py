@@ -16,6 +16,7 @@ from app.db.session import engine
 from app.main import app
 from app.services.data_store import DataStore
 from app.services.evaluations import execute_policy_evaluation
+from app.services.paper import _resolve_max_runtime_seconds
 from app.services.replay import execute_replay_run
 
 
@@ -344,11 +345,13 @@ def test_replay_signal_audit_measures_point_in_time_upside() -> None:
                 "audit_offsets_days": [9],
                 "audit_min_upside_pct": 5.0,
                 "audit_max_signals_per_checkpoint": 5,
+                "audit_max_runtime_seconds": 90,
             },
         )
 
     audit = ((result.get("summary", {}) or {}).get("signal_audit", {}) or {})
     assert audit.get("enabled") is True
+    assert audit.get("max_runtime_seconds") == 90
     assert audit.get("summary", {}).get("eligible_count", 0) >= 1
     assert audit.get("summary", {}).get("worked_count", 0) >= 1
     checkpoint = audit.get("checkpoints", [])[0]
@@ -356,6 +359,28 @@ def test_replay_signal_audit_measures_point_in_time_upside() -> None:
     first_signal = checkpoint["signals"][0]
     assert first_signal["worked"] is True
     assert first_signal["max_favorable_pct"] >= 5.0
+
+
+def test_signal_audit_runtime_cap_can_exceed_live_preview_default() -> None:
+    settings = get_settings()
+    requested = int(settings.autopilot_max_runtime_seconds) + 120
+
+    live_limited = _resolve_max_runtime_seconds(
+        {"max_runtime_seconds": requested},
+        {},
+        settings,
+    )
+    audit_limited = _resolve_max_runtime_seconds(
+        {
+            "max_runtime_seconds": requested,
+            "runtime_hard_cap_seconds": requested,
+        },
+        {},
+        settings,
+    )
+
+    assert live_limited == int(settings.autopilot_max_runtime_seconds)
+    assert audit_limited == requested
 
 
 def test_daily_report_pdf_endpoint_returns_pdf_bytes() -> None:

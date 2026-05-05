@@ -620,24 +620,23 @@ class DataStore:
         if not path.exists():
             return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
-        with self._connect_duckdb() as conn:
-            query = f"SELECT * FROM read_parquet('{path.as_posix()}')"
-            clauses: list[str] = []
-            params: list[object] = []
-
-            if start is not None:
-                clauses.append("datetime >= ?")
-                params.append(start.astimezone(UTC).isoformat())
-            if end is not None:
-                clauses.append("datetime <= ?")
-                params.append(end.astimezone(UTC).isoformat())
-            if clauses:
-                query += " WHERE " + " AND ".join(clauses)
-            query += " ORDER BY datetime"
-
-            frame = conn.execute(query, params).df()
-
+        frame = pd.read_parquet(path)
         frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
+        if start is not None:
+            start_ts = pd.Timestamp(start)
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.tz_localize("UTC")
+            else:
+                start_ts = start_ts.tz_convert("UTC")
+            frame = frame[frame["datetime"] >= start_ts]
+        if end is not None:
+            end_ts = pd.Timestamp(end)
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.tz_localize("UTC")
+            else:
+                end_ts = end_ts.tz_convert("UTC")
+            frame = frame[frame["datetime"] <= end_ts]
+        frame = frame.sort_values("datetime").reset_index(drop=True)
         resolved_adjustment_mode = self._resolve_adjustment_mode(session, adjustment_mode)
         if resolved_adjustment_mode == "ADJUSTED" and str(timeframe).strip().lower() == "1d":
             from app.services.corporate_actions import apply_adjustment_mode

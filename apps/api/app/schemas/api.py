@@ -265,6 +265,7 @@ class ReplayRunRequest(BaseModel):
     audit_offsets_days: list[int] | None = None
     audit_min_upside_pct: float | None = None
     audit_max_signals_per_checkpoint: int | None = None
+    audit_max_runtime_seconds: int | None = None
 
 
 class RuntimeSettingsRequest(BaseModel):

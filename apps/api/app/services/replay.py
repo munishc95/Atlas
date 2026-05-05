@@ -368,6 +368,7 @@ def _build_signal_audit(
 ) -> dict[str, Any]:
     min_upside_pct = max(0.1, _safe_float(payload.get("audit_min_upside_pct"), 2.0))
     max_signals = max(1, _safe_int(payload.get("audit_max_signals_per_checkpoint"), 25))
+    audit_runtime_seconds = max(60, _safe_int(payload.get("audit_max_runtime_seconds"), 180))
     checkpoints = _checkpoint_days(
         trading_days=trading_days,
         end_date=end_date,
@@ -388,6 +389,8 @@ def _build_signal_audit(
                 "timeframes": [timeframe],
                 "seed": int(seed),
                 "asof": _utc_datetime(asof_day).isoformat(),
+                "max_runtime_seconds": audit_runtime_seconds,
+                "runtime_hard_cap_seconds": audit_runtime_seconds,
             },
         )
         signals = list(preview.get("signals", []) or [])[:max_signals]
@@ -428,6 +431,7 @@ def _build_signal_audit(
         ),
         "min_upside_pct": float(min_upside_pct),
         "max_signals_per_checkpoint": int(max_signals),
+        "max_runtime_seconds": int(audit_runtime_seconds),
         "offsets_days": _audit_offsets(payload),
         "checkpoint_count": len(checkpoint_rows),
         "summary": _summarize_signal_outcomes(all_outcomes),

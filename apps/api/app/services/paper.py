@@ -1268,6 +1268,12 @@ def _resolve_max_runtime_seconds(
     hard_cap = int(
         state_settings.get("autopilot_max_runtime_seconds", settings.autopilot_max_runtime_seconds)
     )
+    try:
+        internal_hard_cap = int(payload.get("runtime_hard_cap_seconds"))
+    except (TypeError, ValueError):
+        internal_hard_cap = 0
+    if internal_hard_cap > 0:
+        hard_cap = max(hard_cap, internal_hard_cap)
     effective = max(1, min(max(1, int(requested)), max(1, hard_cap)))
     return clamp_job_timeout_seconds(settings=settings, requested=effective)
 

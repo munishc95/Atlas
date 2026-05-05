@@ -22,7 +22,9 @@ from app.strategies.templates import (
 )
 
 
-SignalMode = Literal["paper", "preview"]
+SignalMode = Literal["paper", "preview", "audit"]
+
+SIGNAL_LOOKBACK_DAYS = 760
 
 DEFAULT_RANKING_WEIGHTS: dict[str, float] = {
     "signal": 0.50,
@@ -61,6 +63,61 @@ def _filtered_frame(frame: pd.DataFrame, asof: pd.Timestamp | None) -> pd.DataFr
     if asof is not None:
         clean = clean[clean["datetime"] <= asof]
     return clean.reset_index(drop=True)
+
+
+def _query_window(asof: pd.Timestamp | None) -> tuple[datetime | None, datetime | None]:
+    if asof is None:
+        return None, None
+    start = (asof - pd.Timedelta(days=SIGNAL_LOOKBACK_DAYS)).to_pydatetime()
+    return start, asof.to_pydatetime()
+
+
+def _minimal_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    clean = frame.copy().sort_values("datetime").reset_index(drop=True)
+    atr_14 = atr(clean, period=14)
+    close = pd.to_numeric(clean["close"], errors="coerce")
+    return pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(clean["datetime"], utc=True),
+            "atr_14": atr_14,
+            "atr_pct": atr_14 / close.replace(0, np.nan),
+        }
+    )
+
+
+def _load_signal_frame(
+    *,
+    store: DataStore,
+    session: Session,
+    symbol: str,
+    timeframe: str,
+    asof: pd.Timestamp | None,
+    start: datetime | None,
+    end: datetime | None,
+) -> pd.DataFrame:
+    frame = _filtered_frame(
+        store.load_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            session=session,
+        ),
+        asof,
+    )
+    if len(frame) >= 50 or start is None:
+        return frame
+    return _filtered_frame(
+        store.load_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            end=end,
+            session=session,
+        ),
+        asof,
+    )
 
 
 def _normalize_templates(values: list[str] | None) -> list[str]:
@@ -513,8 +570,10 @@ def generate_signals_for_policy(
         )
 
     asof_ts = _asof_timestamp(asof)
+    query_start, query_end = _query_window(asof_ts)
     primary_frames: dict[str, pd.DataFrame] = {}
     ranked: list[dict[str, Any]] = []
+    scanned_symbols = 0
     evaluated_candidates = 0
     scan_truncated = len(symbols) < total_symbols
     started = time.monotonic()
@@ -531,8 +590,15 @@ def generate_signals_for_policy(
         if runtime_limit is not None and (time.monotonic() - started) >= runtime_limit:
             scan_truncated = True
             break
-        base = _filtered_frame(
-            store.load_ohlcv(symbol=symbol, timeframe=primary_timeframe, session=session), asof_ts
+        scanned_symbols += 1
+        base = _load_signal_frame(
+            store=store,
+            session=session,
+            symbol=symbol,
+            timeframe=primary_timeframe,
+            asof=asof_ts,
+            start=query_start,
+            end=query_end,
         )
         if len(base) < 50:
             continue
@@ -545,17 +611,19 @@ def generate_signals_for_policy(
             frame = (
                 base
                 if timeframe == primary_timeframe
-                else _filtered_frame(
-                    store.load_ohlcv(symbol=symbol, timeframe=timeframe, session=session),
-                    asof_ts,
+                else _load_signal_frame(
+                    store=store,
+                    session=session,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    asof=asof_ts,
+                    start=query_start,
+                    end=query_end,
                 )
             )
             if len(frame) < 50:
                 continue
-            features = _filtered_frame(
-                store.load_features(symbol=symbol, timeframe=timeframe, session=session),
-                asof_ts,
-            )
+            features = _minimal_feature_frame(frame)
             if len(features) < 50:
                 continue
             min_len = min(len(frame), len(features))
@@ -638,23 +706,17 @@ def generate_signals_for_policy(
                             timeframe=timeframe,
                         )
                         if futures_instrument is not None:
-                            fut_frame = _filtered_frame(
-                                store.load_ohlcv(
-                                    symbol=futures_instrument.symbol,
-                                    timeframe=timeframe,
-                                    session=session,
-                                ),
-                                asof_ts,
+                            fut_frame = _load_signal_frame(
+                                store=store,
+                                session=session,
+                                symbol=futures_instrument.symbol,
+                                timeframe=timeframe,
+                                asof=asof_ts,
+                                start=query_start,
+                                end=query_end,
                             )
                             if len(fut_frame) >= 2:
-                                fut_features = _filtered_frame(
-                                    store.load_features(
-                                        symbol=futures_instrument.symbol,
-                                        timeframe=timeframe,
-                                        session=session,
-                                    ),
-                                    asof_ts,
-                                )
+                                fut_features = _minimal_feature_frame(fut_frame)
                                 if len(fut_features) >= 2:
                                     fut_min_len = min(len(fut_frame), len(fut_features))
                                     fut_frame = fut_frame.tail(fut_min_len).reset_index(drop=True)
@@ -787,7 +849,7 @@ def generate_signals_for_policy(
         return SignalGenerationResult(
             signals=[],
             scan_truncated=scan_truncated,
-            scanned_symbols=len(symbols),
+            scanned_symbols=scanned_symbols,
             evaluated_candidates=evaluated_candidates,
             total_symbols=total_symbols,
         )
@@ -834,7 +896,7 @@ def generate_signals_for_policy(
     return SignalGenerationResult(
         signals=ranked,
         scan_truncated=scan_truncated,
-        scanned_symbols=len(symbols),
+        scanned_symbols=scanned_symbols,
         evaluated_candidates=evaluated_candidates,
         total_symbols=total_symbols,
     )

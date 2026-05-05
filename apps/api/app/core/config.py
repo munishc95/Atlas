@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])
     paper_short_squareoff_time: str = "15:20"
     autopilot_max_symbols_scan: int = 200
-    autopilot_max_runtime_seconds: int = 20
+    autopilot_max_runtime_seconds: int = 60
     reports_auto_generate_daily: bool = False
     health_window_days_short: int = 20
     health_window_days_long: int = 60
