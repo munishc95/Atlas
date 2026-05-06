@@ -33,6 +33,13 @@ export const qk = {
   paperOrders: ["paperOrders"] as const,
   paperSignalsPreview: (datasetId: number | null, regime: string) =>
     ["paperSignalsPreview", datasetId, regime] as const,
+  forwardJournal: (
+    bundleId?: number | null,
+    timeframe = "1d",
+    status?: string | null,
+    page = 1,
+    pageSize = 50,
+  ) => ["forwardJournal", bundleId ?? "all", timeframe, status ?? "all", page, pageSize] as const,
   operateStatus: ["operateStatus"] as const,
   operateHealth: (bundleId?: number | null, timeframe?: string | null) =>
     ["operateHealth", bundleId ?? "active", timeframe ?? "active"] as const,
@@ -120,7 +127,13 @@ export const qk = {
     bundleId?: number | null,
     timeframe?: string | null,
     tradingDate?: string | null,
-  ) => ["confidenceDrilldown", bundleId ?? "all", timeframe ?? "all", tradingDate ?? "latest"] as const,
+  ) =>
+    [
+      "confidenceDrilldown",
+      bundleId ?? "all",
+      timeframe ?? "all",
+      tradingDate ?? "latest",
+    ] as const,
   confidenceDrilldownSymbols: (
     bundleId?: number | null,
     timeframe?: string | null,

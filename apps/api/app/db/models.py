@@ -371,6 +371,57 @@ class PaperRun(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ForwardSignalJournal(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_forwardsignaljournal_bundle_signal", "bundle_id", "signal_date"),
+        Index("ix_forwardsignaljournal_status_created", "status", "created_at"),
+        Index("ix_forwardsignaljournal_symbol_signal", "symbol", "signal_date"),
+        Index("ix_forwardsignaljournal_digest", "signal_digest", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int | None = Field(default=None, foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    symbol: str = Field(index=True, max_length=32)
+    side: str = Field(default="BUY", max_length=8)
+    template: str = Field(default="", max_length=64)
+    quality_status: str = Field(default="PASS", index=True, max_length=8)
+    status: str = Field(default="OPEN", index=True, max_length=16)
+    signal_at: datetime = Field(index=True)
+    fill_at: datetime = Field(index=True)
+    signal_date: dt_date = Field(index=True)
+    fill_date: dt_date = Field(index=True)
+    entry_price: float
+    stop_price: float
+    target_1_price: float
+    target_2_price: float
+    planned_qty: int = 0
+    planned_risk_amount: float = 0.0
+    planned_position_value: float = 0.0
+    risk_per_share: float = 0.0
+    quality_score: float = 0.0
+    signal_strength: float = 0.0
+    min_entry_price: float = 0.0
+    max_entry_price: float = 0.0
+    latest_price: float | None = None
+    latest_bar_date: dt_date | None = None
+    max_favorable_pct: float = 0.0
+    max_adverse_pct: float = 0.0
+    close_return_pct: float = 0.0
+    t1_hit_at: datetime | None = Field(default=None, index=True)
+    t2_hit_at: datetime | None = Field(default=None, index=True)
+    stop_hit_at: datetime | None = Field(default=None, index=True)
+    exit_at: datetime | None = Field(default=None, index=True)
+    exit_reason: str | None = Field(default=None, max_length=32)
+    bars_observed: int = 0
+    horizon_bars: int = 5
+    signal_digest: str = Field(default="", max_length=128)
+    reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    signal_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now, index=True)
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
 class NoTradeSnapshot(SQLModel, table=True):
     __table_args__ = (
         Index("ix_notradesnapshot_bundle_timeframe_ts", "bundle_id", "timeframe", "ts"),

@@ -10,7 +10,11 @@ import { JobDrawer } from "@/components/jobs/job-drawer";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states";
 import { atlasApi } from "@/src/lib/api/endpoints";
 import { useJobStream } from "@/src/hooks/useJobStream";
-import type { ApiEffectiveTradingContext, ApiPaperSignalPreview } from "@/src/lib/api/types";
+import type {
+  ApiEffectiveTradingContext,
+  ApiForwardJournalSummary,
+  ApiPaperSignalPreview,
+} from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
 
 function isTypingElement(target: EventTarget | null): boolean {
@@ -26,6 +30,14 @@ function qualityBadgeClass(status: string | undefined): string {
   if (token === "FAIL") return "bg-danger/15 text-danger";
   if (token === "WARN") return "bg-warning/15 text-warning";
   return "bg-success/15 text-success";
+}
+
+function journalStatusClass(status: string | undefined): string {
+  const token = String(status ?? "OPEN").toUpperCase();
+  if (token === "STOP_HIT") return "bg-danger/15 text-danger";
+  if (token === "EXPIRED") return "bg-muted/15 text-muted";
+  if (token === "T1_HIT" || token === "T2_HIT") return "bg-success/15 text-success";
+  return "bg-accent/10 text-accent";
 }
 
 function formatMoney(value: number | null | undefined): string {
@@ -88,6 +100,18 @@ export default function PaperTradingPage() {
     queryFn: async () => (await atlasApi.operateStatus()).data,
     refetchInterval: 10_000,
   });
+  const forwardJournalQuery = useQuery({
+    queryKey: qk.forwardJournal(bundleId, "1d", null, 1, 50),
+    queryFn: async () =>
+      atlasApi.forwardJournal({
+        bundle_id: bundleId ?? undefined,
+        timeframe: "1d",
+        page: 1,
+        page_size: 50,
+      }),
+    enabled: bundleId !== null,
+    refetchInterval: 30_000,
+  });
 
   const state = paperStateQuery.data?.state;
   const paperMode = String(state?.settings_json?.paper_mode ?? "strategy");
@@ -101,7 +125,8 @@ export default function PaperTradingPage() {
   }, [paperMode]);
 
   const runStepMutation = useMutation({
-    mutationFn: async (payload: Record<string, unknown>) => (await atlasApi.paperRunStep(payload)).data,
+    mutationFn: async (payload: Record<string, unknown>) =>
+      (await atlasApi.paperRunStep(payload)).data,
     onSuccess: (result) => {
       setActiveJobId(result.job_id);
       toast.success("Paper step queued");
@@ -121,6 +146,46 @@ export default function PaperTradingPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not preview signals");
+    },
+  });
+
+  const captureJournalMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.captureForwardJournal({
+          regime: regimeQuery.data?.regime ?? "TREND_UP",
+          bundle_id: bundleId ?? undefined,
+          timeframe: "1d",
+          symbol_scope: "all",
+          max_symbols_scan: 500,
+          max_runtime_seconds: 60,
+          max_entry_extension_pct: 1,
+        })
+      ).data,
+    onSuccess: (payload) => {
+      queryClient.invalidateQueries({ queryKey: qk.forwardJournal(bundleId, "1d", null, 1, 50) });
+      toast.success(`Captured ${payload.captured_count} signals`);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not capture forward journal");
+    },
+  });
+
+  const evaluateJournalMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await atlasApi.evaluateForwardJournal({
+          bundle_id: bundleId ?? undefined,
+          timeframe: "1d",
+          horizon_bars: 5,
+        })
+      ).data,
+    onSuccess: (payload) => {
+      queryClient.invalidateQueries({ queryKey: qk.forwardJournal(bundleId, "1d", null, 1, 50) });
+      toast.success(`Evaluated ${payload.evaluated_count} journal rows`);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not evaluate forward journal");
     },
   });
 
@@ -185,9 +250,9 @@ export default function PaperTradingPage() {
     if (bundleId !== null) {
       return;
     }
-    const policyUniverse = (
-      activePolicy?.definition_json as Record<string, unknown> | undefined
-    )?.["universe"] as Record<string, unknown> | undefined;
+    const policyUniverse = (activePolicy?.definition_json as Record<string, unknown> | undefined)?.[
+      "universe"
+    ] as Record<string, unknown> | undefined;
     const policyBundle = Number(policyUniverse?.bundle_id);
     if (Number.isFinite(policyBundle) && policyBundle > 0) {
       setBundleId(policyBundle);
@@ -256,15 +321,22 @@ export default function PaperTradingPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [previewMutation.isPending, previewSignals, runStep, runStepMutation.isPending]);
 
-  const skippedSignals = (latestDecision?.skipped_signals as Array<Record<string, unknown>> | undefined) ?? [];
-  const selectedSignals = (latestDecision?.selected_signals as Array<Record<string, unknown>> | undefined) ?? [];
+  const skippedSignals =
+    (latestDecision?.skipped_signals as Array<Record<string, unknown>> | undefined) ?? [];
+  const selectedSignals =
+    (latestDecision?.selected_signals as Array<Record<string, unknown>> | undefined) ?? [];
   const costSummary = (latestDecision?.cost_summary as Record<string, unknown> | undefined) ?? {};
   const riskScaled = Boolean(latestDecision?.risk_scaled);
   const reportId = Number(latestDecision?.report_id ?? 0);
   const effectiveContext =
-    ((latestDecision?.effective_context as ApiEffectiveTradingContext | undefined) ??
-      (operateQuery.data?.effective_context as ApiEffectiveTradingContext | undefined) ??
-      null);
+    (latestDecision?.effective_context as ApiEffectiveTradingContext | undefined) ??
+    (operateQuery.data?.effective_context as ApiEffectiveTradingContext | undefined) ??
+    null;
+  const forwardJournalRows = forwardJournalQuery.data?.data ?? [];
+  const forwardJournalMeta = forwardJournalQuery.data?.meta ?? {};
+  const forwardJournalSummary =
+    (forwardJournalMeta.summary as ApiForwardJournalSummary | undefined) ?? null;
+  const journalCounts = forwardJournalSummary?.counts ?? {};
 
   const generateReportMutation = useMutation({
     mutationFn: async () =>
@@ -337,8 +409,8 @@ export default function PaperTradingPage() {
           </div>
         ) : null}
         <p className="mt-2 rounded-xl border border-border px-3 py-2 text-xs text-muted">
-          Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off {squareoffCutoff}) +
-          Futures swing (if available).
+          Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off{" "}
+          {squareoffCutoff}) + Futures swing (if available).
         </p>
         <p
           className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
@@ -362,7 +434,8 @@ export default function PaperTradingPage() {
           </p>
         ) : latestQuality?.status === "WARN" ? (
           <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            Data quality warning: {String(latestQuality.issues_json?.[0]?.message ?? "Check Ops page for details.")}
+            Data quality warning:{" "}
+            {String(latestQuality.issues_json?.[0]?.message ?? "Check Ops page for details.")}
           </p>
         ) : null}
         <div className="mt-3">
@@ -442,15 +515,143 @@ export default function PaperTradingPage() {
         {reportId > 0 ? (
           <p className="mt-2 text-xs text-muted">
             Latest run report:{" "}
-            <a
-              href="/reports"
-              className="text-accent underline-offset-2 hover:underline"
-            >
+            <a href="/reports" className="text-accent underline-offset-2 hover:underline">
               Report #{reportId}
             </a>
           </p>
         ) : null}
-        <p className="mt-2 text-xs text-muted">Shortcuts: Ctrl/Cmd+Enter run step, P preview signals.</p>
+        <p className="mt-2 text-xs text-muted">
+          Shortcuts: Ctrl/Cmd+Enter run step, P preview signals.
+        </p>
+      </section>
+
+      <section className="card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold">Forward Test Journal</h3>
+            <p className="mt-1 text-sm text-muted">
+              Captures actionable signals and tracks whether they hit target, stop, or expire.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => captureJournalMutation.mutate()}
+              className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
+              disabled={captureJournalMutation.isPending || bundleId === null}
+            >
+              {captureJournalMutation.isPending ? "Capturing..." : "Capture Signals"}
+            </button>
+            <button
+              type="button"
+              onClick={() => evaluateJournalMutation.mutate()}
+              className="focus-ring rounded-xl bg-accent px-3 py-2 text-sm text-white"
+              disabled={evaluateJournalMutation.isPending || bundleId === null}
+            >
+              {evaluateJournalMutation.isPending ? "Evaluating..." : "Evaluate Outcomes"}
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-5">
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Total: {forwardJournalSummary?.total ?? 0}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Open: {journalCounts.OPEN ?? 0}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            T1+: {(journalCounts.T1_HIT ?? 0) + (journalCounts.T2_HIT ?? 0)}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Stops: {journalCounts.STOP_HIT ?? 0}
+          </p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            T1 rate: {((forwardJournalSummary?.t1_or_better_rate ?? 0) * 100).toFixed(1)}%
+          </p>
+        </div>
+        {forwardJournalQuery.isLoading ? (
+          <LoadingState label="Loading forward journal" />
+        ) : forwardJournalQuery.isError ? (
+          <ErrorState
+            title="Could not load forward journal"
+            action="Retry after the API is available."
+            onRetry={() => {
+              void forwardJournalQuery.refetch();
+            }}
+          />
+        ) : forwardJournalRows.length === 0 ? (
+          <EmptyState
+            title="No captured signals"
+            action="Capture signals after the daily data refresh."
+          />
+        ) : (
+          <div className="mt-3 overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="bg-surface text-left text-muted">
+                <tr>
+                  <th className="px-3 py-2">Symbol</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Fill</th>
+                  <th className="px-3 py-2">Plan</th>
+                  <th className="px-3 py-2">Size</th>
+                  <th className="px-3 py-2">Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forwardJournalRows.map((row) => (
+                  <tr key={row.id} className="border-t border-border">
+                    <td className="px-3 py-2">
+                      <p className="font-medium">{row.symbol}</p>
+                      <p className="text-xs text-muted">{row.template}</p>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${journalStatusClass(row.status)}`}
+                      >
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">
+                      <p>{row.fill_date}</p>
+                      <p className="text-xs text-muted">
+                        {row.bars_observed}/{row.horizon_bars} bars
+                      </p>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">
+                      <div className="grid min-w-[150px] grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <span className="text-muted">Entry</span>
+                        <span>{formatNumber(row.entry_price)}</span>
+                        <span className="text-muted">Stop</span>
+                        <span>{formatNumber(row.stop_price)}</span>
+                        <span className="text-muted">T1</span>
+                        <span>{formatNumber(row.target_1_price)}</span>
+                        <span className="text-muted">T2</span>
+                        <span>{formatNumber(row.target_2_price)}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">
+                      <p>Qty {row.planned_qty}</p>
+                      <p className="text-xs text-muted">
+                        Risk {formatMoney(row.planned_risk_amount)}
+                      </p>
+                    </td>
+                    <td className="px-3 py-2 tabular-nums">
+                      <p>{formatNumber(row.close_return_pct)}%</p>
+                      <p className="text-xs text-muted">
+                        MFE {formatNumber(row.max_favorable_pct)}% / MAE{" "}
+                        {formatNumber(row.max_adverse_pct)}%
+                      </p>
+                      <p className="text-xs text-muted">
+                        Latest {formatNumber(row.latest_price)}{" "}
+                        {row.latest_bar_date ? `on ${row.latest_bar_date}` : ""}
+                      </p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
@@ -498,7 +699,8 @@ export default function PaperTradingPage() {
                     >
                       {position.instrument_kind.includes("FUT") ? "FUT" : "EQUITY"}
                     </span>
-                    {position.symbol} qty {position.qty} ({position.qty_lots} lots) @ {position.avg_price}
+                    {position.symbol} qty {position.qty} ({position.qty_lots} lots) @{" "}
+                    {position.avg_price}
                   </button>
                 </li>
               ))}
@@ -602,7 +804,8 @@ export default function PaperTradingPage() {
               <span className="text-muted">Lots:</span> {selectedPosition.qty_lots}
             </p>
             <p>
-              <span className="text-muted">Reserved margin:</span> {selectedPosition.margin_reserved}
+              <span className="text-muted">Reserved margin:</span>{" "}
+              {selectedPosition.margin_reserved}
             </p>
             <p>
               <span className="text-muted">Average price:</span> {selectedPosition.avg_price}
@@ -656,22 +859,30 @@ export default function PaperTradingPage() {
         ) : null}
       </DetailsDrawer>
 
-      <DetailsDrawer open={previewOpen} onClose={() => setPreviewOpen(false)} title="Signal preview">
+      <DetailsDrawer
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title="Signal preview"
+      >
         {!preview ? (
           <EmptyState title="No preview data" action="Run Preview Signals to inspect candidates." />
         ) : preview.signals.length === 0 ? (
-          <EmptyState title="No signals generated" action="Adjust policy, dataset, or timeframe settings." />
+          <EmptyState
+            title="No signals generated"
+            action="Adjust policy, dataset, or timeframe settings."
+          />
         ) : (
           <div className="space-y-2 text-sm">
             <p>
               <span className="text-muted">Regime:</span> {preview.regime}
             </p>
             <p>
-              <span className="text-muted">Generated candidates:</span> {preview.generated_signals_count}
+              <span className="text-muted">Generated candidates:</span>{" "}
+              {preview.generated_signals_count}
             </p>
             <p>
-              <span className="text-muted">Candidate quality:</span>{" "}
-              PASS {preview.candidate_quality?.counts?.PASS ?? 0} / WARN{" "}
+              <span className="text-muted">Candidate quality:</span> PASS{" "}
+              {preview.candidate_quality?.counts?.PASS ?? 0} / WARN{" "}
               {preview.candidate_quality?.counts?.WARN ?? 0} / FAIL{" "}
               {preview.candidate_quality?.counts?.FAIL ?? 0}
             </p>
@@ -683,8 +894,8 @@ export default function PaperTradingPage() {
               <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}
             </p>
             <p>
-              <span className="text-muted">Scan:</span>{" "}
-              {preview.scanned_symbols ?? 0}/{preview.total_symbols ?? 0}
+              <span className="text-muted">Scan:</span> {preview.scanned_symbols ?? 0}/
+              {preview.total_symbols ?? 0}
               {preview.scan_truncated ? " (truncated)" : ""}
             </p>
             <p>
@@ -748,7 +959,9 @@ export default function PaperTradingPage() {
                         ) : null}
                       </td>
                       <td className="px-2 py-2">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}
+                        >
                           {signal.quality_status ?? "PASS"} {signal.quality_score?.toFixed(2) ?? ""}
                         </span>
                       </td>
@@ -766,25 +979,35 @@ export default function PaperTradingPage() {
 
       <DetailsDrawer open={whyOpen} onClose={() => setWhyOpen(false)} title="Why this run step">
         {!latestDecision ? (
-          <EmptyState title="No completed step yet" action="Run a paper step to inspect decision reasons." />
+          <EmptyState
+            title="No completed step yet"
+            action="Run a paper step to inspect decision reasons."
+          />
         ) : (
           <div className="space-y-3 text-sm">
             <p>
-              <span className="text-muted">Policy mode:</span> {String(latestDecision.policy_mode ?? "-")}
+              <span className="text-muted">Policy mode:</span>{" "}
+              {String(latestDecision.policy_mode ?? "-")}
             </p>
             <p>
               <span className="text-muted">Selection reason:</span>{" "}
               {String(latestDecision.policy_selection_reason ?? "-")}
             </p>
             <p>
-              <span className="text-muted">Signals source:</span> {String(latestDecision.signals_source ?? "-")}
+              <span className="text-muted">Signals source:</span>{" "}
+              {String(latestDecision.signals_source ?? "-")}
             </p>
             <p>
-              <span className="text-muted">Execution mode:</span> {String(latestDecision.execution_mode ?? "LIVE")}
+              <span className="text-muted">Execution mode:</span>{" "}
+              {String(latestDecision.execution_mode ?? "LIVE")}
             </p>
             <p>
               <span className="text-muted">Safe mode:</span>{" "}
-              {String((latestDecision.safe_mode as Record<string, unknown> | undefined)?.active ? "active" : "inactive")}
+              {String(
+                (latestDecision.safe_mode as Record<string, unknown> | undefined)?.active
+                  ? "active"
+                  : "inactive",
+              )}
               {(() => {
                 const mode = latestDecision.safe_mode as Record<string, unknown> | undefined;
                 const reason = mode?.reason;
@@ -799,17 +1022,21 @@ export default function PaperTradingPage() {
               <span className="text-muted">Cost total:</span> {String(costSummary.total_cost ?? 0)}
             </p>
             <p>
-              <span className="text-muted">Engine:</span> {String(latestDecision.paper_engine ?? "legacy")}
+              <span className="text-muted">Engine:</span>{" "}
+              {String(latestDecision.paper_engine ?? "legacy")}
             </p>
             <p>
               <span className="text-muted">Repro:</span>{" "}
               {String(latestDecision.engine_version ?? "-")} / {String(latestDecision.seed ?? "-")}
             </p>
             <p className="truncate">
-              <span className="text-muted">Digest:</span> {String(latestDecision.data_digest ?? "-")}
+              <span className="text-muted">Digest:</span>{" "}
+              {String(latestDecision.data_digest ?? "-")}
             </p>
             <div className="rounded-xl border border-border p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Skipped reasons</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Skipped reasons
+              </p>
               {skippedSignals.length === 0 ? (
                 <p className="text-xs text-muted">No skipped signals.</p>
               ) : (
@@ -832,7 +1059,7 @@ export default function PaperTradingPage() {
       >
         {effectiveContext ? (
           <pre className="max-h-[360px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
-{JSON.stringify(effectiveContext, null, 2)}
+            {JSON.stringify(effectiveContext, null, 2)}
           </pre>
         ) : (
           <EmptyState title="Context unavailable" action="Run a paper step to populate context." />

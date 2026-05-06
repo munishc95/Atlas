@@ -53,6 +53,8 @@ from app.jobs.tasks import (
 from app.schemas.api import (
     CorporateActionsImportRequest,
     ConfidenceAggRecomputeRequest,
+    ForwardJournalCaptureRequest,
+    ForwardJournalEvaluateRequest,
     HistoricalBackfillRunRequest,
     AutoEvalRunRequest,
     BacktestRunRequest,
@@ -222,6 +224,12 @@ from app.services.paper import (
     get_or_create_paper_state,
     preview_policy_signals,
     update_runtime_settings,
+)
+from app.services.forward_journal import (
+    capture_forward_signals,
+    evaluate_forward_journal,
+    list_forward_journal,
+    serialize_forward_journal,
 )
 from app.services.evaluations import (
     get_policy_evaluation,
@@ -2999,6 +3007,71 @@ def paper_signals_preview(
             payload=payload.model_dump(),
             store=store,
         )
+    )
+
+
+@router.post("/paper/forward-journal/capture")
+def paper_forward_journal_capture(
+    payload: ForwardJournalCaptureRequest,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    return _data(
+        capture_forward_signals(
+            session=session,
+            settings=settings,
+            store=store,
+            payload=payload.model_dump(),
+        )
+    )
+
+
+@router.post("/paper/forward-journal/evaluate")
+def paper_forward_journal_evaluate(
+    payload: ForwardJournalEvaluateRequest,
+    session: Session = Depends(get_session),
+    store: DataStore = Depends(get_store),
+) -> dict[str, Any]:
+    return _data(
+        evaluate_forward_journal(
+            session=session,
+            store=store,
+            bundle_id=payload.bundle_id,
+            timeframe=payload.timeframe,
+            horizon_bars=payload.horizon_bars,
+            status=payload.status,
+        )
+    )
+
+
+@router.get("/paper/forward-journal")
+def paper_forward_journal(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    bundle_id: int | None = Query(default=None),
+    timeframe: str = Query(default="1d"),
+    status: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows, total, summary = list_forward_journal(
+        session,
+        page=page,
+        page_size=page_size,
+        bundle_id=bundle_id,
+        timeframe=timeframe,
+        status=status,
+    )
+    end = page * page_size
+    return _data(
+        [serialize_forward_journal(row) for row in rows],
+        meta={
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "has_next": end < total,
+            "summary": summary,
+        },
     )
 
 

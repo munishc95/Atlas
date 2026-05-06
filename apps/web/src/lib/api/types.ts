@@ -198,6 +198,57 @@ export type ApiPaperSignalPreview = {
   ensemble?: ApiPolicyEnsemble | null;
 };
 
+export type ApiForwardSignalJournal = {
+  id: number;
+  bundle_id?: number | null;
+  timeframe: string;
+  symbol: string;
+  side: "BUY" | "SELL" | string;
+  template: string;
+  quality_status: string;
+  status: string;
+  signal_at: string;
+  fill_at: string;
+  signal_date: string;
+  fill_date: string;
+  entry_price: number;
+  stop_price: number;
+  target_1_price: number;
+  target_2_price: number;
+  planned_qty: number;
+  planned_risk_amount: number;
+  planned_position_value: number;
+  risk_per_share: number;
+  quality_score: number;
+  signal_strength: number;
+  min_entry_price: number;
+  max_entry_price: number;
+  latest_price?: number | null;
+  latest_bar_date?: string | null;
+  max_favorable_pct: number;
+  max_adverse_pct: number;
+  close_return_pct: number;
+  t1_hit_at?: string | null;
+  t2_hit_at?: string | null;
+  stop_hit_at?: string | null;
+  exit_at?: string | null;
+  exit_reason?: string | null;
+  bars_observed: number;
+  horizon_bars: number;
+  reasons_json: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiForwardJournalSummary = {
+  total: number;
+  counts: Record<string, number>;
+  completed_count: number;
+  t1_or_better_count: number;
+  t1_or_better_rate: number;
+  avg_close_return_pct: number;
+};
+
 export type ApiPaperState = {
   id: number;
   equity: number;
@@ -395,10 +446,7 @@ export type ApiOperateStatus = {
   provider_stage_status?: string | null;
   recent_event_counts_24h?: Record<string, number>;
   fast_mode_enabled?: boolean;
-  last_job_durations?: Record<
-    string,
-    { duration_seconds: number; status: string; ts: string }
-  >;
+  last_job_durations?: Record<string, { duration_seconds: number; status: string; ts: string }>;
   health_short?: ApiPolicyHealthSnapshot | null;
   health_long?: ApiPolicyHealthSnapshot | null;
   effective_context?: ApiEffectiveTradingContext | null;
@@ -965,10 +1013,7 @@ export type ApiOperateHealth = {
   last_run_step_at?: string | null;
   recent_event_counts_24h: Record<string, number>;
   fast_mode_enabled?: boolean;
-  last_job_durations?: Record<
-    string,
-    { duration_seconds: number; status: string; ts: string }
-  >;
+  last_job_durations?: Record<string, { duration_seconds: number; status: string; ts: string }>;
 };
 
 export type ApiOperateRunSummary = {

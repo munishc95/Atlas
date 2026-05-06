@@ -125,6 +125,27 @@ class PaperSignalsPreviewRequest(BaseModel):
     asof: str | None = None
 
 
+class ForwardJournalCaptureRequest(BaseModel):
+    regime: str = "TREND_UP"
+    bundle_id: int | None = None
+    dataset_id: int | None = None
+    policy_id: int | None = None
+    timeframe: str = "1d"
+    symbol_scope: str | None = None
+    max_symbols_scan: int | None = None
+    max_runtime_seconds: int | None = None
+    seed: int | None = None
+    asof: str | None = None
+    max_entry_extension_pct: float = 1.0
+
+
+class ForwardJournalEvaluateRequest(BaseModel):
+    bundle_id: int | None = None
+    timeframe: str = "1d"
+    horizon_bars: int = Field(default=5, ge=1, le=60)
+    status: str | None = None
+
+
 class DailyReportGenerateRequest(BaseModel):
     date: str | None = None
     bundle_id: int | None = None

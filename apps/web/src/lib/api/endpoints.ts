@@ -23,6 +23,8 @@ import type {
   ApiDataQualityReport,
   ApiDataUpdateRun,
   ApiHistoricalBackfillRun,
+  ApiForwardJournalSummary,
+  ApiForwardSignalJournal,
   ApiProviderUpdateRun,
   ApiProvidersStatus,
   ApiProviderStatusTrend,
@@ -68,7 +70,11 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  runDataUpdates: (payload: { bundle_id: number; timeframe?: string; max_files_per_run?: number }) =>
+  runDataUpdates: (payload: {
+    bundle_id: number;
+    timeframe?: string;
+    max_files_per_run?: number;
+  }) =>
     apiFetch<JobStart>("/api/data/updates/run", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -139,7 +145,11 @@ export const atlasApi = {
       `/api/data/backfill/latest${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
-  historicalBackfillHistory: (params?: { bundle_id?: number; timeframe?: string; limit?: number }) => {
+  historicalBackfillHistory: (params?: {
+    bundle_id?: number;
+    timeframe?: string;
+    limit?: number;
+  }) => {
     const search = new URLSearchParams();
     if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
     if (params?.timeframe) search.set("timeframe", params.timeframe);
@@ -177,13 +187,15 @@ export const atlasApi = {
       `/api/data/adjustment/status${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
-  importMembershipHistory: (bundleId: number, payload: { path: string; mode?: "UPSERT" | "REPLACE" }) =>
+  importMembershipHistory: (
+    bundleId: number,
+    payload: { path: string; mode?: "UPSERT" | "REPLACE" },
+  ) =>
     apiFetch<Record<string, unknown>>(`/api/universes/${bundleId}/membership-history/import`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  trainDatasets: (limit = 100) =>
-    apiFetch<ApiTrainDataset[]>(`/api/train-datasets?limit=${limit}`),
+  trainDatasets: (limit = 100) => apiFetch<ApiTrainDataset[]>(`/api/train-datasets?limit=${limit}`),
   createTrainDataset: (payload: {
     name: string;
     bundle_id: number;
@@ -214,7 +226,11 @@ export const atlasApi = {
       file_exists: boolean;
       file_size_bytes: number;
     }>(`/api/train-datasets/${id}/download-info`),
-  upstoxMappingStatus: (params?: { bundle_id?: number; timeframe?: string; sample_limit?: number }) => {
+  upstoxMappingStatus: (params?: {
+    bundle_id?: number;
+    timeframe?: string;
+    sample_limit?: number;
+  }) => {
     const search = new URLSearchParams();
     if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
     if (params?.timeframe) search.set("timeframe", params.timeframe);
@@ -234,7 +250,11 @@ export const atlasApi = {
       `/api/providers/upstox/mapping/missing${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
-  importUpstoxMapping: (payload: { path: string; mode?: "UPSERT" | "REPLACE"; bundle_id?: number }) => {
+  importUpstoxMapping: (payload: {
+    path: string;
+    mode?: "UPSERT" | "REPLACE";
+    bundle_id?: number;
+  }) => {
     const search = new URLSearchParams();
     if (typeof payload.bundle_id === "number") search.set("bundle_id", String(payload.bundle_id));
     return apiFetch<{ run: ApiMappingImportRun; status: ApiUpstoxMappingStatus }>(
@@ -414,7 +434,9 @@ export const atlasApi = {
     if (typeof bundleId === "number") search.set("bundle_id", String(bundleId));
     if (timeframe) search.set("timeframe", timeframe);
     search.set("limit", String(limit));
-    return apiFetch<ApiDailyConfidenceAggregate[]>(`/api/confidence/agg/history?${search.toString()}`);
+    return apiFetch<ApiDailyConfidenceAggregate[]>(
+      `/api/confidence/agg/history?${search.toString()}`,
+    );
   },
   confidenceAggRecompute: (payload: {
     bundle_id: number;
@@ -453,7 +475,9 @@ export const atlasApi = {
     if (params.timeframe) search.set("timeframe", params.timeframe);
     if (params.only) search.set("only", params.only);
     if (typeof params.limit === "number") search.set("limit", String(params.limit));
-    return apiFetch<ApiConfidenceDrilldownSymbols>(`/api/confidence/drilldown/symbols?${search.toString()}`);
+    return apiFetch<ApiConfidenceDrilldownSymbols>(
+      `/api/confidence/drilldown/symbols?${search.toString()}`,
+    );
   },
   dataQualityLatest: (bundleId: number, timeframe = "1d") =>
     apiFetch<ApiDataQualityReport>(
@@ -581,10 +605,7 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  putEnsembleRegimeWeights: (
-    id: number,
-    payload: Record<string, Record<string, number>>,
-  ) =>
+  putEnsembleRegimeWeights: (id: number, payload: Record<string, Record<string, number>>) =>
     apiFetch<ApiPolicyEnsemble>(`/api/ensembles/${id}/regime-weights`, {
       method: "PUT",
       body: JSON.stringify(payload),
@@ -622,6 +643,44 @@ export const atlasApi = {
     }),
   paperSignalsPreview: (payload: Record<string, unknown>) =>
     apiFetch<ApiPaperSignalPreview>("/api/paper/signals/preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  forwardJournal: (params?: {
+    bundle_id?: number;
+    timeframe?: string;
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    if (params?.status) search.set("status", params.status);
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    return apiFetch<ApiForwardSignalJournal[]>(
+      `/api/paper/forward-journal${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
+  captureForwardJournal: (payload: Record<string, unknown>) =>
+    apiFetch<{
+      captured_count: number;
+      updated_count: number;
+      skipped_count: number;
+      journal: ApiForwardSignalJournal[];
+      preview: Record<string, unknown>;
+      filters: Record<string, unknown>;
+    }>("/api/paper/forward-journal/capture", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  evaluateForwardJournal: (payload: Record<string, unknown>) =>
+    apiFetch<{
+      updated_count: number;
+      evaluated_count: number;
+      summary: ApiForwardJournalSummary;
+    }>("/api/paper/forward-journal/evaluate", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -730,10 +789,8 @@ export const atlasApi = {
     );
   },
   monthlyReportById: (id: number) => apiFetch<ApiMonthlyReport>(`/api/reports/monthly/${id}`),
-  monthlyReportExportJsonUrl: (id: number) =>
-    buildApiUrl(`/api/reports/monthly/${id}/export.json`),
-  monthlyReportExportPdfUrl: (id: number) =>
-    buildApiUrl(`/api/reports/monthly/${id}/export.pdf`),
+  monthlyReportExportJsonUrl: (id: number) => buildApiUrl(`/api/reports/monthly/${id}/export.json`),
+  monthlyReportExportPdfUrl: (id: number) => buildApiUrl(`/api/reports/monthly/${id}/export.pdf`),
 
   runEvaluation: (payload: {
     bundle_id: number;
