@@ -21,7 +21,6 @@ from app.db.models import (
     PaperState,
     PolicySwitchEvent,
     Policy,
-    PaperRun,
     ResearchRun,
     Strategy,
     Symbol,
@@ -214,6 +213,7 @@ from app.services.operate_events import (
     get_operate_health_summary,
     list_operate_events,
 )
+from app.services.operate_context import latest_paper_run_for_bundle, positive_int
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.effective_context import build_effective_trading_context
 from app.services.paper import (
@@ -2656,16 +2656,12 @@ def operate_status(
     policy: Policy | None = None
     if isinstance(active_policy_id, int):
         policy = session.get(Policy, active_policy_id)
-    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    active_bundle_id = positive_int(health_summary.get("active_bundle_id"))
+    latest_run = latest_paper_run_for_bundle(session, active_bundle_id)
     latest_summary = (
         latest_run.summary_json
         if latest_run is not None and isinstance(latest_run.summary_json, dict)
         else {}
-    )
-    active_bundle_id = (
-        latest_run.bundle_id
-        if latest_run is not None and latest_run.bundle_id is not None
-        else health_summary.get("active_bundle_id")
     )
     preferred_ensemble_id: int | None = None
     try:

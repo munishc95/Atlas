@@ -450,7 +450,6 @@ class ConfidenceGateSnapshot(SQLModel, table=True):
             "timeframe",
             "trading_date",
         ),
-        Index("ix_confidencegatesnapshot_created_at", "created_at"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -893,7 +892,6 @@ class PolicyShadowRun(SQLModel, table=True):
 
 class AutoEvalRun(SQLModel, table=True):
     __table_args__ = (
-        Index("ix_autoevalrun_ts", "ts"),
         Index("ix_autoevalrun_bundle_ts", "bundle_id", "ts"),
         Index("ix_autoevalrun_active_policy_ts", "active_policy_id", "ts"),
         Index("ix_autoevalrun_active_ensemble_ts", "active_ensemble_id", "ts"),
@@ -928,7 +926,6 @@ class AutoEvalRun(SQLModel, table=True):
 
 class PolicySwitchEvent(SQLModel, table=True):
     __table_args__ = (
-        Index("ix_policyswitchevent_ts", "ts"),
         Index("ix_policyswitchevent_autoeval_ts", "auto_eval_id", "ts"),
     )
 

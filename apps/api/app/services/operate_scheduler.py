@@ -10,9 +10,10 @@ from rq import Queue
 from sqlmodel import Session, select
 
 from app.core.config import Settings, get_settings
-from app.db.models import DatasetBundle, PaperRun, PaperState
+from app.db.models import PaperRun, PaperState
 from app.db.session import engine
 from app.services.jobs import create_job
+from app.services.operate_context import latest_paper_run_for_bundle, resolve_active_bundle_id
 from app.services.operate_events import emit_operate_event
 from app.services.upstox_auth import token_status as upstox_token_status
 from app.services.upstox_token_request import sweep_expired_request_runs
@@ -123,28 +124,27 @@ def compute_next_auto_eval_run_ist(
 
 
 def _resolve_scheduler_context(session: Session) -> dict[str, Any]:
-    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    latest_run_any = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
     state = session.get(PaperState, 1)
     state_settings = dict(state.settings_json or {}) if state is not None else {}
 
-    bundle_id: int | None = None
+    bundle_id = resolve_active_bundle_id(
+        session,
+        state_settings=state_settings,
+        latest_run=latest_run_any,
+    )
+    latest_run = latest_paper_run_for_bundle(session, bundle_id)
     timeframe = "1d"
     regime = "TREND_UP"
     policy_id: int | None = None
     active_ensemble_id: int | None = None
 
     if latest_run is not None:
-        bundle_id = latest_run.bundle_id
         regime = str(latest_run.regime or regime)
         summary = latest_run.summary_json if isinstance(latest_run.summary_json, dict) else {}
         tfs = summary.get("timeframes", [])
         if isinstance(tfs, list) and tfs:
             timeframe = str(tfs[0] or timeframe)
-
-    if bundle_id is None:
-        row = session.exec(select(DatasetBundle).order_by(DatasetBundle.created_at.desc())).first()
-        if row is not None and row.id is not None:
-            bundle_id = int(row.id)
 
     try:
         if state_settings.get("active_policy_id") is not None:
@@ -408,61 +408,24 @@ def run_auto_operate_once(
     if auto_run_enabled and now.time() >= run_time:
         if not (isinstance(last_run_date, str) and last_run_date == today.isoformat()):
             queued_jobs: dict[str, str] = {}
-            if isinstance(bundle_id, int) and bundle_id > 0 and include_data_updates:
-                if provider_updates_enabled and provider_timeframe_allowed:
-                    queued_jobs["provider_updates"] = _enqueue_job(
-                        session=session,
-                        queue=queue,
-                        settings=settings,
-                        job_type="provider_updates",
-                        task_path="app.jobs.tasks.run_provider_updates_job",
-                        payload={"bundle_id": bundle_id, "timeframe": timeframe},
-                    )
-                queued_jobs["data_updates"] = _enqueue_job(
-                    session=session,
-                    queue=queue,
-                    settings=settings,
-                    job_type="data_updates",
-                    task_path="app.jobs.tasks.run_data_updates_job",
-                    payload={"bundle_id": bundle_id, "timeframe": timeframe},
-                )
-            if isinstance(bundle_id, int) and bundle_id > 0:
-                queued_jobs["data_quality"] = _enqueue_job(
-                    session=session,
-                    queue=queue,
-                    settings=settings,
-                    job_type="data_quality",
-                    task_path="app.jobs.tasks.run_data_quality_job",
-                    payload={"bundle_id": bundle_id, "timeframe": timeframe},
-                )
-
-            queued_jobs["paper_step"] = _enqueue_job(
+            operate_payload: dict[str, Any] = {
+                "date": today.isoformat(),
+                "bundle_id": bundle_id,
+                "timeframe": timeframe,
+                "regime": regime,
+                "include_data_updates": include_data_updates,
+                "asof": now.astimezone(ZoneInfo("UTC")).isoformat(),
+                "source": "scheduler_auto_run",
+            }
+            if isinstance(policy_id, int) and policy_id > 0:
+                operate_payload["policy_id"] = int(policy_id)
+            queued_jobs["operate_run"] = _enqueue_job(
                 session=session,
                 queue=queue,
                 settings=settings,
-                job_type="paper_step",
-                task_path="app.jobs.tasks.run_paper_step_job",
-                payload={
-                    "regime": regime,
-                    "bundle_id": bundle_id,
-                    "auto_generate_signals": True,
-                    "signals": [],
-                    "mark_prices": {},
-                    "asof": now.astimezone(ZoneInfo("UTC")).isoformat(),
-                },
-            )
-
-            queued_jobs["daily_report"] = _enqueue_job(
-                session=session,
-                queue=queue,
-                settings=settings,
-                job_type="daily_report",
-                task_path="app.jobs.tasks.run_daily_report_job",
-                payload={
-                    "date": today.isoformat(),
-                    "bundle_id": bundle_id,
-                    "policy_id": policy_id,
-                },
+                job_type="operate_run",
+                task_path="app.jobs.tasks.run_operate_run_job",
+                payload=operate_payload,
             )
 
             merged["operate_last_auto_run_date"] = today.isoformat()
@@ -478,11 +441,12 @@ def run_auto_operate_once(
                     "policy_id": policy_id,
                     "include_data_updates": include_data_updates,
                     "provider_updates_enabled": provider_updates_enabled,
+                    "provider_timeframe_allowed": provider_timeframe_allowed,
                     "calendar_segment": segment,
                     "session": calendar_get_session(today, segment=segment, settings=settings),
                     "queued_jobs": queued_jobs,
                 },
-                correlation_id=queued_jobs.get("paper_step"),
+                correlation_id=queued_jobs.get("operate_run"),
             )
             triggered = True
 

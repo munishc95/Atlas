@@ -330,6 +330,7 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
 
         state.settings_json = {
             **(state.settings_json or {}),
+            "active_bundle_id": int(bundle.id),
             "operate_auto_run_enabled": True,
             "operate_auto_run_time_ist": "09:00",
             "operate_last_auto_run_date": None,
@@ -349,19 +350,14 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
             now_ist=now_ist,
         )
         assert triggered is True
-        assert len(queue.calls) == 4
-        assert [call[0] for call in queue.calls] == [
-            "app.jobs.tasks.run_data_updates_job",
-            "app.jobs.tasks.run_data_quality_job",
-            "app.jobs.tasks.run_paper_step_job",
-            "app.jobs.tasks.run_daily_report_job",
-        ]
-        assert {call[0] for call in queue.calls} == {
-            "app.jobs.tasks.run_data_updates_job",
-            "app.jobs.tasks.run_data_quality_job",
-            "app.jobs.tasks.run_paper_step_job",
-            "app.jobs.tasks.run_daily_report_job",
-        }
+        assert len(queue.calls) == 1
+        assert queue.calls[0][0] == "app.jobs.tasks.run_operate_run_job"
+        queued_payload = queue.calls[0][1][1]
+        assert isinstance(queued_payload, dict)
+        assert queued_payload["bundle_id"] == int(bundle.id)
+        assert queued_payload["timeframe"] == "1d"
+        assert queued_payload["include_data_updates"] is True
+        assert queued_payload["source"] == "scheduler_auto_run"
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
@@ -376,7 +372,7 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
             now_ist=now_ist + timedelta(minutes=10),
         )
         assert second is False
-        assert len(queue.calls) == 4
+        assert len(queue.calls) == 1
 
     monday_next = compute_next_scheduled_run_ist(
         auto_run_enabled=True,
@@ -386,6 +382,70 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
     )
     assert monday_next is not None
     assert monday_next.startswith("2026-02-16T15:35")
+
+
+def test_operate_scheduler_prefers_configured_active_bundle() -> None:
+    init_db()
+    settings = get_settings()
+
+    with Session(engine) as session:
+        state = _reset_live_state(session, settings)
+        active_bundle = DatasetBundle(
+            name=f"bundle-active-{uuid4().hex[:8]}",
+            provider="test",
+            symbols_json=["ACTIVE"],
+            supported_timeframes_json=["1d"],
+        )
+        stale_bundle = DatasetBundle(
+            name=f"bundle-stale-{uuid4().hex[:8]}",
+            provider="test",
+            symbols_json=["STALE"],
+            supported_timeframes_json=["1d"],
+        )
+        session.add(active_bundle)
+        session.add(stale_bundle)
+        session.commit()
+        session.refresh(active_bundle)
+        session.refresh(stale_bundle)
+        assert active_bundle.id is not None
+        assert stale_bundle.id is not None
+
+        session.add(
+            PaperRun(
+                bundle_id=int(stale_bundle.id),
+                asof_ts=datetime(2026, 2, 13, 8, 30, tzinfo=timezone.utc),
+                regime="HIGH_VOL",
+                summary_json={"timeframes": ["4h_ish"]},
+            )
+        )
+        state.settings_json = {
+            **(state.settings_json or {}),
+            "active_bundle_id": int(active_bundle.id),
+            "operate_auto_run_enabled": True,
+            "operate_auto_run_time_ist": "09:00",
+            "operate_last_auto_run_date": None,
+            "operate_auto_run_include_data_updates": True,
+            "data_updates_provider_enabled": False,
+            "active_policy_id": None,
+        }
+        session.add(state)
+        session.commit()
+
+        queue = _FakeQueue()
+        triggered = run_auto_operate_once(
+            session=session,
+            queue=queue,  # type: ignore[arg-type]
+            settings=settings,
+            now_ist=datetime(2026, 2, 13, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+
+        assert triggered is True
+        assert len(queue.calls) == 1
+        payload = queue.calls[0][1][1]
+        assert isinstance(payload, dict)
+        assert payload["bundle_id"] == int(active_bundle.id)
+        assert payload["timeframe"] == "1d"
+        assert payload["regime"] == "TREND_UP"
 
 
 def test_operate_scheduler_auto_eval_weekly_queues_once() -> None:
@@ -424,6 +484,7 @@ def test_operate_scheduler_auto_eval_weekly_queues_once() -> None:
 
         state.settings_json = {
             **(state.settings_json or {}),
+            "active_bundle_id": int(bundle.id),
             "operate_auto_run_enabled": False,
             "operate_auto_eval_enabled": True,
             "operate_auto_eval_frequency": "WEEKLY",

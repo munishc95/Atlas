@@ -82,6 +82,7 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
         bundle_id = _seed_bundle(session)
         state.settings_json = {
             **(state.settings_json or {}),
+            "active_bundle_id": int(bundle_id),
             "trading_calendar_segment": "EQUITIES",
             "operate_auto_run_enabled": True,
             "operate_auto_run_time_ist": "09:00",
@@ -101,13 +102,12 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
             now_ist=now_ist,
         )
         assert fired is True
-        assert len(queue.calls) == 4
-        assert [call[0] for call in queue.calls] == [
-            "app.jobs.tasks.run_data_updates_job",
-            "app.jobs.tasks.run_data_quality_job",
-            "app.jobs.tasks.run_paper_step_job",
-            "app.jobs.tasks.run_daily_report_job",
-        ]
+        assert len(queue.calls) == 1
+        assert queue.calls[0][0] == "app.jobs.tasks.run_operate_run_job"
+        payload = queue.calls[0][1][1]
+        assert isinstance(payload, dict)
+        assert payload["bundle_id"] == int(bundle_id)
+        assert payload["include_data_updates"] is True
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None
@@ -123,7 +123,7 @@ def test_scheduler_runs_on_special_session_weekend() -> None:
             now_ist=now_ist.replace(hour=11, minute=0),
         )
         assert fired_again is False
-        assert len(queue.calls) == 4
+        assert len(queue.calls) == 1
 
         assert bundle_id > 0
 

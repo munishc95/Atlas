@@ -255,6 +255,7 @@ def test_operate_run_executes_in_order_and_persists_report_artifacts() -> None:
             "data_updates",
             "data_quality",
             "paper_step",
+            "forward_journal",
             "daily_report",
         ]
         steps = summary.get("steps", [])
@@ -262,6 +263,7 @@ def test_operate_run_executes_in_order_and_persists_report_artifacts() -> None:
             "data_updates",
             "data_quality",
             "paper_step",
+            "forward_journal",
             "daily_report",
         ]
         report_id = int((summary.get("daily_report") or {}).get("id") or 0)

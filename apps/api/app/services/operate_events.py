@@ -14,7 +14,6 @@ from app.db.models import (
     DataUpdateRun,
     Job,
     OperateEvent,
-    PaperRun,
     PaperState,
     ProviderUpdateRun,
     UpstoxTokenRequestRun,
@@ -26,6 +25,7 @@ from app.services.trading_calendar import (
     next_trading_day,
     previous_trading_day,
 )
+from app.services.operate_context import latest_paper_run_for_bundle, resolve_active_bundle_id
 from app.services.upstox_auth import token_status as upstox_token_status
 
 
@@ -224,24 +224,40 @@ def _latest_provider_update_run(
     return session.exec(stmt).first()
 
 
-def _latest_operate_run_provider_stage_status(session: Session) -> str | None:
-    row = session.exec(
+def _latest_operate_run_provider_stage_status(
+    session: Session,
+    *,
+    bundle_id: int | None,
+    timeframe: str | None,
+) -> str | None:
+    rows = session.exec(
         select(Job)
         .where(Job.type == "operate_run")
         .where(Job.status.in_(["SUCCEEDED", "DONE"]))
         .order_by(Job.ended_at.desc(), Job.created_at.desc())
-        .limit(1)
-    ).first()
-    if row is None or not isinstance(row.result_json, dict):
-        return None
-    summary = row.result_json.get("summary")
-    if not isinstance(summary, dict):
-        return None
-    value = summary.get("provider_stage_status")
-    if value is None:
-        return None
-    token = str(value).strip()
-    return token or None
+        .limit(20)
+    ).all()
+    for row in rows:
+        if not isinstance(row.result_json, dict):
+            continue
+        summary = row.result_json.get("summary")
+        if not isinstance(summary, dict):
+            continue
+        if isinstance(bundle_id, int) and bundle_id > 0:
+            try:
+                if int(summary.get("bundle_id")) != int(bundle_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+        if isinstance(timeframe, str) and timeframe.strip():
+            if str(summary.get("timeframe") or "").strip() != timeframe.strip():
+                continue
+        value = summary.get("provider_stage_status")
+        if value is None:
+            return None
+        token = str(value).strip()
+        return token or None
+    return None
 
 
 def _latest_confidence_gate_snapshot(
@@ -326,16 +342,18 @@ def get_operate_health_summary(
     # operate_events -> upstox_token_request -> operate_events.
     from app.services.upstox_token_request import notifier_health_payload
 
-    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    state = session.get(PaperState, 1)
+    state_settings = dict(state.settings_json or {}) if state is not None else {}
+    target_bundle_id = resolve_active_bundle_id(
+        session,
+        state_settings=state_settings,
+        explicit_bundle_id=bundle_id,
+    )
+    latest_run = latest_paper_run_for_bundle(session, target_bundle_id)
     latest_summary = (
         latest_run.summary_json
         if latest_run is not None and isinstance(latest_run.summary_json, dict)
         else {}
-    )
-    target_bundle_id = (
-        bundle_id
-        if bundle_id is not None
-        else (latest_run.bundle_id if latest_run is not None else None)
     )
     target_timeframe = timeframe
     if not target_timeframe and latest_run is not None:
@@ -366,8 +384,6 @@ def get_operate_health_summary(
         settings=settings,
         allow_env_fallback=True,
     )
-    state = session.get(PaperState, 1)
-    state_settings = dict(state.settings_json or {}) if state is not None else {}
     safe_mode_on_fail = bool(
         state_settings.get("operate_safe_mode_on_fail", settings.operate_safe_mode_on_fail)
     )
@@ -537,7 +553,11 @@ def get_operate_health_summary(
                     "ts": row.ts.isoformat(),
                 }
 
-    provider_stage_status = _latest_operate_run_provider_stage_status(session)
+    provider_stage_status = _latest_operate_run_provider_stage_status(
+        session,
+        bundle_id=target_bundle_id if isinstance(target_bundle_id, int) else None,
+        timeframe=target_timeframe,
+    )
     latest_confidence_gate = _latest_confidence_aggregate(
         session,
         bundle_id=target_bundle_id if isinstance(target_bundle_id, int) else None,

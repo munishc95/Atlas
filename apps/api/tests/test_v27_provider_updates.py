@@ -159,6 +159,7 @@ def test_scheduler_queues_provider_updates_before_inbox_updates() -> None:
 
         state.settings_json = {
             **(state.settings_json or {}),
+            "active_bundle_id": int(bundle.id),
             "operate_auto_run_enabled": True,
             "operate_auto_run_time_ist": "09:00",
             "operate_last_auto_run_date": None,
@@ -181,13 +182,12 @@ def test_scheduler_queues_provider_updates_before_inbox_updates() -> None:
             now_ist=now_ist,
         )
         assert triggered is True
-        assert [call[0] for call in queue.calls] == [
-            "app.jobs.tasks.run_provider_updates_job",
-            "app.jobs.tasks.run_data_updates_job",
-            "app.jobs.tasks.run_data_quality_job",
-            "app.jobs.tasks.run_paper_step_job",
-            "app.jobs.tasks.run_daily_report_job",
-        ]
+        assert [call[0] for call in queue.calls] == ["app.jobs.tasks.run_operate_run_job"]
+        payload = queue.calls[0][1][1]
+        assert isinstance(payload, dict)
+        assert payload["bundle_id"] == int(bundle.id)
+        assert payload["timeframe"] == "1d"
+        assert payload["include_data_updates"] is True
 
         refreshed = session.get(PaperState, 1)
         assert refreshed is not None

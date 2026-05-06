@@ -18,6 +18,7 @@ from app.services.data_store import DataStore
 from app.services.fast_mode import prefer_sample_bundle_id
 from app.services.effective_context import build_effective_trading_context
 from app.services.confidence_agg import latest_daily_confidence_agg
+from app.services.operate_context import latest_paper_run_for_bundle, resolve_active_bundle_id
 from app.services.data_updates import run_data_updates
 from app.services.historical_backfill import run_historical_backfill, serialize_historical_backfill_run
 from app.services.provider_updates import run_provider_updates
@@ -42,7 +43,7 @@ from app.services.train_dataset import (
 from app.services.upstox_auth import token_status as upstox_token_status
 from app.services.upstox_token_request import request_token_run, serialize_request_run
 from app.services.walkforward import execute_walkforward
-from app.db.models import DatasetBundle, PaperRun, PaperState, ProviderUpdateItem
+from app.db.models import PaperRun, PaperState, ProviderUpdateItem
 
 
 def _store() -> DataStore:
@@ -883,24 +884,34 @@ def _resolve_operate_context(
     payload: dict[str, Any],
     settings: Settings,
 ) -> dict[str, Any]:
-    latest_run = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
+    latest_run_any = session.exec(select(PaperRun).order_by(PaperRun.created_at.desc())).first()
     state = session.get(PaperState, 1)
     state_settings = dict(state.settings_json or {}) if state is not None else {}
 
     bundle_id: int | None = None
     raw_bundle = payload.get("bundle_id")
-    if isinstance(raw_bundle, int) and raw_bundle > 0:
-        bundle_id = int(raw_bundle)
+    if raw_bundle is not None:
+        bundle_id = resolve_active_bundle_id(
+            session,
+            state_settings=state_settings,
+            explicit_bundle_id=raw_bundle,
+            latest_run=latest_run_any,
+        )
     elif settings.fast_mode_enabled:
         bundle_id = prefer_sample_bundle_id(session, settings=settings)
-    elif latest_run is not None and latest_run.bundle_id is not None:
-        bundle_id = int(latest_run.bundle_id)
+        if bundle_id is None:
+            bundle_id = resolve_active_bundle_id(
+                session,
+                state_settings=state_settings,
+                latest_run=latest_run_any,
+            )
     else:
-        latest_bundle = session.exec(
-            select(DatasetBundle).order_by(DatasetBundle.created_at.desc())
-        ).first()
-        if latest_bundle is not None and latest_bundle.id is not None:
-            bundle_id = int(latest_bundle.id)
+        bundle_id = resolve_active_bundle_id(
+            session,
+            state_settings=state_settings,
+            latest_run=latest_run_any,
+        )
+    latest_run = latest_paper_run_for_bundle(session, bundle_id)
 
     timeframe = str(payload.get("timeframe") or "").strip()
     if not timeframe and latest_run is not None:
