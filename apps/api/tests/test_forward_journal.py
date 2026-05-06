@@ -11,8 +11,10 @@ from sqlmodel import Session, select
 from app.core.config import get_settings
 from app.db.models import ForwardSignalJournal, PaperOrder, PaperPosition, PaperState
 from app.db.session import engine
+from app.jobs.tasks import _operate_run_result
 from app.main import app
 from app.services.data_store import DataStore
+from app.services.jobs import create_job
 
 
 def _client_inline_jobs() -> TestClient:
@@ -156,3 +158,47 @@ def test_forward_journal_captures_and_evaluates_signal_outcome() -> None:
                 select(ForwardSignalJournal).where(ForwardSignalJournal.bundle_id == bundle_id)
             ).all()
             assert saved
+
+
+def test_operate_run_captures_forward_journal_step() -> None:
+    provider = f"fj-op-{uuid4().hex[:8]}"
+    symbol = f"FJOP_{uuid4().hex[:6].upper()}"
+    store = _store()
+    frame = _frame()
+
+    with _client_inline_jobs():
+        with Session(engine) as session:
+            _reset_paper_state(session)
+            dataset = store.save_ohlcv(
+                session=session,
+                symbol=symbol,
+                timeframe="1d",
+                frame=frame,
+                provider=provider,
+                bundle_name=f"forward-journal-operate-{provider}",
+            )
+            assert dataset.bundle_id is not None
+            bundle_id = int(dataset.bundle_id)
+            job = create_job(session, "operate_run")
+
+            result = _operate_run_result(
+                session=session,
+                settings=get_settings(),
+                store=store,
+                payload={
+                    "bundle_id": bundle_id,
+                    "timeframe": "1d",
+                    "include_data_updates": False,
+                    "asof": frame.iloc[-1]["datetime"].isoformat(),
+                },
+                job_id=str(job.id),
+            )
+
+            summary = result["summary"]
+            journal = summary["forward_journal"]
+            assert journal["status"] == "SUCCEEDED"
+            assert journal["captured_count"] + journal["capture_updated_count"] >= 1
+            assert "forward_journal" in [step["name"] for step in summary["steps"]]
+            assert session.exec(
+                select(ForwardSignalJournal).where(ForwardSignalJournal.bundle_id == bundle_id)
+            ).first()

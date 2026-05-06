@@ -23,6 +23,11 @@ from app.services.historical_backfill import run_historical_backfill, serialize_
 from app.services.provider_updates import run_provider_updates
 from app.services.data_quality import run_data_quality_report
 from app.services.evaluations import execute_policy_evaluation
+from app.services.forward_journal import (
+    capture_forward_signals,
+    evaluate_forward_journal,
+    forward_journal_summary,
+)
 from app.services.importer import import_ohlcv_bytes
 from app.services.jobs import append_job_log, update_job
 from app.services.operate_events import emit_operate_event
@@ -984,7 +989,7 @@ def _operate_run_result(
     provider_stage_enabled = include_data_updates and (
         (str(timeframe).strip().lower() in provider_timeframes) if provider_enabled else False
     )
-    step_order = ["data_updates", "data_quality", "paper_step", "daily_report"]
+    step_order = ["data_updates", "data_quality", "paper_step", "forward_journal", "daily_report"]
     if provider_stage_enabled:
         step_order = ["provider_updates", *step_order]
 
@@ -1297,7 +1302,103 @@ def _operate_run_result(
         correlation_id=job_id,
     )
 
-    update_job(session, job_id, progress=88 if provider_stage_enabled else 85)
+    update_job(session, job_id, progress=82 if provider_stage_enabled else 78)
+    step_started = time.perf_counter()
+    append_job_log(session, job_id, "Operate run: forward journal started")
+    if isinstance(bundle_id, int) and bundle_id > 0:
+        try:
+            horizon_bars = int(state_settings.get("forward_journal_horizon_bars", 5) or 5)
+            max_symbols_scan = int(
+                state_settings.get(
+                    "forward_journal_max_symbols_scan",
+                    payload.get("max_symbols_scan") or 500,
+                )
+                or 500
+            )
+            max_runtime_seconds = int(
+                state_settings.get("forward_journal_max_runtime_seconds", 60) or 60
+            )
+            max_entry_extension_pct = float(
+                state_settings.get("forward_journal_max_entry_extension_pct", 1.0)
+            )
+            evaluation = evaluate_forward_journal(
+                session=session,
+                store=store,
+                bundle_id=int(bundle_id),
+                timeframe=str(timeframe),
+                horizon_bars=max(1, min(60, horizon_bars)),
+            )
+            capture_payload = {
+                "regime": regime,
+                "bundle_id": int(bundle_id),
+                "timeframe": str(timeframe),
+                "symbol_scope": "all",
+                "max_symbols_scan": max(1, max_symbols_scan),
+                "max_runtime_seconds": max(5, max_runtime_seconds),
+                "max_entry_extension_pct": max(0.0, max_entry_extension_pct),
+                "asof": asof_dt.isoformat(),
+            }
+            if isinstance(policy_id, int) and policy_id > 0:
+                capture_payload["policy_id"] = int(policy_id)
+            capture = capture_forward_signals(
+                session=session,
+                settings=settings,
+                store=store,
+                payload=capture_payload,
+            )
+            journal_summary = forward_journal_summary(
+                session,
+                bundle_id=int(bundle_id),
+                timeframe=str(timeframe),
+            )
+            journal_payload = {
+                "status": "SUCCEEDED",
+                "captured_count": int(capture.get("captured_count", 0)),
+                "capture_updated_count": int(capture.get("updated_count", 0)),
+                "skipped_count": int(capture.get("skipped_count", 0)),
+                "evaluated_count": int(evaluation.get("evaluated_count", 0)),
+                "outcome_updated_count": int(evaluation.get("updated_count", 0)),
+                "summary": journal_summary,
+            }
+        except Exception as exc:  # noqa: BLE001
+            journal_payload = {
+                "status": "FAILED",
+                "error": str(exc),
+            }
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="SYSTEM",
+                message="forward_journal_failed",
+                details={
+                    "job_id": job_id,
+                    "bundle_id": bundle_id,
+                    "timeframe": timeframe,
+                    "error": str(exc),
+                },
+                correlation_id=job_id,
+            )
+    else:
+        journal_payload = {"status": "SKIPPED", "reason": "no_bundle"}
+    summary["forward_journal"] = journal_payload
+    journal_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
+    summary["steps"].append({"name": "forward_journal", **journal_payload})
+    emit_operate_event(
+        session,
+        severity="INFO",
+        category="SYSTEM",
+        message="job_duration_recorded",
+        details={
+            "job_id": job_id,
+            "job_kind": "forward_journal",
+            "duration_seconds": journal_payload["duration_seconds"],
+            "status": journal_payload.get("status"),
+            "mode": "operate_run",
+        },
+        correlation_id=job_id,
+    )
+
+    update_job(session, job_id, progress=90 if provider_stage_enabled else 88)
     step_started = time.perf_counter()
     append_job_log(session, job_id, "Operate run: daily report generation started")
     report_date = payload.get("date")
@@ -1349,6 +1450,7 @@ def _operate_run_result(
         "data_updates": float(step_payload.get("duration_seconds", 0.0)),
         "data_quality": float(quality_payload.get("duration_seconds", 0.0)),
         "paper_step": float(paper_summary.get("duration_seconds", 0.0)),
+        "forward_journal": float(journal_payload.get("duration_seconds", 0.0)),
         "daily_report": float(report_payload.get("duration_seconds", 0.0)),
     }
     latest_agg = latest_daily_confidence_agg(
