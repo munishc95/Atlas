@@ -6,7 +6,11 @@ param(
     [int]$EventRiskForwardDays = 120,
     [double]$ThrottleSeconds = 0.05,
     [switch]$RunQuality,
-    [switch]$SkipEventRisk
+    [switch]$SkipEventRisk,
+    [switch]$RunOperate,
+    [string]$OperateTimeframe = "1d",
+    [string]$OperateRegime = "TREND_UP",
+    [int]$OperateMaxRuntimeSeconds = 10800
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +52,9 @@ try {
     if (-not $SkipEventRisk) {
         Write-Host "Event risk window: $EventRiskStartDate to $EventRiskEndDate"
     }
+    if ($RunOperate) {
+        Write-Host "Operate run: enabled ($OperateTimeframe, $OperateRegime)"
+    }
     Write-Host "Log: $LogPath"
     & python @ImportArgs
     if ($LASTEXITCODE -ne 0) {
@@ -72,6 +79,21 @@ try {
         )
         if ($LASTEXITCODE -ne 0) {
             throw "Event-risk sync exited with code $LASTEXITCODE"
+        }
+    }
+    if ($RunOperate) {
+        & python @(
+            "scripts/run_operate_inline.py",
+            "--bundle-id", "$BundleId",
+            "--timeframe", "$OperateTimeframe",
+            "--regime", "$OperateRegime",
+            "--date", $EndDate,
+            "--source", "windows_daily_free_data_task",
+            "--max-runtime-seconds", "$OperateMaxRuntimeSeconds",
+            "--mark-auto-run-date"
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Operate inline run exited with code $LASTEXITCODE"
         }
     }
     Write-Host "Atlas free NSE daily update finished"

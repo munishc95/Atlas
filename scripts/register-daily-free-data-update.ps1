@@ -6,7 +6,12 @@ param(
     [int]$CorporateActionLookbackDays = 180,
     [int]$EventRiskLookbackDays = 30,
     [int]$EventRiskForwardDays = 120,
-    [switch]$SkipEventRisk
+    [switch]$SkipEventRisk,
+    [switch]$RunOperate,
+    [string]$OperateTimeframe = "1d",
+    [string]$OperateRegime = "TREND_UP",
+    [int]$OperateMaxRuntimeSeconds = 10800,
+    [int]$ExecutionHours = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +38,14 @@ $ActionArgs = @(
 if ($SkipEventRisk) {
     $ActionArgs += "-SkipEventRisk"
 }
+if ($RunOperate) {
+    $ActionArgs += @(
+        "-RunOperate",
+        "-OperateTimeframe", "$OperateTimeframe",
+        "-OperateRegime", "$OperateRegime",
+        "-OperateMaxRuntimeSeconds", "$OperateMaxRuntimeSeconds"
+    )
+}
 $ActionArgs = $ActionArgs -join " "
 
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ActionArgs -WorkingDirectory $RepoRoot
@@ -41,8 +54,9 @@ $Settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
+    -WakeToRun `
     -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    -ExecutionTimeLimit (New-TimeSpan -Hours $ExecutionHours)
 $Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask `
@@ -51,7 +65,7 @@ Register-ScheduledTask `
     -Trigger $Trigger `
     -Settings $Settings `
     -Principal $Principal `
-    -Description "Pulls free NSE bhavcopy, corporate actions, and event-risk data into Atlas." `
+    -Description "Pulls free NSE bhavcopy, corporate actions, event-risk data, and optionally runs Atlas operate." `
     -Force | Out-Null
 
 $Task = Get-ScheduledTask -TaskName $TaskName
@@ -61,6 +75,7 @@ $Info = Get-ScheduledTaskInfo -TaskName $TaskName
     TaskName = $Task.TaskName
     State = $Task.State
     StartTime = $At.ToString("HH:mm")
+    RunOperate = [bool]$RunOperate
     User = $UserId
     Script = $UpdateScript
     NextRunTime = $Info.NextRunTime

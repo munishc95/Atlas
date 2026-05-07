@@ -67,6 +67,19 @@ If you want launcher to install missing Playwright Chromium:
 pnpm dev:stack:e2e
 ```
 
+### Optional: unattended daily free data + operate run (Windows)
+
+This path does not require Redis or the Atlas worker to stay open. It uses Windows Task Scheduler
+to wake the laptop, pull free NSE bhavcopy data, then run the operate pipeline inline.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/register-daily-free-data-update.ps1 `
+  -StartTime "18:45" -BundleId 3674 -RunOperate
+```
+
+The task writes logs under `data/logs/`. Keep Windows wake timers enabled and keep the laptop
+plugged in when possible.
+
 ## Job system
 
 Long-running APIs enqueue RQ jobs and return immediately with `job_id`:
