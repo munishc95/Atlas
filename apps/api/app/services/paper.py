@@ -3254,6 +3254,7 @@ def run_paper_step(
                         row = dict(signal)
                         row["source_policy_id"] = source_policy_id
                         row["source_policy_name"] = source_policy_name
+                        row["source_allowed_templates"] = allowed_templates
                         row["ensemble_id"] = int(active_ensemble.id or 0)
                         row["ensemble_name"] = active_ensemble.name
                         row["ensemble_member_weight"] = float(
@@ -3613,15 +3614,6 @@ def run_paper_step(
             skipped_signals.append({**base_meta, "reason": "inactive_symbol_data_gap"})
             continue
 
-        if sector_counts.get(sector, 0) >= sector_limit:
-            skipped_signals.append({**base_meta, "reason": "sector_concentration"})
-            continue
-        if len(current_positions) + len(selected_signals) >= max_positions:
-            skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
-            continue
-        if underlying_symbol in selected_underlyings:
-            skipped_signals.append({**base_meta, "reason": "already_open"})
-            continue
         if side not in {"BUY", "SELL"}:
             skipped_signals.append({**base_meta, "reason": "invalid_side"})
             continue
@@ -3633,7 +3625,16 @@ def run_paper_step(
                 }
             )
             continue
-        if template not in policy["allowed_templates"]:
+        source_allowed_templates = signal.get("source_allowed_templates")
+        if source_policy_id > 0 and isinstance(source_allowed_templates, list):
+            allowed_templates_for_signal = [
+                str(item) for item in source_allowed_templates if str(item)
+            ]
+        else:
+            allowed_templates_for_signal = [
+                str(item) for item in policy.get("allowed_templates", []) if str(item)
+            ]
+        if template not in allowed_templates_for_signal:
             skipped_signals.append(
                 {
                     **base_meta,
@@ -3642,6 +3643,16 @@ def run_paper_step(
                     else "template_blocked_by_regime",
                 }
             )
+            continue
+
+        if sector_counts.get(sector, 0) >= sector_limit:
+            skipped_signals.append({**base_meta, "reason": "sector_concentration"})
+            continue
+        if len(current_positions) + len(selected_signals) >= max_positions:
+            skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
+            continue
+        if underlying_symbol in selected_underlyings:
+            skipped_signals.append({**base_meta, "reason": "already_open"})
             continue
 
         if side == "SELL":

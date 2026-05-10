@@ -25,6 +25,7 @@ data/cache/
 data/exports/
 data/inbox/
 data/logs/
+data/reports/
 data/secrets/
 apps/api/.atlas/
 apps/web/.atlas/
