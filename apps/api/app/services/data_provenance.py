@@ -55,18 +55,36 @@ def upsert_provenance_rows(
     token = _provider_token(source_provider)
     symbol_up = str(symbol).strip().upper()
     tf = str(timeframe or "1d").strip()
+    bundle_key = int(bundle_id)
     for bar_day in sorted(set(bar_dates)):
-        existing = session.exec(
-            select(DataProvenance)
-            .where(DataProvenance.bundle_id == int(bundle_id))
-            .where(DataProvenance.timeframe == tf)
-            .where(DataProvenance.symbol == symbol_up)
-            .where(DataProvenance.bar_date == bar_day)
-            .order_by(DataProvenance.id.desc())
-        ).first()
+        pending = next(
+            (
+                row
+                for row in session.new
+                if isinstance(row, DataProvenance)
+                and int(row.bundle_id or 0) == bundle_key
+                and str(row.timeframe) == tf
+                and str(row.symbol).upper() == symbol_up
+                and row.bar_date == bar_day
+            ),
+            None,
+        )
+        with session.no_autoflush:
+            existing = session.exec(
+                select(DataProvenance)
+                .where(DataProvenance.bundle_id == bundle_key)
+                .where(DataProvenance.timeframe == tf)
+                .where(DataProvenance.symbol == symbol_up)
+                .where(DataProvenance.bar_date == bar_day)
+                .order_by(DataProvenance.id.desc())
+            ).first()
+        if existing is not None and pending is not None:
+            session.expunge(pending)
+        if existing is None:
+            existing = pending
         if existing is None:
             existing = DataProvenance(
-                bundle_id=int(bundle_id),
+                bundle_id=bundle_key,
                 timeframe=tf,
                 symbol=symbol_up,
                 bar_date=bar_day,

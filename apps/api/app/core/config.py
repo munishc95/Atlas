@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     max_positions: int = 3
     kill_switch_drawdown: float = 0.08
     kill_switch_cooldown_days: int = 10
+    paper_starting_equity: float = 10_000.0
 
     commission_bps: float = 5.0
     slippage_base_bps: float = 2.0
@@ -89,6 +90,7 @@ class Settings(BaseSettings):
     operate_max_stale_minutes_1d: int = 2880
     operate_max_stale_minutes_4h_ish: int = 720
     operate_max_gap_bars: int = 3
+    data_quality_gap_fail_lookback_days: int = 45
     operate_outlier_zscore: float = 8.0
     operate_cost_ratio_spike_threshold: float = 0.5
     operate_cost_ratio_spike_days: int = 3
@@ -141,8 +143,8 @@ class Settings(BaseSettings):
     diversification_corr_threshold: float = 0.75
     allowed_sides: list[str] = Field(default_factory=lambda: ["BUY"])
     paper_short_squareoff_time: str = "15:20"
-    autopilot_max_symbols_scan: int = 200
-    autopilot_max_runtime_seconds: int = 60
+    autopilot_max_symbols_scan: int = 500
+    autopilot_max_runtime_seconds: int = 300
     reports_auto_generate_daily: bool = False
     health_window_days_short: int = 20
     health_window_days_long: int = 60

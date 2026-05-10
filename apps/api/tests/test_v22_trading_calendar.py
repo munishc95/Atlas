@@ -186,3 +186,109 @@ def test_data_quality_gap_check_respects_calendar_holidays() -> None:
 
         codes = {str(item.get("code", "")) for item in (report.issues_json or [])}
         assert "gap_exceeds_threshold" not in codes
+
+
+def test_data_quality_old_daily_gaps_are_warn_not_fail() -> None:
+    init_db()
+    settings = get_settings()
+    store = _store()
+    symbol = f"OLDGAP_{uuid4().hex[:6].upper()}"
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2025-01-02T09:15:00Z", "2025-03-20T09:15:00Z"],
+                utc=True,
+            ),
+            "open": np.array([100.0, 101.0]),
+            "high": np.array([101.0, 102.0]),
+            "low": np.array([99.0, 100.0]),
+            "close": np.array([100.5, 101.5]),
+            "volume": np.array([2_000_000, 2_100_000]),
+        }
+    )
+
+    with Session(engine) as session:
+        dataset = store.save_ohlcv(
+            session=session,
+            symbol=symbol,
+            timeframe="1d",
+            frame=frame,
+            provider=f"v22-old-gap-{uuid4().hex[:8]}",
+            bundle_name=f"bundle-v22-old-gap-{uuid4().hex[:8]}",
+        )
+        assert dataset.bundle_id is not None
+        report = run_data_quality_report(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=int(dataset.bundle_id),
+            timeframe="1d",
+            overrides={
+                "trading_calendar_segment": "EQUITIES",
+                "operate_max_gap_bars": 0,
+                "data_quality_gap_fail_lookback_days": 45,
+                "data_quality_max_stale_minutes_1d": 10_000_000,
+                "data_quality_stale_severity": "WARN",
+                "data_quality_stale_severity_override": True,
+                "operate_mode": "offline",
+            },
+            reference_ts=datetime(2026, 5, 7, 16, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+
+    gap_issues = [
+        item for item in (report.issues_json or []) if item.get("code") == "gap_exceeds_threshold"
+    ]
+    assert gap_issues
+    assert {str(item.get("severity")) for item in gap_issues} == {"WARN"}
+
+
+def test_data_quality_recent_daily_gaps_still_fail() -> None:
+    init_db()
+    settings = get_settings()
+    store = _store()
+    symbol = f"NEWGAP_{uuid4().hex[:6].upper()}"
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-01-23T09:15:00Z", "2026-02-03T09:15:00Z"],
+                utc=True,
+            ),
+            "open": np.array([100.0, 101.0]),
+            "high": np.array([101.0, 102.0]),
+            "low": np.array([99.0, 100.0]),
+            "close": np.array([100.5, 101.5]),
+            "volume": np.array([2_000_000, 2_100_000]),
+        }
+    )
+
+    with Session(engine) as session:
+        dataset = store.save_ohlcv(
+            session=session,
+            symbol=symbol,
+            timeframe="1d",
+            frame=frame,
+            provider=f"v22-new-gap-{uuid4().hex[:8]}",
+            bundle_name=f"bundle-v22-new-gap-{uuid4().hex[:8]}",
+        )
+        assert dataset.bundle_id is not None
+        report = run_data_quality_report(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=int(dataset.bundle_id),
+            timeframe="1d",
+            overrides={
+                "trading_calendar_segment": "EQUITIES",
+                "operate_max_gap_bars": 0,
+                "data_quality_gap_fail_lookback_days": 45,
+                "data_quality_max_stale_minutes_1d": 10_000_000,
+                "operate_mode": "offline",
+            },
+            reference_ts=datetime(2026, 2, 3, 16, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+
+    gap_issues = [
+        item for item in (report.issues_json or []) if item.get("code") == "gap_exceeds_threshold"
+    ]
+    assert gap_issues
+    assert {str(item.get("severity")) for item in gap_issues} == {"FAIL"}

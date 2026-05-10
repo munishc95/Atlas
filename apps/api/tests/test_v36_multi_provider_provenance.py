@@ -217,6 +217,64 @@ def test_data_quality_low_confidence_live_mode_fail() -> None:
         assert "low_confidence_latest_day" in issue_codes
 
 
+def test_upsert_provenance_rows_updates_pending_duplicate_before_flush() -> None:
+    init_db()
+    store = _store()
+    unique = uuid4().hex[:8].upper()
+    symbol = f"PRVUPS_{unique}"
+
+    with Session(engine) as session:
+        dataset = store.save_ohlcv(
+            session=session,
+            symbol=symbol,
+            timeframe="1d",
+            frame=_frame("2026-02-10", 2, 140.0),
+            provider=f"provider-v36-upsert-{unique}",
+            bundle_name=f"bundle-v36-upsert-{unique}",
+        )
+        assert dataset.bundle_id is not None
+        bundle_id = int(dataset.bundle_id)
+        bar_day = datetime(2026, 2, 10, tzinfo=UTC).date()
+
+        upsert_provenance_rows(
+            session,
+            bundle_id=bundle_id,
+            timeframe="1d",
+            symbol=symbol,
+            bar_dates=[bar_day],
+            source_provider="INBOX",
+            source_run_kind="data_updates",
+            source_run_id="pending-a",
+            confidence_score=70.0,
+            reason="first_pending",
+        )
+        upsert_provenance_rows(
+            session,
+            bundle_id=bundle_id,
+            timeframe="1d",
+            symbol=symbol,
+            bar_dates=[bar_day],
+            source_provider="NSE_BHAVCOPY",
+            source_run_kind="nse_bhavcopy_backfill",
+            source_run_id="pending-b",
+            confidence_score=90.0,
+            reason="second_pending",
+        )
+        session.commit()
+
+        rows = session.exec(
+            select(DataProvenance)
+            .where(DataProvenance.bundle_id == bundle_id)
+            .where(DataProvenance.timeframe == "1d")
+            .where(DataProvenance.symbol == symbol)
+            .where(DataProvenance.bar_date == bar_day)
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].source_provider == "NSE_BHAVCOPY"
+        assert abs(float(rows[0].confidence_score) - 90.0) < 0.001
+        assert rows[0].reason == "second_pending"
+
+
 def test_providers_status_endpoint_returns_breakdown() -> None:
     init_db()
     with TestClient(app) as client:

@@ -153,15 +153,17 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
     if state is not None:
         return state
 
+    starting_equity = max(0.0, float(settings.paper_starting_equity))
     state = PaperState(
         id=1,
-        equity=1_000_000.0,
-        cash=1_000_000.0,
-        peak_equity=1_000_000.0,
+        equity=starting_equity,
+        cash=starting_equity,
+        peak_equity=starting_equity,
         drawdown=0.0,
         kill_switch_active=False,
         cooldown_days_left=0,
         settings_json={
+            "paper_starting_equity": starting_equity,
             "risk_per_trade": settings.risk_per_trade,
             "max_positions": settings.max_positions,
             "kill_switch_dd": settings.kill_switch_drawdown,
@@ -234,6 +236,7 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
             "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
             "operate_max_gap_bars": settings.operate_max_gap_bars,
+            "data_quality_gap_fail_lookback_days": settings.data_quality_gap_fail_lookback_days,
             "operate_outlier_zscore": settings.operate_outlier_zscore,
             "operate_cost_ratio_spike_threshold": settings.operate_cost_ratio_spike_threshold,
             "operate_cost_ratio_spike_days": settings.operate_cost_ratio_spike_days,
@@ -544,7 +547,16 @@ def _scan_truncation_guard(
     rows = session.exec(select(PaperRun).order_by(PaperRun.asof_ts.desc()).limit(days)).all()
     if len(rows) < days:
         return False, {"days": days, "reduced_to": reduced_to, "truncated_count": 0}
-    truncated_count = int(sum(1 for row in rows if bool(row.scan_truncated)))
+    # A run can be "truncated" simply because its configured universe cap was lower
+    # than the bundle size. That should not trigger a smaller scan; only count runs
+    # that already scanned more than the proposed reduction and still failed to finish.
+    truncated_count = int(
+        sum(
+            1
+            for row in rows
+            if bool(row.scan_truncated) and int(row.scanned_symbols or 0) > reduced_to
+        )
+    )
     return truncated_count >= days, {
         "days": days,
         "reduced_to": reduced_to,
@@ -1293,12 +1305,11 @@ def _resolve_max_symbols_scan(
                     requested = int(value)
                 except (TypeError, ValueError):
                     requested = None
-    if requested is None:
-        requested = 50
-
     hard_cap = int(
         state_settings.get("autopilot_max_symbols_scan", settings.autopilot_max_symbols_scan)
     )
+    if requested is None:
+        requested = hard_cap
     return clamp_scan_symbols(
         settings=settings,
         requested=max(1, int(requested)),
@@ -1319,15 +1330,17 @@ def _resolve_max_runtime_seconds(
             requested = int(explicit)
         except (TypeError, ValueError):
             requested = None
-    if requested is None:
-        requested = int(
-            state_settings.get(
-                "autopilot_max_runtime_seconds", settings.autopilot_max_runtime_seconds
-            )
-        )
-    hard_cap = int(
-        state_settings.get("autopilot_max_runtime_seconds", settings.autopilot_max_runtime_seconds)
+    raw_hard_cap = state_settings.get(
+        "autopilot_max_runtime_seconds", settings.autopilot_max_runtime_seconds
     )
+    try:
+        hard_cap = int(raw_hard_cap)
+    except (TypeError, ValueError):
+        hard_cap = int(settings.autopilot_max_runtime_seconds)
+    if hard_cap <= 0:
+        hard_cap = int(settings.autopilot_max_runtime_seconds)
+    if requested is None:
+        requested = hard_cap
     try:
         internal_hard_cap = int(payload.get("runtime_hard_cap_seconds"))
     except (TypeError, ValueError):
@@ -2936,7 +2949,7 @@ def run_paper_step(
                 trading_date=asof_dt.date(),
                 operate_mode=operate_mode,
                 overrides=state_settings,
-                force=False,
+                force=True,
             )
             confidence_agg_snapshot = serialize_daily_confidence_agg(agg_row)
             confidence_gate_snapshot = {

@@ -67,6 +67,17 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
+def _primary_source_providers(settings: Settings, overrides: dict[str, Any] | None = None) -> set[str]:
+    state = dict(overrides or {})
+    providers = {"UPSTOX"}
+    configured = str(
+        state.get("data_updates_provider_kind", settings.data_updates_provider_kind)
+    ).strip().upper()
+    if configured:
+        providers.add(configured)
+    return providers
+
+
 def _calendar_segment(*, settings: Settings, overrides: dict[str, Any] | None = None) -> str:
     state = overrides or {}
     token = str(state.get("trading_calendar_segment", settings.trading_calendar_segment)).strip().upper()
@@ -155,6 +166,7 @@ def _gap_issues_daily(
     symbol: str,
     frame: pd.DataFrame,
     max_gap_bars: int,
+    fail_cutoff_date: dt_date | None,
     settings: Settings,
     segment: str,
 ) -> list[dict[str, Any]]:
@@ -176,9 +188,12 @@ def _gap_issues_daily(
         missing_days = [day for day in expected_days if prev_day < day < next_day]
         missing_count = len(missing_days)
         if missing_count > max_gap_bars:
+            is_recent_gap = fail_cutoff_date is None or next_day >= fail_cutoff_date
+            severity = STATUS_FAIL if is_recent_gap else STATUS_WARN
+            scope = "recent" if is_recent_gap else "historical"
             issues.append(
                 _issue(
-                    severity=STATUS_FAIL,
+                    severity=severity,
                     code="gap_exceeds_threshold",
                     symbol=symbol,
                     message=(
@@ -188,6 +203,10 @@ def _gap_issues_daily(
                     details={
                         "missing_bars": missing_count,
                         "max_gap_bars": int(max_gap_bars),
+                        "gap_scope": scope,
+                        "fail_cutoff_date": (
+                            fail_cutoff_date.isoformat() if fail_cutoff_date else None
+                        ),
                         "missing_dates": [day.isoformat() for day in missing_days[:10]],
                     },
                 )
@@ -246,6 +265,7 @@ def _validate_symbol_frame(
     zscore_threshold: float,
     settings: Settings,
     segment: str,
+    gap_fail_cutoff_date: dt_date | None,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if frame.empty:
@@ -304,6 +324,7 @@ def _validate_symbol_frame(
                 symbol=symbol,
                 frame=frame,
                 max_gap_bars=max_gap_bars,
+                fail_cutoff_date=gap_fail_cutoff_date,
                 settings=settings,
                 segment=segment,
             )
@@ -333,6 +354,16 @@ def run_data_quality_report(
         2.0,
         _safe_float(state.get("operate_outlier_zscore", settings.operate_outlier_zscore), settings.operate_outlier_zscore),
     )
+    gap_fail_lookback_days = max(
+        0,
+        _safe_int(
+            state.get(
+                "data_quality_gap_fail_lookback_days",
+                settings.data_quality_gap_fail_lookback_days,
+            ),
+            settings.data_quality_gap_fail_lookback_days,
+        ),
+    )
     stale_limit = _stale_limit_minutes(tf, settings=settings, overrides=state)
     stale_severity = _stale_severity(settings=settings, overrides=state)
     segment = _calendar_segment(settings=settings, overrides=state)
@@ -356,6 +387,8 @@ def run_data_quality_report(
     issues: list[dict[str, Any]] = []
     last_bar_ts: datetime | None = None
     coverage_values: list[float] = []
+    now = reference_ts if reference_ts is not None else datetime.now(timezone.utc)
+    gap_fail_cutoff_date = now.date() - timedelta(days=gap_fail_lookback_days)
 
     for symbol in symbols:
         frame = store.load_ohlcv(
@@ -379,6 +412,7 @@ def run_data_quality_report(
                 zscore_threshold=zscore_threshold,
                 settings=settings,
                 segment=segment,
+                gap_fail_cutoff_date=gap_fail_cutoff_date,
             )
         )
 
@@ -391,7 +425,6 @@ def run_data_quality_report(
             )
         )
 
-    now = reference_ts if reference_ts is not None else datetime.now(timezone.utc)
     if last_bar_ts is None:
         issues.append(
             _issue(
@@ -528,10 +561,11 @@ def run_data_quality_report(
             )
         )
     if operate_mode == "live" and coverage_by_source_provider:
+        primary_providers = _primary_source_providers(settings, state)
         fallback_pct = sum(
             float(value)
             for key, value in coverage_by_source_provider.items()
-            if str(key).upper() not in {"UPSTOX"}
+            if str(key).upper() not in primary_providers
         )
         if fallback_pct > 0.0:
             issues.append(
@@ -540,10 +574,11 @@ def run_data_quality_report(
                     code="fallback_source_live_mode",
                     message="Latest trading day includes fallback/inbox source data in live mode.",
                     details={
-                        "coverage_by_source_provider": coverage_by_source_provider,
-                        "fallback_pct": round(float(fallback_pct), 3),
-                    },
-                )
+                    "coverage_by_source_provider": coverage_by_source_provider,
+                    "primary_source_providers": sorted(primary_providers),
+                    "fallback_pct": round(float(fallback_pct), 3),
+                },
+            )
             )
     if operate_mode == "live" and latest_day_all_low_confidence:
         issues.append(
@@ -620,7 +655,7 @@ def run_data_quality_report(
             trading_date=now.date(),
             operate_mode=operate_mode,
             overrides=state,
-            force=False,
+            force=True,
         )
     except Exception as exc:  # noqa: BLE001
         emit_operate_event(

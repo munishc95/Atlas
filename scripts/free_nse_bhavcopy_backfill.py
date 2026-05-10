@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from sqlmodel import Session
@@ -18,9 +19,12 @@ sys.path.insert(0, str(API_ROOT))
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import engine, init_db  # noqa: E402
 from app.providers.nse_bhavcopy_provider import NseBhavcopyProvider  # noqa: E402
+from app.services.data_provenance import confidence_for_provider, upsert_provenance_rows  # noqa: E402
 from app.services.data_quality import run_data_quality_report  # noqa: E402
 from app.services.data_store import DataStore  # noqa: E402
 from app.services.trading_calendar import list_trading_days  # noqa: E402
+
+IST_ZONE = ZoneInfo("Asia/Kolkata")
 
 
 def _parse_day(value: str) -> date:
@@ -119,6 +123,28 @@ def run_backfill(
                     provider="NSE_BHAVCOPY_FREE",
                     bundle_id=bundle_id,
                 )
+                incoming_dates = (
+                    pd.to_datetime(incoming["datetime"], utc=True, errors="coerce")
+                    .dt.tz_convert(IST_ZONE)
+                    .dt.date
+                )
+                bar_dates = [day for day in sorted(set(incoming_dates.tolist())) if day is not None]
+                if bar_dates:
+                    upsert_provenance_rows(
+                        session,
+                        bundle_id=int(bundle_id),
+                        timeframe="1d",
+                        symbol=symbol,
+                        bar_dates=bar_dates,
+                        source_provider="NSE_BHAVCOPY",
+                        source_run_kind="nse_bhavcopy_backfill",
+                        source_run_id=None,
+                        confidence_score=confidence_for_provider(
+                            provider="NSE_BHAVCOPY",
+                            settings=settings,
+                        ),
+                        reason="free_nse_bhavcopy_backfill",
+                    )
                 updated_symbols += 1
                 added_rows_total += max(0, added)
                 if updated_symbols % 50 == 0:
@@ -126,6 +152,7 @@ def run_backfill(
                         f"saved_symbols={updated_symbols} added_rows_total={added_rows_total}",
                         flush=True,
                     )
+            session.commit()
 
         quality: dict[str, Any] | None = None
         if run_quality and not dry_run:

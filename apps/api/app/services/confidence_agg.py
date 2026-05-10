@@ -88,6 +88,12 @@ def _settings_thresholds(
     operate_mode: str,
 ) -> dict[str, Any]:
     state = dict(overrides or {})
+    primary_providers = {"UPSTOX"}
+    configured_provider = str(
+        state.get("data_updates_provider_kind", settings.data_updates_provider_kind)
+    ).strip().upper()
+    if configured_provider:
+        primary_providers.add(configured_provider)
     scaling_enabled_raw = state.get("confidence_risk_scaling_enabled")
     if isinstance(scaling_enabled_raw, bool):
         scaling_enabled = scaling_enabled_raw
@@ -157,6 +163,7 @@ def _settings_thresholds(
                 ),
             ),
         ),
+        "confidence_gate_primary_providers": sorted(primary_providers),
     }
     thresholds["signature"] = hashlib.sha256(
         json.dumps(thresholds, sort_keys=True).encode("utf-8")

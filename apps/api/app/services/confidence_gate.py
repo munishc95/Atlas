@@ -16,7 +16,17 @@ DECISION_SHADOW_ONLY = "SHADOW_ONLY"
 DECISION_BLOCK_ENTRIES = "BLOCK_ENTRIES"
 
 PRIMARY_PROVIDER = "UPSTOX"
-FALLBACK_PROVIDERS = {"NSE_BHAVCOPY", "NSE_EOD", "INBOX"}
+
+
+def _primary_providers(settings: Settings, overrides: dict[str, Any] | None = None) -> set[str]:
+    scope = dict(overrides or {})
+    providers = {PRIMARY_PROVIDER}
+    configured = str(
+        scope.get("data_updates_provider_kind", settings.data_updates_provider_kind)
+    ).strip().upper()
+    if configured:
+        providers.add(configured)
+    return providers
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -35,6 +45,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 def _settings_scope(settings: Settings, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     scope = dict(overrides or {})
+    primary_providers = sorted(_primary_providers(settings, overrides))
     return {
         "enabled": bool(scope.get("confidence_gate_enabled", settings.confidence_gate_enabled)),
         "avg_threshold": _safe_float(
@@ -73,6 +84,7 @@ def _settings_scope(settings: Settings, overrides: dict[str, Any] | None = None)
             scope.get("trading_calendar_segment", settings.trading_calendar_segment)
         ).strip()
         or "EQUITIES",
+        "primary_providers": primary_providers,
     }
 
 
@@ -193,6 +205,7 @@ def _day_stats(
     rows: list[DataProvenance],
     *,
     low_symbol_threshold: float,
+    primary_providers: set[str],
 ) -> dict[str, Any]:
     eligible_symbols = len(rows)
     if eligible_symbols <= 0:
@@ -221,10 +234,10 @@ def _day_stats(
         provider: (count / max(1, eligible_symbols))
         for provider, count in sorted(provider_counts.items())
     }
-    fallback_count = sum(
-        count for provider, count in provider_counts.items() if provider in FALLBACK_PROVIDERS
+    primary_count = sum(
+        count for provider, count in provider_counts.items() if provider in primary_providers
     )
-    primary_count = int(provider_counts.get(PRIMARY_PROVIDER, 0))
+    fallback_count = max(0, int(eligible_symbols) - int(primary_count))
     return {
         "eligible_symbols": int(eligible_symbols),
         "avg_confidence": float(avg_confidence),
@@ -339,6 +352,11 @@ def evaluate_confidence_gate(
     days = sorted(set(days))
 
     stats_per_day: list[dict[str, Any]] = []
+    primary_providers = {
+        str(item).strip().upper()
+        for item in list(scope.get("primary_providers", [PRIMARY_PROVIDER]))
+        if str(item).strip()
+    }
     for day in days:
         stats_per_day.append(
             _day_stats(
@@ -349,10 +367,19 @@ def evaluate_confidence_gate(
                     trading_date=day,
                 ),
                 low_symbol_threshold=float(scope["low_symbol_threshold"]),
+                primary_providers=primary_providers,
             )
         )
 
-    latest_stats = stats_per_day[-1] if stats_per_day else _day_stats([], low_symbol_threshold=65.0)
+    latest_stats = (
+        stats_per_day[-1]
+        if stats_per_day
+        else _day_stats(
+            [],
+            low_symbol_threshold=65.0,
+            primary_providers=primary_providers,
+        )
+    )
     eligible_symbols = int(latest_stats["eligible_symbols"])
     avg_confidence = float(
         sum(float(item["avg_confidence"]) for item in stats_per_day) / max(1, len(stats_per_day))
@@ -409,6 +436,7 @@ def evaluate_confidence_gate(
             "hard_floor": float(scope["hard_floor"]),
             "action_on_trigger": trigger_action,
             "enabled": bool(enabled),
+            "primary_providers": sorted(primary_providers),
         },
         "days_lookback_used": len(stats_per_day),
         "eligible_symbols": eligible_symbols,

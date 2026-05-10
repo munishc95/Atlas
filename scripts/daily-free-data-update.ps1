@@ -30,6 +30,25 @@ $LogPath = Join-Path $LogsRoot ("daily-free-data-update-{0}.log" -f $RunDate.ToS
 Set-Location $RepoRoot
 $env:PYTHONPATH = Join-Path $RepoRoot "apps\api"
 
+function Invoke-AtlasPython {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [Parameter(Mandatory = $true)]
+        [string]$FailureLabel
+    )
+
+    Write-Host ("python " + ($Arguments -join " "))
+    $Output = & python @Arguments 2>&1
+    $ExitCode = $LASTEXITCODE
+    foreach ($Line in $Output) {
+        Write-Host $Line
+    }
+    if ($ExitCode -ne 0) {
+        throw "$FailureLabel exited with code $ExitCode"
+    }
+}
+
 $ImportArgs = @(
     "scripts/free_nse_bhavcopy_backfill.py",
     "--bundle-id", "$BundleId",
@@ -56,45 +75,33 @@ try {
         Write-Host "Operate run: enabled ($OperateTimeframe, $OperateRegime)"
     }
     Write-Host "Log: $LogPath"
-    & python @ImportArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Importer exited with code $LASTEXITCODE"
-    }
-    & python @(
-        "scripts/free_nse_corporate_actions_import.py",
-        "--bundle-id", "$BundleId",
-        "--start-date", $CorporateActionStartDate,
-        "--end-date", $EndDate,
-        "--mode", "UPSERT"
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw "Corporate action importer exited with code $LASTEXITCODE"
-    }
-    if (-not $SkipEventRisk) {
-        & python @(
-            "scripts/free_event_risk_sync.py",
+    Invoke-AtlasPython -Arguments $ImportArgs -FailureLabel "Importer"
+    Invoke-AtlasPython -FailureLabel "Corporate action importer" -Arguments @(
+            "scripts/free_nse_corporate_actions_import.py",
             "--bundle-id", "$BundleId",
-            "--start-date", $EventRiskStartDate,
-            "--end-date", $EventRiskEndDate
+            "--start-date", $CorporateActionStartDate,
+            "--end-date", $EndDate,
+            "--mode", "UPSERT"
         )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Event-risk sync exited with code $LASTEXITCODE"
-        }
+    if (-not $SkipEventRisk) {
+        Invoke-AtlasPython -FailureLabel "Event-risk sync" -Arguments @(
+                "scripts/free_event_risk_sync.py",
+                "--bundle-id", "$BundleId",
+                "--start-date", $EventRiskStartDate,
+                "--end-date", $EventRiskEndDate
+            )
     }
     if ($RunOperate) {
-        & python @(
-            "scripts/run_operate_inline.py",
-            "--bundle-id", "$BundleId",
-            "--timeframe", "$OperateTimeframe",
-            "--regime", "$OperateRegime",
-            "--date", $EndDate,
-            "--source", "windows_daily_free_data_task",
-            "--max-runtime-seconds", "$OperateMaxRuntimeSeconds",
-            "--mark-auto-run-date"
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Operate inline run exited with code $LASTEXITCODE"
-        }
+        Invoke-AtlasPython -FailureLabel "Operate inline run" -Arguments @(
+                "scripts/run_operate_inline.py",
+                "--bundle-id", "$BundleId",
+                "--timeframe", "$OperateTimeframe",
+                "--regime", "$OperateRegime",
+                "--date", $EndDate,
+                "--source", "windows_daily_free_data_task",
+                "--max-runtime-seconds", "$OperateMaxRuntimeSeconds",
+                "--mark-auto-run-date"
+            )
     }
     Write-Host "Atlas free NSE daily update finished"
 }

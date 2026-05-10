@@ -14,6 +14,7 @@ from app.db.models import DatasetBundle, PaperOrder, PaperPosition, PaperState, 
 from app.db.session import engine
 from app.main import app
 from app.services.data_store import DataStore
+from app.services.paper import _resolve_max_symbols_scan
 from app.engine.costs import estimate_equity_delivery_cost, estimate_futures_cost
 
 
@@ -166,6 +167,28 @@ def _reset_paper_state() -> None:
             }
             session.add(state)
         session.commit()
+
+
+def test_strategy_scan_default_uses_autopilot_hard_cap() -> None:
+    settings = get_settings()
+    resolved = _resolve_max_symbols_scan(
+        payload={},
+        policy={"policy_definition": {}},
+        state_settings={"autopilot_max_symbols_scan": 500},
+        settings=settings,
+    )
+    assert resolved == 500
+
+
+def test_policy_universe_scan_limit_still_respected() -> None:
+    settings = get_settings()
+    resolved = _resolve_max_symbols_scan(
+        payload={},
+        policy={"policy_definition": {"universe": {"max_symbols_scan": 125}}},
+        state_settings={"autopilot_max_symbols_scan": 500},
+        settings=settings,
+    )
+    assert resolved == 125
 
 
 def test_dataset_scoped_preview_excludes_outside_symbols() -> None:

@@ -51,6 +51,7 @@ def _seed_bundle_with_low_confidence(
     start_day: str = "2026-02-10",
     days: int = 4,
     confidence: float = 50.0,
+    source_provider: str = "INBOX",
 ) -> tuple[int, list[datetime]]:
     frame = _frame(start_day, days, 100.0)
     dataset = store.save_ohlcv(
@@ -70,7 +71,7 @@ def _seed_bundle_with_low_confidence(
         timeframe="1d",
         symbol=symbol,
         bar_dates=bar_dates,
-        source_provider="INBOX",
+        source_provider=source_provider,
         source_run_kind="data_updates",
         source_run_id=f"v37-{symbol}",
         confidence_score=confidence,
@@ -140,6 +141,36 @@ def test_confidence_gate_deterministic_for_same_inputs() -> None:
         assert first["decision"] == second["decision"]
         assert first["reasons"] == second["reasons"]
         assert first["summary"] == second["summary"]
+
+
+def test_confidence_gate_accepts_configured_nse_bhavcopy_as_primary() -> None:
+    init_db()
+    settings = get_settings()
+    store = _store()
+    symbol = f"CGBHV_{uuid4().hex[:8].upper()}"
+    with Session(engine) as session:
+        bundle_id, datetimes = _seed_bundle_with_low_confidence(
+            session=session,
+            store=store,
+            symbol=symbol,
+            confidence=90.0,
+            source_provider="NSE_BHAVCOPY",
+        )
+        overrides = _base_settings_payload(settings)
+        overrides["data_updates_provider_kind"] = "NSE_BHAVCOPY"
+        gate = evaluate_confidence_gate(
+            session,
+            settings=settings,
+            bundle_id=bundle_id,
+            timeframe="1d",
+            asof_ts=pd.Timestamp(datetimes[-1]).to_pydatetime(),
+            operate_mode="live",
+            overrides=overrides,
+            persist=False,
+        )
+        assert str(gate["decision"]).upper() == "PASS"
+        assert "fallback_dominance" not in list(gate["reasons"])
+        assert gate["summary"]["provider_mix"] == {"NSE_BHAVCOPY": 1.0}
 
 
 def test_confidence_gate_shadow_only_keeps_live_state_intact() -> None:

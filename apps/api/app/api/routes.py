@@ -3393,6 +3393,7 @@ def get_settings_payload(
         "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
         "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
         "operate_max_gap_bars": settings.operate_max_gap_bars,
+        "data_quality_gap_fail_lookback_days": settings.data_quality_gap_fail_lookback_days,
         "operate_outlier_zscore": settings.operate_outlier_zscore,
         "operate_cost_ratio_spike_threshold": settings.operate_cost_ratio_spike_threshold,
         "operate_cost_ratio_spike_days": settings.operate_cost_ratio_spike_days,

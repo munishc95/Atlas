@@ -364,6 +364,7 @@ class RuntimeSettingsRequest(BaseModel):
     operate_max_stale_minutes_1d: int | None = None
     operate_max_stale_minutes_4h_ish: int | None = None
     operate_max_gap_bars: int | None = None
+    data_quality_gap_fail_lookback_days: int | None = None
     operate_outlier_zscore: float | None = None
     operate_cost_ratio_spike_threshold: float | None = None
     operate_cost_ratio_spike_days: int | None = None

@@ -1219,7 +1219,7 @@ def run_provider_updates(
             trading_date=datetime.now(UTC).date(),
             operate_mode=str(state.get("operate_mode", settings.operate_mode)).strip().lower(),
             overrides=state,
-            force=False,
+            force=True,
         )
     except Exception as exc:  # noqa: BLE001
         emit_operate_event(

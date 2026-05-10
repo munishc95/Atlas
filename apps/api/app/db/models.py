@@ -959,9 +959,9 @@ class ReplayRun(SQLModel, table=True):
 
 class PaperState(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
-    equity: float = 1_000_000.0
-    cash: float = 1_000_000.0
-    peak_equity: float = 1_000_000.0
+    equity: float = 10_000.0
+    cash: float = 10_000.0
+    peak_equity: float = 10_000.0
     drawdown: float = 0.0
     kill_switch_active: bool = False
     cooldown_days_left: int = 0

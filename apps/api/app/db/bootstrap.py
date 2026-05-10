@@ -8,16 +8,18 @@ from app.db.models import DatasetBundle, Instrument, PaperState, Strategy, Symbo
 
 def seed_defaults(session: Session, settings: Settings) -> None:
     if session.get(PaperState, 1) is None:
+        starting_equity = max(0.0, float(settings.paper_starting_equity))
         session.add(
             PaperState(
                 id=1,
-                equity=1_000_000.0,
-                cash=1_000_000.0,
-                peak_equity=1_000_000.0,
+                equity=starting_equity,
+                cash=starting_equity,
+                peak_equity=starting_equity,
                 drawdown=0.0,
                 kill_switch_active=False,
                 cooldown_days_left=0,
                 settings_json={
+                    "paper_starting_equity": starting_equity,
                     "risk_per_trade": settings.risk_per_trade,
                     "max_positions": settings.max_positions,
                     "kill_switch_dd": settings.kill_switch_drawdown,
@@ -90,6 +92,7 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "operate_max_stale_minutes_1d": settings.operate_max_stale_minutes_1d,
                     "operate_max_stale_minutes_4h_ish": settings.operate_max_stale_minutes_4h_ish,
                     "operate_max_gap_bars": settings.operate_max_gap_bars,
+                    "data_quality_gap_fail_lookback_days": settings.data_quality_gap_fail_lookback_days,
                     "operate_outlier_zscore": settings.operate_outlier_zscore,
                     "operate_cost_ratio_spike_threshold": settings.operate_cost_ratio_spike_threshold,
                     "operate_cost_ratio_spike_days": settings.operate_cost_ratio_spike_days,
