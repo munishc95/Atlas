@@ -22,6 +22,7 @@ __pycache__/
 data/parquet/
 data/features/
 data/cache/
+data/backups/
 data/exports/
 data/inbox/
 data/logs/

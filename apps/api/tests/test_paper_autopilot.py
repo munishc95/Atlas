@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 import time
 from uuid import uuid4
 
@@ -445,6 +446,186 @@ def test_cost_model_changes_cash_with_estimated_costs() -> None:
         assert abs(state["cash"] - expected_cash) < 1e-4
 
 
+def test_bundle_entry_gate_ignores_positions_outside_active_bundle() -> None:
+    provider = f"gate-{uuid4().hex[:8]}"
+    _, _ = _seed_dataset_symbols(
+        provider=provider,
+        symbols=["GATE_A"],
+        bundle_name=f"gate-{provider}",
+    )
+    with Session(engine) as session:
+        bundle = session.exec(
+            select(DatasetBundle).where(DatasetBundle.name == f"gate-{provider}")
+        ).first()
+        assert bundle is not None and bundle.id is not None
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        with Session(engine) as session:
+            state = session.get(PaperState, 1)
+            assert state is not None
+            state.settings_json = {
+                **(state.settings_json or {}),
+                "max_positions": 1,
+                "paper_use_simulator_engine": True,
+                "confidence_gate_enabled": False,
+                "confidence_risk_scaling_enabled": False,
+                "cost_model_enabled": False,
+                "slippage_base_bps": 0.0,
+                "slippage_vol_factor": 0.0,
+                "commission_bps": 0.0,
+                "data_quality_symbol_gate_enabled": True,
+            }
+            session.add(
+                PaperPosition(
+                    symbol="OUTSIDE_TEST",
+                    side="BUY",
+                    instrument_kind="EQUITY_CASH",
+                    qty=100,
+                    avg_price=100.0,
+                    stop_price=95.0,
+                    metadata_json={"underlying_symbol": "OUTSIDE_TEST"},
+                )
+            )
+            session.add(state)
+            session.commit()
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle.id,
+                "auto_generate_signals": False,
+                "signals": [
+                    {
+                        "symbol": "GATE_A",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 100.0,
+                        "stop_distance": 100.0,
+                        "signal_strength": 0.95,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    }
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 1
+        assert result.get("entry_gate_positions_before") == 0
+        assert result.get("ignored_positions_outside_bundle_count") == 1
+        symbols = {row.get("symbol") for row in result.get("positions", [])}
+        assert {"GATE_A", "OUTSIDE_TEST"}.issubset(symbols)
+        skipped_reasons = {row.get("reason") for row in result.get("skipped_signals", [])}
+        assert "max_positions_reached" not in skipped_reasons
+
+
+def test_data_quality_symbol_gate_skips_suspect_signal(monkeypatch) -> None:
+    provider = f"dqgate-{uuid4().hex[:8]}"
+    _, _ = _seed_dataset_symbols(
+        provider=provider,
+        symbols=["DQ_BAD", "DQ_GOOD"],
+        bundle_name=f"dqgate-{provider}",
+    )
+    with Session(engine) as session:
+        bundle = session.exec(
+            select(DatasetBundle).where(DatasetBundle.name == f"dqgate-{provider}")
+        ).first()
+        assert bundle is not None and bundle.id is not None
+
+    def fake_quality_report(**_: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=777,
+            status="WARN",
+            issues_json=[
+                {
+                    "severity": "WARN",
+                    "code": "return_outliers",
+                    "message": "Synthetic outlier warning.",
+                    "symbol": "DQ_BAD",
+                    "details": {"outlier_count": 1},
+                }
+            ],
+        )
+
+    monkeypatch.setattr("app.services.paper.run_data_quality_report", fake_quality_report)
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state()
+        with Session(engine) as session:
+            state = session.get(PaperState, 1)
+            assert state is not None
+            state.settings_json = {
+                **(state.settings_json or {}),
+                "max_positions": 3,
+                "paper_use_simulator_engine": True,
+                "confidence_gate_enabled": False,
+                "confidence_risk_scaling_enabled": False,
+                "cost_model_enabled": False,
+                "slippage_base_bps": 0.0,
+                "slippage_vol_factor": 0.0,
+                "commission_bps": 0.0,
+            }
+            session.add(state)
+            session.commit()
+
+        run = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "bundle_id": bundle.id,
+                "auto_generate_signals": False,
+                "signals": [
+                    {
+                        "symbol": "DQ_BAD",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 100.0,
+                        "stop_distance": 100.0,
+                        "signal_strength": 0.99,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    },
+                    {
+                        "symbol": "DQ_GOOD",
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "instrument_kind": "EQUITY_CASH",
+                        "price": 100.0,
+                        "stop_distance": 100.0,
+                        "signal_strength": 0.9,
+                        "adv": 10_000_000_000.0,
+                        "vol_scale": 0.0,
+                    },
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert run.status_code == 200
+        job = _wait_job(client, run.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert result.get("selected_signals_count") == 1
+        selected_symbols = {row.get("symbol") for row in result.get("selected_signals", [])}
+        assert selected_symbols == {"DQ_GOOD"}
+        skipped = result.get("skipped_signals", [])
+        assert any(
+            row.get("symbol") == "DQ_BAD"
+            and row.get("reason") == "data_quality_symbol_warn"
+            and row.get("data_quality_issue_codes") == ["return_outliers"]
+            for row in skipped
+        )
+        gate = result.get("data_quality_symbol_gate") or {}
+        assert gate.get("blocked_symbols_count") == 1
+        assert gate.get("report_id") == 777
+
+
 def test_allowed_sides_blocks_sell_signal_when_disabled() -> None:
     with _client_inline_jobs() as client:
         _reset_paper_state()
@@ -874,6 +1055,7 @@ def test_policy_autopilot_generated_sell_prefers_futures() -> None:
                 "paper_mode": "policy",
                 "active_policy_id": policy.id,
                 "allowed_sides": ["BUY", "SELL"],
+                "data_quality_symbol_gate_enabled": False,
             }
             session.add(state)
             session.commit()

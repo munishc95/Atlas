@@ -15,6 +15,7 @@ from app.db.models import (
     AuditLog,
     Dataset,
     DatasetBundle,
+    DataQualityReport,
     Instrument,
     PolicyEnsemble,
     PolicyHealthSnapshot,
@@ -85,6 +86,11 @@ from app.services.regime import regime_policy
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
 FUTURE_KINDS = {"STOCK_FUT", "INDEX_FUT"}
+DATA_QUALITY_SYMBOL_BLOCK_CODES = {
+    "corporate_action_anomaly",
+    "gap_exceeds_threshold",
+    "return_outliers",
+}
 
 
 def _utc_now() -> datetime:
@@ -815,6 +821,121 @@ def _correlation_reject(
         except (TypeError, ValueError):
             continue
     return False
+
+
+def _position_underlying_symbol(position: PaperPosition) -> str:
+    metadata = position.metadata_json if isinstance(position.metadata_json, dict) else {}
+    return str(metadata.get("underlying_symbol", position.symbol)).upper()
+
+
+def _entry_gate_positions_for_bundle(
+    *,
+    session: Session,
+    store: DataStore,
+    positions: list[PaperPosition],
+    bundle_id: int | None,
+    timeframe: str,
+    asof_dt: datetime,
+) -> tuple[list[PaperPosition], list[PaperPosition]]:
+    if bundle_id is None:
+        return list(positions), []
+    try:
+        bundle_symbols = {
+            str(symbol).upper()
+            for symbol in store.get_bundle_symbols(
+                session,
+                int(bundle_id),
+                timeframe=timeframe,
+                asof_date=asof_dt,
+            )
+            if str(symbol).strip()
+        }
+    except Exception as exc:  # noqa: BLE001
+        _log(
+            session,
+            "entry_gate_bundle_scope_failed",
+            {
+                "bundle_id": bundle_id,
+                "timeframe": timeframe,
+                "asof": asof_dt.isoformat(),
+                "error": str(exc),
+            },
+        )
+        return list(positions), []
+    if not bundle_symbols:
+        return list(positions), []
+
+    inside: list[PaperPosition] = []
+    outside: list[PaperPosition] = []
+    for position in positions:
+        symbol = str(position.symbol).upper()
+        underlying = _position_underlying_symbol(position)
+        if symbol in bundle_symbols or underlying in bundle_symbols:
+            inside.append(position)
+        else:
+            outside.append(position)
+    return inside, outside
+
+
+def _data_quality_symbol_gate(
+    report: DataQualityReport | None,
+    *,
+    state_settings: dict[str, Any],
+) -> dict[str, Any]:
+    enabled = bool(state_settings.get("data_quality_symbol_gate_enabled", True))
+    raw_codes = state_settings.get("data_quality_symbol_gate_codes")
+    if isinstance(raw_codes, list) and raw_codes:
+        blocking_codes = {str(item).strip() for item in raw_codes if str(item).strip()}
+    else:
+        blocking_codes = set(DATA_QUALITY_SYMBOL_BLOCK_CODES)
+    blocking_codes = {item for item in blocking_codes if item}
+
+    report_id = getattr(report, "id", None) if report is not None else None
+    report_status = str(getattr(report, "status", "")) if report is not None else None
+    blocked_symbols: dict[str, list[dict[str, Any]]] = {}
+    issues = getattr(report, "issues_json", None) if report is not None else None
+    if enabled and isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code", "")).strip()
+            if code not in blocking_codes:
+                continue
+            symbol = str(issue.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            blocked_symbols.setdefault(symbol, []).append(
+                {
+                    "code": code,
+                    "severity": str(issue.get("severity", "")),
+                    "message": str(issue.get("message", "")),
+                    "details": dict(issue.get("details", {}))
+                    if isinstance(issue.get("details"), dict)
+                    else {},
+                }
+            )
+
+    return {
+        "enabled": enabled,
+        "report_id": report_id,
+        "report_status": report_status,
+        "blocking_codes": sorted(blocking_codes),
+        "blocked_symbols": blocked_symbols,
+        "blocked_symbols_count": len(blocked_symbols),
+    }
+
+
+def _data_quality_symbol_gate_summary(gate: dict[str, Any]) -> dict[str, Any]:
+    blocked_symbols = gate.get("blocked_symbols", {})
+    symbol_keys = sorted(blocked_symbols) if isinstance(blocked_symbols, dict) else []
+    return {
+        "enabled": bool(gate.get("enabled", False)),
+        "report_id": gate.get("report_id"),
+        "report_status": gate.get("report_status"),
+        "blocking_codes": list(gate.get("blocking_codes", [])),
+        "blocked_symbols_count": int(gate.get("blocked_symbols_count", 0) or 0),
+        "blocked_symbols_sample": symbol_keys[:50],
+    }
 
 
 def _cost_settings(state_settings: dict[str, Any], settings: Settings) -> dict[str, float]:
@@ -1558,6 +1679,7 @@ def _run_paper_step_with_simulator_engine(
     confidence_gate_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
+    data_quality_symbol_gate: dict[str, Any],
     risk_overlay: dict[str, Any],
     cost_spike_active: bool,
     cost_spike_meta: dict[str, Any],
@@ -1570,18 +1692,27 @@ def _run_paper_step_with_simulator_engine(
     positions_before_by_id: dict[int, PaperPosition],
     position_ids_before: set[int],
     order_ids_before: set[int],
+    entry_gate_positions_count: int,
+    ignored_positions_outside_bundle: list[PaperPosition],
     equity_before: float,
     cash_before: float,
     drawdown_before: float,
     mtm_before: float,
 ) -> dict[str, Any]:
     seed = _resolve_seed(payload, policy, settings)
+    execution_policy = policy
+    if ignored_positions_outside_bundle:
+        execution_policy = {
+            **policy,
+            "max_positions": int(policy.get("max_positions", settings.max_positions))
+            + len(ignored_positions_outside_bundle),
+        }
     sim_execution = execute_paper_step_with_simulator(
         session=session,
         settings=settings,
         state=state,
         state_settings=state_settings,
-        policy=policy,
+        policy=execution_policy,
         asof_dt=asof_dt,
         selected_signals=selected_signals,
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
@@ -1737,6 +1868,9 @@ def _run_paper_step_with_simulator_engine(
         "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
+        "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+            data_quality_symbol_gate
+        ),
         "cost_ratio_spike_active": bool(cost_spike_active),
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
@@ -1753,6 +1887,11 @@ def _run_paper_step_with_simulator_engine(
         "selected_signals_count": int(executed_count),
         "skipped_signals_count": int(len(skipped_signals)),
         "positions_before": len(positions_before),
+        "entry_gate_positions_before": int(entry_gate_positions_count),
+        "ignored_positions_outside_bundle_count": len(ignored_positions_outside_bundle),
+        "ignored_positions_outside_bundle": [
+            str(position.symbol).upper() for position in ignored_positions_outside_bundle[:20]
+        ],
         "positions_after": len(live_positions),
         "positions_opened": len(new_position_ids),
         "positions_closed": len(closed_position_ids),
@@ -2056,6 +2195,11 @@ def _run_paper_step_with_simulator_engine(
             "selected_signals_count": executed_count,
             "selected_signals": executed_signals,
             "skipped_signals": skipped_signals,
+            "entry_gate_positions_before": int(entry_gate_positions_count),
+            "ignored_positions_outside_bundle_count": len(ignored_positions_outside_bundle),
+            "ignored_positions_outside_bundle": [
+                str(position.symbol).upper() for position in ignored_positions_outside_bundle[:20]
+            ],
             "safe_mode": {
                 "active": bool(safe_mode_active),
                 "action": safe_mode_action,
@@ -2065,6 +2209,9 @@ def _run_paper_step_with_simulator_engine(
             },
             "no_trade": dict(no_trade_snapshot or {}),
             "confidence_gate": dict(confidence_gate_snapshot or {}),
+            "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+                data_quality_symbol_gate
+            ),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -2168,6 +2315,7 @@ def _run_paper_step_shadow_only(
     confidence_gate_snapshot: dict[str, Any],
     quality_status: str | None,
     quality_warn_summary: list[dict[str, Any]],
+    data_quality_symbol_gate: dict[str, Any],
     risk_overlay: dict[str, Any],
     cost_spike_active: bool,
     cost_spike_meta: dict[str, Any],
@@ -2315,6 +2463,9 @@ def _run_paper_step_shadow_only(
         "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
+        "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+            data_quality_symbol_gate
+        ),
         "cost_ratio_spike_active": bool(cost_spike_active),
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
@@ -2561,6 +2712,9 @@ def _run_paper_step_shadow_only(
             },
             "no_trade": dict(no_trade_snapshot or {}),
             "confidence_gate": dict(confidence_gate_snapshot or {}),
+            "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+                data_quality_symbol_gate
+            ),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
@@ -2884,6 +3038,10 @@ def run_paper_step(
     safe_mode_reason = quality_guard.get("safe_mode_reason")
     quality_status = quality_guard.get("status")
     quality_warn_summary = quality_guard.get("warn_summary", [])
+    data_quality_symbol_gate = _data_quality_symbol_gate(
+        quality_guard.get("report"),
+        state_settings=state_settings,
+    )
     if safe_mode_active:
         _log(
             session,
@@ -3388,10 +3546,18 @@ def run_paper_step(
         signals_source = "generated"
 
     current_positions = list(positions_before)
-    open_symbols = {p.symbol for p in current_positions}
+    entry_gate_positions, ignored_positions_outside_bundle = _entry_gate_positions_for_bundle(
+        session=session,
+        store=store,
+        positions=positions_before,
+        bundle_id=resolved_bundle_id,
+        timeframe=primary_timeframe,
+        asof_dt=asof_dt,
+    )
+    open_symbols = {str(p.symbol).upper() for p in entry_gate_positions}
     open_underlyings = {
-        str((p.metadata_json or {}).get("underlying_symbol", p.symbol)).upper()
-        for p in current_positions
+        _position_underlying_symbol(p)
+        for p in entry_gate_positions
     }
     max_positions = int(policy["max_positions"])
     sector_limit = max(1, min(2, max_positions))
@@ -3514,8 +3680,8 @@ def run_paper_step(
         ).all()
     }
     sector_counts: dict[str, int] = {}
-    for pos in current_positions:
-        underlying = str((pos.metadata_json or {}).get("underlying_symbol", pos.symbol)).upper()
+    for pos in entry_gate_positions:
+        underlying = _position_underlying_symbol(pos)
         sector = sectors.get(underlying, sectors.get(pos.symbol, "UNKNOWN"))
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
@@ -3610,6 +3776,35 @@ def run_paper_step(
             )
             continue
 
+        blocked_symbols = data_quality_symbol_gate.get("blocked_symbols", {})
+        symbol_quality_issues: list[dict[str, Any]] = []
+        if bool(data_quality_symbol_gate.get("enabled", False)) and isinstance(
+            blocked_symbols, dict
+        ):
+            raw_issues = blocked_symbols.get(underlying_symbol) or blocked_symbols.get(symbol)
+            if isinstance(raw_issues, list):
+                symbol_quality_issues = [
+                    dict(item) for item in raw_issues if isinstance(item, dict)
+                ]
+        if symbol_quality_issues:
+            issue_codes = sorted(
+                {
+                    str(item.get("code", ""))
+                    for item in symbol_quality_issues
+                    if str(item.get("code", "")).strip()
+                }
+            )
+            skipped_signals.append(
+                {
+                    **base_meta,
+                    "reason": "data_quality_symbol_warn",
+                    "data_quality_report_id": data_quality_symbol_gate.get("report_id"),
+                    "data_quality_issue_codes": issue_codes,
+                    "data_quality_issues": symbol_quality_issues[:5],
+                }
+            )
+            continue
+
         if symbol in inactive_symbols or underlying_symbol in inactive_symbols:
             skipped_signals.append({**base_meta, "reason": "inactive_symbol_data_gap"})
             continue
@@ -3648,7 +3843,7 @@ def run_paper_step(
         if sector_counts.get(sector, 0) >= sector_limit:
             skipped_signals.append({**base_meta, "reason": "sector_concentration"})
             continue
-        if len(current_positions) + len(selected_signals) >= max_positions:
+        if len(entry_gate_positions) + len(selected_signals) >= max_positions:
             skipped_signals.append({**base_meta, "reason": "max_positions_reached"})
             continue
         if underlying_symbol in selected_underlyings:
@@ -3830,6 +4025,7 @@ def run_paper_step(
             confidence_gate_snapshot=confidence_gate_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
+            data_quality_symbol_gate=data_quality_symbol_gate,
             risk_overlay=risk_overlay,
             cost_spike_active=cost_spike_active,
             cost_spike_meta=cost_spike_meta,
@@ -3866,6 +4062,7 @@ def run_paper_step(
             confidence_gate_snapshot=confidence_gate_snapshot,
             quality_status=quality_status,
             quality_warn_summary=quality_warn_summary,
+            data_quality_symbol_gate=data_quality_symbol_gate,
             risk_overlay=risk_overlay,
             cost_spike_active=cost_spike_active,
             cost_spike_meta=cost_spike_meta,
@@ -3878,6 +4075,8 @@ def run_paper_step(
             positions_before_by_id=positions_before_by_id,
             position_ids_before=position_ids_before,
             order_ids_before=order_ids_before,
+            entry_gate_positions_count=len(entry_gate_positions),
+            ignored_positions_outside_bundle=ignored_positions_outside_bundle,
             equity_before=equity_before,
             cash_before=cash_before,
             drawdown_before=drawdown_before,
@@ -4299,6 +4498,9 @@ def run_paper_step(
         "confidence_gate": dict(confidence_gate_snapshot or {}),
         "data_quality_status": quality_status,
         "data_quality_warn_summary": quality_warn_summary,
+        "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+            data_quality_symbol_gate
+        ),
         "cost_ratio_spike_active": bool(cost_spike_active),
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
@@ -4315,6 +4517,11 @@ def run_paper_step(
         "selected_signals_count": int(executed_count),
         "skipped_signals_count": int(len(skipped_signals)),
         "positions_before": len(positions_before),
+        "entry_gate_positions_before": len(entry_gate_positions),
+        "ignored_positions_outside_bundle_count": len(ignored_positions_outside_bundle),
+        "ignored_positions_outside_bundle": [
+            str(position.symbol).upper() for position in ignored_positions_outside_bundle[:20]
+        ],
         "positions_after": len(live_positions),
         "positions_opened": len(new_position_ids),
         "positions_closed": len(closed_position_ids),
@@ -4621,6 +4828,9 @@ def run_paper_step(
             },
             "no_trade": dict(no_trade_snapshot or {}),
             "confidence_gate": dict(confidence_gate_snapshot or {}),
+            "data_quality_symbol_gate": _data_quality_symbol_gate_summary(
+                data_quality_symbol_gate
+            ),
             "guardrails": {
                 "cost_ratio_spike_active": bool(cost_spike_active),
                 "cost_ratio_spike_meta": cost_spike_meta,
