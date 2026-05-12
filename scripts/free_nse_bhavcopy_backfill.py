@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from datetime import date, datetime
+import json
 from pathlib import Path
 import sys
 import time
@@ -29,6 +30,42 @@ IST_ZONE = ZoneInfo("Asia/Kolkata")
 
 def _parse_day(value: str) -> date:
     return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _dedupe_symbols(values: list[str]) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        symbol = str(value).strip().lstrip("\ufeff").strip().upper()
+        if not symbol or symbol.startswith("#"):
+            continue
+        if symbol not in seen:
+            symbols.append(symbol)
+            seen.add(symbol)
+    return symbols
+
+
+def _split_symbol_text(value: str | None) -> list[str]:
+    if not value:
+        return []
+    tokens: list[str] = []
+    for line in value.splitlines():
+        clean = line.split("#", 1)[0].strip()
+        if not clean:
+            continue
+        tokens.extend(part.strip() for part in clean.split(","))
+    return _dedupe_symbols(tokens)
+
+
+def _load_symbols_file(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    stripped = text.strip()
+    if stripped.startswith("["):
+        payload = json.loads(stripped)
+        if not isinstance(payload, list):
+            raise ValueError("--symbols-file JSON payload must be a list of symbols")
+        return _dedupe_symbols([str(item) for item in payload])
+    return _split_symbol_text(text)
 
 
 def _store() -> DataStore:
@@ -63,6 +100,7 @@ def run_backfill(
     throttle_seconds: float,
     run_quality: bool,
     dry_run: bool,
+    symbols: list[str] | None = None,
 ) -> dict[str, Any]:
     init_db()
     settings = get_settings()
@@ -76,9 +114,21 @@ def run_backfill(
     )
 
     with Session(engine) as session:
-        symbols = store.get_bundle_symbols(session, bundle_id, timeframe="1d")
+        bundle_symbols = store.get_bundle_symbols(session, bundle_id, timeframe="1d")
         provider = NseBhavcopyProvider(session=session, settings=settings, store=store)
-        symbol_set = {symbol.upper() for symbol in symbols}
+        bundle_symbol_set = {symbol.upper() for symbol in bundle_symbols}
+        requested_symbols = _dedupe_symbols(symbols or [])
+        skipped_requested_symbols = sorted(set(requested_symbols) - bundle_symbol_set)
+        symbol_set = (
+            {symbol for symbol in requested_symbols if symbol in bundle_symbol_set}
+            if requested_symbols
+            else bundle_symbol_set
+        )
+        if not symbol_set:
+            raise ValueError(
+                "No requested symbols matched the dataset bundle. "
+                f"Skipped sample: {skipped_requested_symbols[:10]}"
+            )
         rows_by_symbol: dict[str, list[pd.DataFrame]] = defaultdict(list)
         downloaded_days = 0
         matched_rows = 0
@@ -181,6 +231,10 @@ def run_backfill(
         "empty_days_count": len(empty_days),
         "empty_days_sample": empty_days[:10],
         "target_symbols": len(symbol_set),
+        "target_symbol_sample": sorted(symbol_set)[:20],
+        "requested_symbols": len(requested_symbols),
+        "skipped_requested_symbols_count": len(skipped_requested_symbols),
+        "skipped_requested_symbols_sample": skipped_requested_symbols[:20],
         "symbols_with_rows": len(rows_by_symbol),
         "matched_rows": matched_rows,
         "updated_symbols": updated_symbols,
@@ -197,10 +251,26 @@ def main() -> None:
     parser.add_argument("--bundle-id", type=int, required=True)
     parser.add_argument("--start-date", type=_parse_day, default=date(2020, 1, 1))
     parser.add_argument("--end-date", type=_parse_day, default=date.today())
+    parser.add_argument(
+        "--symbols",
+        default=None,
+        help="Optional comma-separated target symbols. Defaults to every bundle symbol.",
+    )
+    parser.add_argument(
+        "--symbols-file",
+        type=Path,
+        default=None,
+        help="Optional newline/comma-separated or JSON-list file of target symbols.",
+    )
     parser.add_argument("--throttle-seconds", type=float, default=0.15)
     parser.add_argument("--skip-quality", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    target_symbols = _split_symbol_text(args.symbols)
+    if args.symbols_file:
+        target_symbols.extend(_load_symbols_file(args.symbols_file))
+    target_symbols = _dedupe_symbols(target_symbols)
 
     result = run_backfill(
         bundle_id=int(args.bundle_id),
@@ -209,6 +279,7 @@ def main() -> None:
         throttle_seconds=float(args.throttle_seconds),
         run_quality=not bool(args.skip_quality),
         dry_run=bool(args.dry_run),
+        symbols=target_symbols or None,
     )
     print(result)
 

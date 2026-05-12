@@ -206,6 +206,7 @@ from app.services.data_quality import (
     get_latest_data_quality_report,
     list_data_quality_history,
 )
+from app.services.data_quality_remediation import generate_data_quality_remediation_report
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
 from app.services.operate_events import (
@@ -1908,6 +1909,26 @@ def data_quality_history(
         days=days,
     )
     return _data([row.model_dump() for row in rows])
+
+
+@router.get("/data/quality/remediation")
+def data_quality_remediation(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    report_id: int | None = Query(default=None, ge=1),
+    write_files: bool = Query(default=False),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload = generate_data_quality_remediation_report(
+        session=session,
+        settings=settings,
+        bundle_id=int(bundle_id),
+        timeframe=timeframe,
+        report_id=report_id,
+        write_files=bool(write_files),
+    )
+    return _data(payload)
 
 
 @router.post("/backtests/run")
