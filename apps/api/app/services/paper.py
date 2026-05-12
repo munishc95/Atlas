@@ -1532,11 +1532,141 @@ def _selection_reason_histogram(rows: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _json_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def _selected_signal_summary(item: dict[str, Any]) -> dict[str, Any]:
+    selection_reason = str(
+        item.get("instrument_choice_reason", item.get("selection_reason", "provided"))
+    )
+    summary: dict[str, Any] = {
+        "symbol": str(item.get("symbol", "")),
+        "side": str(item.get("side", "")),
+        "instrument_kind": str(item.get("instrument_kind", "")),
+        "selection_reason": selection_reason,
+    }
+
+    for key in (
+        "underlying_symbol",
+        "template",
+        "timeframe",
+        "source_mode",
+        "signal_at",
+        "fill_at",
+        "explanation",
+        "quality_status",
+        "position_size_status",
+        "source_policy_name",
+    ):
+        value = item.get(key)
+        if value is not None:
+            summary[key] = str(value)
+
+    for key in (
+        "source_policy_id",
+        "lot_size",
+        "qty_lots",
+        "qty",
+        "planned_qty",
+        "planned_qty_lots",
+    ):
+        value = item.get(key)
+        if isinstance(value, (int, float)):
+            summary[key] = int(value)
+
+    for key in (
+        "price",
+        "entry_price",
+        "fill_price",
+        "stop_price",
+        "stop_distance",
+        "target_price",
+        "target_1_price",
+        "target_2_price",
+        "risk_per_share",
+        "signal_strength",
+        "raw_signal_strength",
+        "adv",
+        "vol_scale",
+        "quality_score",
+        "risk_budget",
+        "planned_position_value",
+        "planned_risk_amount",
+        "entry_cost",
+        "margin_reserved",
+    ):
+        number = _json_float(item.get(key))
+        if number is not None:
+            summary[key] = number
+
+    flags = item.get("quality_flags")
+    if isinstance(flags, list):
+        summary["quality_flags"] = [str(flag) for flag in flags[:10]]
+
+    for key in ("quality_metrics", "ranking_weights"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            summary[key] = jsonable_encoder(value)
+
+    fill_bar = item.get("fill_bar")
+    if isinstance(fill_bar, dict):
+        serialized_bar: dict[str, Any] = {}
+        for key in ("open", "high", "low", "close"):
+            number = _json_float(fill_bar.get(key))
+            if number is not None:
+                serialized_bar[key] = number
+        if fill_bar.get("datetime") is not None:
+            serialized_bar["datetime"] = str(fill_bar.get("datetime"))
+        if serialized_bar:
+            summary["fill_bar"] = serialized_bar
+
+    return summary
+
+
 def _positions_notional(positions: list[PaperPosition]) -> float:
     total = 0.0
     for position in positions:
         total += float(position.qty) * float(position.avg_price)
     return total
+
+
+def _latest_position_mark_bars(
+    *,
+    session: Session,
+    store: DataStore,
+    positions: list[PaperPosition],
+    timeframe: str,
+    asof_dt: datetime,
+) -> dict[str, dict[str, float]]:
+    bars: dict[str, dict[str, float]] = {}
+    for position in positions:
+        symbol = str(position.symbol).upper()
+        frame = store.load_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            end=asof_dt,
+            session=session,
+        )
+        if frame.empty:
+            continue
+        row = frame.iloc[-1]
+        bar_dt = row.get("datetime")
+        if hasattr(bar_dt, "date") and bar_dt.date() < position.opened_at.date():
+            continue
+        values: dict[str, float] = {}
+        for key in ("open", "high", "low", "close"):
+            number = _json_float(row.get(key))
+            if number is not None:
+                values[key] = number
+        if len(values) == 4:
+            bars[symbol] = values
+    return bars
 
 
 def _average_holding_days(positions: list[PaperPosition], asof: datetime) -> float:
@@ -1667,6 +1797,7 @@ def _run_paper_step_with_simulator_engine(
     base_risk_per_trade: float,
     base_max_positions: int,
     mark_prices: dict[str, Any],
+    position_bars: dict[str, dict[str, float]],
     selected_signals: list[dict[str, Any]],
     skipped_signals: list[dict[str, Any]],
     generated_meta: SignalGenerationResult,
@@ -1717,6 +1848,7 @@ def _run_paper_step_with_simulator_engine(
         selected_signals=selected_signals,
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
         open_positions=positions_before,
+        position_bars=position_bars,
         seed=seed,
         risk_overlay=risk_overlay,
     )
@@ -1899,15 +2031,7 @@ def _run_paper_step_with_simulator_engine(
         "closed_position_ids": closed_position_ids,
         "closed_position_symbols": closed_position_symbols,
         "new_order_ids": new_order_ids,
-        "selected_signals": [
-            {
-                "symbol": str(item.get("symbol", "")),
-                "side": str(item.get("side", "")),
-                "instrument_kind": str(item.get("instrument_kind", "")),
-                "selection_reason": str(item.get("instrument_choice_reason", "provided")),
-            }
-            for item in executed_signals
-        ],
+        "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(
@@ -2193,7 +2317,7 @@ def _run_paper_step_with_simulator_engine(
             "signals_source": signals_source,
             "generated_signals_count": generated_signals_count,
             "selected_signals_count": executed_count,
-            "selected_signals": executed_signals,
+            "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
             "skipped_signals": skipped_signals,
             "entry_gate_positions_before": int(entry_gate_positions_count),
             "ignored_positions_outside_bundle_count": len(ignored_positions_outside_bundle),
@@ -2303,6 +2427,7 @@ def _run_paper_step_shadow_only(
     base_risk_per_trade: float,
     base_max_positions: int,
     mark_prices: dict[str, Any],
+    position_bars: dict[str, dict[str, float]],
     selected_signals: list[dict[str, Any]],
     skipped_signals: list[dict[str, Any]],
     generated_meta: SignalGenerationResult,
@@ -2356,6 +2481,7 @@ def _run_paper_step_shadow_only(
         selected_signals=selected_signals,
         mark_prices={str(key): float(value) for key, value in mark_prices.items()},
         open_positions=shadow_positions_before,
+        position_bars=position_bars,
         seed=seed,
         risk_overlay=risk_overlay,
         persist_live_state=False,
@@ -2486,15 +2612,7 @@ def _run_paper_step_shadow_only(
         "positions_opened": max(0, len(shadow_positions_after) - len(shadow_positions_before)),
         "positions_closed": max(0, len(shadow_positions_before) - len(shadow_positions_after)),
         "new_order_ids": [],
-        "selected_signals": [
-            {
-                "symbol": str(item.get("symbol", "")),
-                "side": str(item.get("side", "")),
-                "instrument_kind": str(item.get("instrument_kind", "")),
-                "selection_reason": str(item.get("instrument_choice_reason", "provided")),
-            }
-            for item in executed_signals
-        ],
+        "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(
@@ -2701,7 +2819,7 @@ def _run_paper_step_shadow_only(
             "signals_source": signals_source,
             "generated_signals_count": generated_signals_count,
             "selected_signals_count": executed_count,
-            "selected_signals": executed_signals,
+            "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
             "skipped_signals": skipped_signals,
             "safe_mode": {
                 "active": bool(safe_mode_active),
@@ -4000,6 +4118,13 @@ def run_paper_step(
     use_simulator_engine = bool(
         state_settings.get("paper_use_simulator_engine", settings.paper_use_simulator_engine)
     )
+    position_bars = _latest_position_mark_bars(
+        session=session,
+        store=store,
+        positions=positions_before,
+        timeframe=primary_timeframe,
+        asof_dt=asof_dt,
+    )
     if (safe_mode_active and safe_mode_action == "shadow_only") or confidence_gate_force_shadow:
         return _run_paper_step_shadow_only(
             session=session,
@@ -4013,6 +4138,7 @@ def run_paper_step(
             base_risk_per_trade=base_risk_per_trade,
             base_max_positions=base_max_positions,
             mark_prices=mark_prices,
+            position_bars=position_bars,
             selected_signals=selected_signals,
             skipped_signals=skipped_signals,
             generated_meta=generated_meta,
@@ -4050,6 +4176,7 @@ def run_paper_step(
             base_risk_per_trade=base_risk_per_trade,
             base_max_positions=base_max_positions,
             mark_prices=mark_prices,
+            position_bars=position_bars,
             selected_signals=selected_signals,
             skipped_signals=skipped_signals,
             generated_meta=generated_meta,
@@ -4529,15 +4656,7 @@ def run_paper_step(
         "closed_position_ids": closed_position_ids,
         "closed_position_symbols": closed_position_symbols,
         "new_order_ids": new_order_ids,
-        "selected_signals": [
-            {
-                "symbol": str(item.get("symbol", "")),
-                "side": str(item.get("side", "")),
-                "instrument_kind": str(item.get("instrument_kind", "")),
-                "selection_reason": str(item.get("instrument_choice_reason", "provided")),
-            }
-            for item in executed_signals
-        ],
+        "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(risk_overlay.get("risk_scale", 1.0)),
@@ -4817,7 +4936,7 @@ def run_paper_step(
             "signals_source": signals_source,
             "generated_signals_count": generated_signals_count,
             "selected_signals_count": executed_count,
-            "selected_signals": executed_signals,
+            "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
             "skipped_signals": skipped_signals,
             "safe_mode": {
                 "active": bool(safe_mode_active),

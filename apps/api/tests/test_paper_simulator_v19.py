@@ -121,6 +121,13 @@ def _manual_signal(symbol: str, *, side: str, instrument_kind: str = "EQUITY_CAS
         "signal_strength": 0.9,
         "adv": 10_000_000_000.0,
         "vol_scale": 0.01,
+        "quality_status": "PASS",
+        "quality_score": 0.82,
+        "quality_flags": [],
+        "quality_metrics": {"close_location": 0.78, "volume_ratio": 1.4},
+        "explanation": "trend_breakout BUY signal at close on 1d.",
+        "signal_at": "2026-01-04T10:00:00+00:00",
+        "fill_at": "2026-01-05T10:00:00+00:00",
     }
 
 
@@ -166,6 +173,13 @@ def test_paper_flag_true_returns_simulator_metadata() -> None:
         assert isinstance(result.get("engine_version"), str) and result.get("engine_version")
         assert isinstance(result.get("data_digest"), str) and len(str(result.get("data_digest"))) > 16
         assert isinstance(result.get("seed"), int)
+        selected = (result.get("selected_signals") or [])[0]
+        assert selected["template"] == "trend_breakout"
+        assert selected["explanation"] == "trend_breakout BUY signal at close on 1d."
+        assert selected["quality_status"] == "PASS"
+        assert selected["quality_metrics"]["close_location"] == 0.78
+        assert selected["signal_at"] == "2026-01-04T10:00:00+00:00"
+        assert selected["fill_at"] == "2026-01-05T10:00:00+00:00"
 
 
 def test_paper_simulator_matches_shadow_step_outputs() -> None:
@@ -215,6 +229,93 @@ def test_paper_simulator_matches_shadow_step_outputs() -> None:
         assert abs(float(result["cost_summary"]["entry_cost_total"]) - float(shadow.entry_cost_total)) < 1e-8
         assert abs(float(result["state"]["cash"]) - float(shadow.cash)) < 1e-8
         assert abs(float(result["state"]["equity"]) - float(shadow.equity)) < 1e-8
+
+
+def test_simulator_closes_new_position_when_fill_bar_hits_stop() -> None:
+    signal = {
+        **_manual_signal("STOPBAR", side="BUY"),
+        "price": 100.0,
+        "stop_distance": 5.0,
+        "fill_bar": {
+            "open": 100.0,
+            "high": 101.0,
+            "low": 94.0,
+            "close": 96.0,
+        },
+    }
+
+    result = simulate_portfolio_step(
+        signals=[signal],
+        open_positions=[],
+        mark_prices={},
+        asof=pd.Timestamp("2026-01-05T10:00:00+00:00"),
+        cash=1_000_000.0,
+        equity_reference=1_000_000.0,
+        config=SimulationConfig(
+            risk_per_trade=0.005,
+            max_positions=3,
+            commission_bps=0.0,
+            slippage_base_bps=0.0,
+            slippage_vol_factor=0.0,
+            max_position_value_pct_adv=1.0,
+            allow_long=True,
+            allow_short=True,
+            cost_model_enabled=False,
+        ),
+    )
+
+    assert result.executed_signals
+    assert result.positions == []
+    assert [order["reason"] for order in result.orders] == ["SIGNAL", "STOP_HIT"]
+    assert result.trades[0]["reason"] == "STOP_HIT"
+
+
+def test_simulator_closes_existing_position_when_mark_bar_hits_stop() -> None:
+    result = simulate_portfolio_step(
+        signals=[],
+        open_positions=[
+            {
+                "id": 42,
+                "symbol": "OLDBAR",
+                "side": "BUY",
+                "instrument_kind": "EQUITY_CASH",
+                "lot_size": 1,
+                "qty_lots": 10,
+                "qty": 10,
+                "avg_price": 100.0,
+                "stop_price": 95.0,
+                "target_price": None,
+                "metadata_json": {
+                    "mark_bar": {
+                        "open": 100.0,
+                        "high": 102.0,
+                        "low": 94.0,
+                        "close": 99.0,
+                    }
+                },
+                "opened_at": "2026-01-04T10:00:00+00:00",
+            }
+        ],
+        mark_prices={},
+        asof=pd.Timestamp("2026-01-05T10:00:00+00:00"),
+        cash=999_000.0,
+        equity_reference=1_000_000.0,
+        config=SimulationConfig(
+            risk_per_trade=0.005,
+            max_positions=3,
+            commission_bps=0.0,
+            slippage_base_bps=0.0,
+            slippage_vol_factor=0.0,
+            max_position_value_pct_adv=1.0,
+            allow_long=True,
+            allow_short=True,
+            cost_model_enabled=False,
+        ),
+    )
+
+    assert result.positions == []
+    assert result.orders[0]["reason"] == "STOP_HIT"
+    assert result.trades[0]["reason"] == "STOP_HIT"
 
 
 def test_cash_short_squareoff_and_futures_margin_skip_with_simulator() -> None:

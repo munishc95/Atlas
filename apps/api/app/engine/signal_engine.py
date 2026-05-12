@@ -780,6 +780,7 @@ def generate_signals_for_policy(
                     else:
                         target_price = None
 
+                    fill_bar = chosen_frame.iloc[chosen_fill_idx]
                     raw_strength = float(signal_strength(frame, decision_idx))
                     adv = float(
                         np.nan_to_num(
@@ -861,6 +862,13 @@ def generate_signals_for_policy(
                             "quality_metrics": quality_metrics,
                             "signal_at": str(frame.iloc[decision_idx]["datetime"]),
                             "fill_at": str(chosen_frame.iloc[chosen_fill_idx]["datetime"]),
+                            "fill_bar": {
+                                "open": float(fill_bar["open"]),
+                                "high": float(fill_bar["high"]),
+                                "low": float(fill_bar["low"]),
+                                "close": float(fill_bar["close"]),
+                                "datetime": str(fill_bar["datetime"]),
+                            },
                             "source_mode": mode,
                             "instrument_kind": chosen_instrument_kind,
                             "lot_size": chosen_lot_size,

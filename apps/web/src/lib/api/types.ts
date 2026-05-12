@@ -138,6 +138,15 @@ export type ApiPaperSignal = {
   instrument_kind?: string;
   lot_size?: number;
   price: number;
+  signal_at?: string;
+  fill_at?: string;
+  fill_bar?: {
+    open?: number;
+    high?: number;
+    low?: number;
+    close?: number;
+    datetime?: string;
+  };
   entry_price?: number;
   stop_price?: number;
   stop_distance: number;

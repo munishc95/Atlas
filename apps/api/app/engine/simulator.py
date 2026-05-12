@@ -734,6 +734,75 @@ def _step_slippage_bps(vol_scale: float, config: SimulationConfig) -> float:
     return config.slippage_base_bps + (config.slippage_vol_factor * max(0.0, float(vol_scale)))
 
 
+def _finite_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def _signal_fill_bar(signal: dict[str, Any], *, fallback_open: float) -> dict[str, float] | None:
+    raw = signal.get("fill_bar")
+    if isinstance(raw, dict):
+        open_px = _finite_float(raw.get("open"))
+        high = _finite_float(raw.get("high"))
+        low = _finite_float(raw.get("low"))
+        close = _finite_float(raw.get("close"))
+    else:
+        open_px = _finite_float(signal.get("fill_bar_open"))
+        high = _finite_float(signal.get("fill_bar_high"))
+        low = _finite_float(signal.get("fill_bar_low"))
+        close = _finite_float(signal.get("fill_bar_close"))
+
+    open_px = fallback_open if open_px is None else open_px
+    if high is None or low is None or close is None:
+        return None
+    high = max(high, open_px, low, close)
+    low = min(low, open_px, high, close)
+    return {
+        "open": float(open_px),
+        "high": float(high),
+        "low": float(low),
+        "close": float(close),
+    }
+
+
+def _position_step_bar(
+    position: SimulationPosition,
+    mark_prices: dict[str, float],
+) -> pd.Series | None:
+    if isinstance(position.metadata_json, dict):
+        raw_bar = (
+            position.metadata_json.get("fill_bar")
+            if position.source_position_id is None
+            else None
+        )
+        if not isinstance(raw_bar, dict):
+            raw_bar = position.metadata_json.get("mark_bar")
+        if isinstance(raw_bar, dict):
+            open_px = _finite_float(raw_bar.get("open"))
+            high = _finite_float(raw_bar.get("high"))
+            low = _finite_float(raw_bar.get("low"))
+            close = _finite_float(raw_bar.get("close"))
+            if open_px is not None and high is not None and low is not None and close is not None:
+                return pd.Series(
+                    {
+                        "open": open_px,
+                        "high": max(high, open_px, low, close),
+                        "low": min(low, open_px, high, close),
+                        "close": close,
+                    }
+                )
+
+    mark = mark_prices.get(position.symbol)
+    if mark is None:
+        return None
+    mark_val = float(mark)
+    return pd.Series({"open": mark_val, "high": mark_val, "low": mark_val, "close": mark_val})
+
+
 def _to_internal_position(position: dict[str, Any]) -> SimulationPosition:
     side = str(position.get("side", "BUY")).upper()
     side_label = _side_label(side)
@@ -776,6 +845,9 @@ def _to_internal_position(position: dict[str, Any]) -> SimulationPosition:
 
 def _from_internal_position(position: SimulationPosition, *, source_id: int | None) -> dict[str, Any]:
     side = "BUY" if position.side == "LONG" else "SELL"
+    metadata = dict(position.metadata_json)
+    metadata.pop("fill_bar", None)
+    metadata.pop("mark_bar", None)
     return {
         "source_position_id": source_id,
         "symbol": position.symbol,
@@ -790,7 +862,7 @@ def _from_internal_position(position: SimulationPosition, *, source_id: int | No
         "stop_price": float(position.stop_price) if position.stop_price is not None else None,
         "target_price": float(position.target_price) if position.target_price is not None else None,
         "opened_at": position.entry_time.to_pydatetime().isoformat(),
-        "metadata_json": dict(position.metadata_json),
+        "metadata_json": metadata,
     }
 
 
@@ -1131,6 +1203,16 @@ def simulate_portfolio_step(
         target_raw = signal.get("target_price")
         target_price = float(target_raw) if isinstance(target_raw, (int, float)) else None
         start_stop = fill_price - stop_distance if side == "BUY" else fill_price + stop_distance
+        fill_bar = _signal_fill_bar(signal, fallback_open=fill_price)
+        metadata_json = {
+            "template": str(signal.get("template", "")),
+            "underlying_symbol": underlying_symbol,
+            "sector": sector,
+            "instrument_choice_reason": str(signal.get("instrument_choice_reason", "provided")),
+            "vol_scale": float(vol_scale),
+        }
+        if fill_bar is not None:
+            metadata_json["fill_bar"] = fill_bar
         position = SimulationPosition(
             symbol=symbol,
             side=side_label,
@@ -1149,13 +1231,7 @@ def simulate_portfolio_step(
             entry_notional=notional,
             margin_reserved=float(margin_required),
             force_eod=intraday_cash_short,
-            metadata_json={
-                "template": str(signal.get("template", "")),
-                "underlying_symbol": underlying_symbol,
-                "sector": sector,
-                "instrument_choice_reason": str(signal.get("instrument_choice_reason", "provided")),
-                "vol_scale": float(vol_scale),
-            },
+            metadata_json=metadata_json,
             source_position_id=None,
             bars_held=0,
         )
@@ -1192,28 +1268,27 @@ def simulate_portfolio_step(
 
     survivors: list[SimulationPosition] = []
     for position in positions:
-        mark = mark_prices.get(position.symbol)
-        if mark is None:
+        bar = _position_step_bar(position, mark_prices)
+        if bar is None:
             survivors.append(position)
             continue
-        mark_val = float(mark)
         should_close = False
         reason = ""
         trigger = _stop_trigger(position)
-        if _stop_hit(position, mark_val, mark_val, trigger):
+        if _stop_hit(position, float(bar["high"]), float(bar["low"]), trigger):
             should_close = True
             reason = "STOP_HIT"
-        elif _target_hit(position, mark_val, mark_val):
+        elif _target_hit(position, float(bar["high"]), float(bar["low"])):
             should_close = True
             reason = "EXITED"
 
         if not should_close:
             survivors.append(position)
             continue
-        pseudo_bar = pd.Series({"open": mark_val, "high": mark_val, "low": mark_val, "close": mark_val})
         vol_scale = 0.0
         if isinstance(position.metadata_json, dict):
             vol_scale = float(position.metadata_json.get("vol_scale", 0.0) or 0.0)
+        mark_val = float(bar["close"])
         atr_value = mark_val * max(0.0, vol_scale)
         exit_cfg = _step_cost_config(
             config,
@@ -1221,7 +1296,7 @@ def simulate_portfolio_step(
         )
         cash_delta, trade = _exit_position(
             position=position,
-            bar=pseudo_bar,
+            bar=bar,
             timestamp=asof,
             atr_value=atr_value,
             reason=reason,

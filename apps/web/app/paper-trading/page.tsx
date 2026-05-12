@@ -56,6 +56,18 @@ function formatNumber(value: number | null | undefined, digits = 2): string {
   });
 }
 
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value : "-";
+}
+
+function formatRecordNumber(row: Record<string, unknown>, key: string, digits = 2): string {
+  return formatNumber(asNumber(row[key]), digits);
+}
+
 export default function PaperTradingPage() {
   const queryClient = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -906,13 +918,14 @@ export default function PaperTradingPage() {
               {preview.trade_plan?.max_positions ?? "-"}
             </p>
             <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
-              <table className="w-full text-xs">
+              <table className="w-full min-w-[1120px] text-xs">
                 <thead className="bg-surface text-left text-muted">
                   <tr>
                     <th className="px-2 py-2">Symbol</th>
                     <th className="px-2 py-2">Side</th>
                     <th className="px-2 py-2">Instrument</th>
                     <th className="px-2 py-2">Template</th>
+                    <th className="px-2 py-2">Why</th>
                     <th className="px-2 py-2">Plan</th>
                     <th className="px-2 py-2">Size</th>
                     <th className="px-2 py-2">Quality</th>
@@ -931,6 +944,9 @@ export default function PaperTradingPage() {
                         {signal.instrument_kind ?? "EQUITY_CASH"} ({signal.lot_size ?? 1})
                       </td>
                       <td className="px-2 py-2">{signal.template}</td>
+                      <td className="max-w-[260px] px-2 py-2 text-muted">
+                        {signal.explanation ?? "-"}
+                      </td>
                       <td className="px-2 py-2 tabular-nums">
                         <div className="grid min-w-[156px] grid-cols-2 gap-x-3 gap-y-1">
                           <span className="text-muted">Entry</span>
@@ -1018,6 +1034,81 @@ export default function PaperTradingPage() {
               <span className="text-muted">Selected:</span> {selectedSignals.length} |{" "}
               <span className="text-muted">Skipped:</span> {skippedSignals.length}
             </p>
+            <div className="rounded-xl border border-border p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Selected trades
+              </p>
+              {selectedSignals.length === 0 ? (
+                <p className="text-xs text-muted">No selected signals.</p>
+              ) : (
+                <ul className="space-y-3 text-xs">
+                  {selectedSignals.slice(0, 12).map((signal, index) => {
+                    const fillBar = signal.fill_bar as Record<string, unknown> | undefined;
+                    const fillLow = fillBar ? asNumber(fillBar.low) : null;
+                    const fillHigh = fillBar ? asNumber(fillBar.high) : null;
+                    const qualityFlags = Array.isArray(signal.quality_flags)
+                      ? signal.quality_flags.map(String).join(", ")
+                      : "";
+                    return (
+                      <li
+                        key={`${asText(signal.symbol)}-${asText(signal.template)}-${index}`}
+                        className="rounded-lg border border-border px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-semibold">{asText(signal.symbol)}</span>
+                          <span className="text-muted">{asText(signal.side)}</span>
+                          <span className="text-muted">{asText(signal.template)}</span>
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(
+                              asText(signal.quality_status),
+                            )}`}
+                          >
+                            {asText(signal.quality_status)}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-muted">{asText(signal.explanation)}</p>
+                        <div className="mt-2 grid gap-x-4 gap-y-1 tabular-nums sm:grid-cols-2">
+                          <span>
+                            <span className="text-muted">Signal:</span>{" "}
+                            {asText(signal.signal_at)}
+                          </span>
+                          <span>
+                            <span className="text-muted">Fill:</span> {asText(signal.fill_at)}
+                          </span>
+                          <span>
+                            <span className="text-muted">Entry:</span>{" "}
+                            {formatRecordNumber(signal, "fill_price")}
+                          </span>
+                          <span>
+                            <span className="text-muted">Stop:</span>{" "}
+                            {formatRecordNumber(signal, "stop_price")}
+                          </span>
+                          <span>
+                            <span className="text-muted">Strength:</span>{" "}
+                            {formatRecordNumber(signal, "signal_strength", 3)}
+                          </span>
+                          <span>
+                            <span className="text-muted">Quality:</span>{" "}
+                            {formatRecordNumber(signal, "quality_score", 2)}
+                          </span>
+                          <span>
+                            <span className="text-muted">Fill bar H/L:</span>{" "}
+                            {formatNumber(fillHigh)} / {formatNumber(fillLow)}
+                          </span>
+                          <span>
+                            <span className="text-muted">Qty:</span>{" "}
+                            {formatRecordNumber(signal, "qty", 0)}
+                          </span>
+                        </div>
+                        {qualityFlags ? (
+                          <p className="mt-1 text-muted">Flags: {qualityFlags}</p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
             <p>
               <span className="text-muted">Cost total:</span> {String(costSummary.total_cost ?? 0)}
             </p>

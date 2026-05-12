@@ -227,6 +227,7 @@ def execute_paper_step_with_simulator(
     selected_signals: list[dict[str, Any]],
     mark_prices: dict[str, float],
     open_positions: list[PaperPosition] | list[dict[str, Any]],
+    position_bars: dict[str, dict[str, float]] | None = None,
     seed: int,
     risk_overlay: dict[str, Any] | None = None,
     persist_live_state: bool = True,
@@ -251,6 +252,20 @@ def execute_paper_step_with_simulator(
             for item in open_positions
             if isinstance(item, dict)
         ]
+    bars_by_symbol = {
+        str(key).upper(): dict(value)
+        for key, value in (position_bars or {}).items()
+        if isinstance(value, dict)
+    }
+    if bars_by_symbol:
+        for item in open_payload:
+            symbol = str(item.get("symbol", "")).upper()
+            bar = bars_by_symbol.get(symbol)
+            if not bar:
+                continue
+            metadata = dict(item.get("metadata_json") or {})
+            metadata["mark_bar"] = bar
+            item["metadata_json"] = metadata
 
     step = simulate_portfolio_step(
         signals=selected_signals,
