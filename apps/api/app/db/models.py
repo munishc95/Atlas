@@ -548,6 +548,41 @@ class DataQualityReport(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class DataQualityException(SQLModel, table=True):
+    __table_args__ = (
+        Index(
+            "ix_dataqualityexception_unique_active",
+            "bundle_id",
+            "timeframe",
+            "symbol",
+            "trading_date",
+            "kind",
+            unique=True,
+        ),
+        Index(
+            "ix_dataqualityexception_bundle_symbol_date",
+            "bundle_id",
+            "symbol",
+            "trading_date",
+        ),
+        Index("ix_dataqualityexception_status_kind", "status", "kind"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    bundle_id: int = Field(foreign_key="datasetbundle.id", index=True)
+    timeframe: str = Field(default="1d", index=True, max_length=16)
+    symbol: str = Field(index=True, max_length=64)
+    trading_date: dt_date = Field(index=True)
+    kind: str = Field(default="no_trade_or_suspension", index=True, max_length=64)
+    status: str = Field(default="ACTIVE", index=True, max_length=16)
+    source: str = Field(default="manual", max_length=128)
+    source_report_id: int | None = Field(default=None, foreign_key="dataqualityreport.id", index=True)
+    reason: str = Field(default="", max_length=512)
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class DataUpdateRun(SQLModel, table=True):
     __table_args__ = (
         Index("ix_dataupdaterun_bundle_timeframe_created", "bundle_id", "timeframe", "created_at"),

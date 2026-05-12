@@ -169,6 +169,7 @@ def _gap_issues_daily(
     fail_cutoff_date: dt_date | None,
     settings: Settings,
     segment: str,
+    no_trade_exception_dates: set[dt_date] | None = None,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if frame.empty:
@@ -186,7 +187,10 @@ def _gap_issues_daily(
             settings=settings,
         )
         missing_days = [day for day in expected_days if prev_day < day < next_day]
-        missing_count = len(missing_days)
+        exception_dates = no_trade_exception_dates or set()
+        ignored_days = [day for day in missing_days if day in exception_dates]
+        active_missing_days = [day for day in missing_days if day not in exception_dates]
+        missing_count = len(active_missing_days)
         if missing_count > max_gap_bars:
             is_recent_gap = fail_cutoff_date is None or next_day >= fail_cutoff_date
             severity = STATUS_FAIL if is_recent_gap else STATUS_WARN
@@ -202,12 +206,17 @@ def _gap_issues_daily(
                     ),
                     details={
                         "missing_bars": missing_count,
+                        "raw_missing_bars": len(missing_days),
                         "max_gap_bars": int(max_gap_bars),
                         "gap_scope": scope,
                         "fail_cutoff_date": (
                             fail_cutoff_date.isoformat() if fail_cutoff_date else None
                         ),
-                        "missing_dates": [day.isoformat() for day in missing_days[:10]],
+                        "missing_dates": [day.isoformat() for day in active_missing_days[:10]],
+                        "ignored_no_trade_dates_count": len(ignored_days),
+                        "ignored_no_trade_dates_sample": [
+                            day.isoformat() for day in ignored_days[:10]
+                        ],
                     },
                 )
             )
@@ -266,6 +275,7 @@ def _validate_symbol_frame(
     settings: Settings,
     segment: str,
     gap_fail_cutoff_date: dt_date | None,
+    no_trade_exception_dates: set[dt_date] | None = None,
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     if frame.empty:
@@ -327,6 +337,7 @@ def _validate_symbol_frame(
                 fail_cutoff_date=gap_fail_cutoff_date,
                 settings=settings,
                 segment=segment,
+                no_trade_exception_dates=no_trade_exception_dates,
             )
         )
     issues.extend(_outlier_issues(symbol=symbol, frame=frame, zscore_threshold=zscore_threshold))
@@ -384,6 +395,16 @@ def run_data_quality_report(
     )
 
     symbols = store.get_bundle_symbols(session, bundle_id, timeframe=tf)
+    no_trade_exception_dates_by_symbol: dict[str, set[dt_date]] = {}
+    if tf.lower() == "1d" and symbols:
+        from app.services.data_quality_exceptions import active_no_trade_exception_dates
+
+        no_trade_exception_dates_by_symbol = active_no_trade_exception_dates(
+            session,
+            bundle_id=int(bundle_id),
+            timeframe=tf,
+            symbols=[str(symbol).upper() for symbol in symbols],
+        )
     issues: list[dict[str, Any]] = []
     last_bar_ts: datetime | None = None
     coverage_values: list[float] = []
@@ -413,6 +434,10 @@ def run_data_quality_report(
                 settings=settings,
                 segment=segment,
                 gap_fail_cutoff_date=gap_fail_cutoff_date,
+                no_trade_exception_dates=no_trade_exception_dates_by_symbol.get(
+                    str(symbol).upper(),
+                    set(),
+                ),
             )
         )
 

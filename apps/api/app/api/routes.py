@@ -206,6 +206,12 @@ from app.services.data_quality import (
     get_latest_data_quality_report,
     list_data_quality_history,
 )
+from app.services.data_quality_gap_audit import generate_data_quality_gap_audit
+from app.services.data_quality_exceptions import (
+    list_data_quality_exceptions,
+    serialize_data_quality_exception,
+    upsert_no_trade_exceptions_from_gap_audit,
+)
 from app.services.data_quality_remediation import generate_data_quality_remediation_report
 from app.services.jobs import create_job, get_job, job_event_stream, list_recent_jobs, update_job
 from app.services.jobs import find_job_by_idempotency, hash_payload
@@ -1929,6 +1935,76 @@ def data_quality_remediation(
         write_files=bool(write_files),
     )
     return _data(payload)
+
+
+@router.get("/data/quality/gap-audit")
+def data_quality_gap_audit(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    report_id: int | None = Query(default=None, ge=1),
+    write_files: bool = Query(default=False),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload = generate_data_quality_gap_audit(
+        session=session,
+        settings=settings,
+        bundle_id=int(bundle_id),
+        timeframe=timeframe,
+        report_id=report_id,
+        write_files=bool(write_files),
+    )
+    return _data(payload)
+
+
+@router.get("/data/quality/exceptions")
+def data_quality_exceptions(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    symbol: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
+    status: str | None = Query(default="ACTIVE"),
+    limit: int = Query(default=500, ge=1, le=5000),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    rows = list_data_quality_exceptions(
+        session,
+        bundle_id=int(bundle_id),
+        timeframe=timeframe,
+        symbol=symbol,
+        kind=kind,
+        status=status,
+        limit=int(limit),
+    )
+    return _data([serialize_data_quality_exception(row) for row in rows])
+
+
+@router.post("/data/quality/gap-exceptions/apply")
+def apply_data_quality_gap_exceptions(
+    bundle_id: int = Query(..., ge=1),
+    timeframe: str = Query(default="1d"),
+    report_id: int | None = Query(default=None, ge=1),
+    dry_run: bool = Query(default=False),
+    write_audit_files: bool = Query(default=False),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    payload = generate_data_quality_gap_audit(
+        session=session,
+        settings=settings,
+        bundle_id=int(bundle_id),
+        timeframe=timeframe,
+        report_id=report_id,
+        write_files=bool(write_audit_files),
+    )
+    result = upsert_no_trade_exceptions_from_gap_audit(
+        session,
+        payload=payload,
+        dry_run=bool(dry_run),
+    )
+    result["audit_summary"] = payload.get("summary", {})
+    result["audit_files"] = payload.get("files", {})
+    return _data(result)
 
 
 @router.post("/backtests/run")
