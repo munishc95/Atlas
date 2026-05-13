@@ -3561,6 +3561,23 @@ def get_settings_payload(
         "no_trade_min_breadth_pct": settings.no_trade_min_breadth_pct,
         "no_trade_min_trend_strength": settings.no_trade_min_trend_strength,
         "no_trade_cooldown_trading_days": settings.no_trade_cooldown_trading_days,
+        "event_risk_enabled": settings.event_risk_enabled,
+        "event_risk_calendar_path": settings.event_risk_calendar_path,
+        "event_risk_generated_calendar_path": settings.event_risk_generated_calendar_path,
+        "event_risk_sync_before_signals": settings.event_risk_sync_before_signals,
+        "event_risk_sync_include_actions": settings.event_risk_sync_include_actions,
+        "event_risk_sync_include_board_meetings": (
+            settings.event_risk_sync_include_board_meetings
+        ),
+        "event_risk_sync_include_announcements": (
+            settings.event_risk_sync_include_announcements
+        ),
+        "event_risk_sync_lookback_days": settings.event_risk_sync_lookback_days,
+        "event_risk_sync_lookahead_days": settings.event_risk_sync_lookahead_days,
+        "event_risk_sync_min_interval_minutes": (
+            settings.event_risk_sync_min_interval_minutes
+        ),
+        "event_risk_sync_meta_path": settings.event_risk_sync_meta_path,
         "confidence_gate_enabled": (
             True if str(settings.operate_mode).strip().lower() == "live" else False
         ),

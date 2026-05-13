@@ -57,6 +57,7 @@ from app.services.ensembles import (
     list_policy_ensemble_regime_weights,
     serialize_policy_ensemble,
 )
+from app.services.event_risk_sync import refresh_event_risk_calendar_for_signals
 from app.services.fast_mode import (
     clamp_job_timeout_seconds,
     clamp_scan_symbols,
@@ -441,6 +442,48 @@ def _save_shadow_state_snapshot(
 
 def _log(session: Session, event_type: str, payload: dict[str, Any]) -> None:
     session.add(AuditLog(type=event_type, payload_json=payload))
+
+
+def _refresh_event_risk_before_signals(
+    *,
+    session: Session,
+    settings: Settings,
+    store: DataStore,
+    state_settings: dict[str, Any],
+    bundle_id: int | None,
+    asof_dt: datetime,
+    correlation_id: str,
+    persist_log: bool,
+) -> dict[str, Any]:
+    try:
+        result = refresh_event_risk_calendar_for_signals(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=bundle_id,
+            asof_dt=asof_dt,
+            overrides=state_settings,
+        )
+    except Exception as exc:  # noqa: BLE001
+        result = {
+            "status": "FAILED",
+            "reason": "sync_exception",
+            "error": str(exc),
+            "refreshed": False,
+        }
+
+    status = str(result.get("status", "")).upper()
+    if persist_log and status not in {"", "SKIPPED"}:
+        _log(session, "event_risk_sync", result)
+        emit_operate_event(
+            session,
+            severity=("WARN" if status in {"FAILED", "PARTIAL"} else "INFO"),
+            category="DATA",
+            message="event_risk_sync_before_signals",
+            details=result,
+            correlation_id=correlation_id,
+        )
+    return result
 
 
 def _dump_model(value: Any) -> Any:
@@ -1816,6 +1859,7 @@ def _run_paper_step_with_simulator_engine(
     cost_spike_meta: dict[str, Any],
     scan_guard_active: bool,
     scan_guard_meta: dict[str, Any],
+    event_risk_refresh: dict[str, Any],
     resolved_bundle_id: int | None,
     resolved_dataset_id: int | None,
     resolved_timeframes: list[str],
@@ -2007,6 +2051,7 @@ def _run_paper_step_with_simulator_engine(
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
         "scan_guard_meta": scan_guard_meta,
+        "event_risk_refresh": dict(event_risk_refresh or {}),
         "signals_source": signals_source,
         "bundle_id": resolved_bundle_id,
         "dataset_id": resolved_dataset_id,
@@ -2342,6 +2387,7 @@ def _run_paper_step_with_simulator_engine(
                 "scan_guard_active": bool(scan_guard_active),
                 "scan_guard_meta": scan_guard_meta,
             },
+            "event_risk_refresh": dict(event_risk_refresh or {}),
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
             "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -2446,6 +2492,7 @@ def _run_paper_step_shadow_only(
     cost_spike_meta: dict[str, Any],
     scan_guard_active: bool,
     scan_guard_meta: dict[str, Any],
+    event_risk_refresh: dict[str, Any],
     resolved_bundle_id: int | None,
     resolved_dataset_id: int | None,
     resolved_timeframes: list[str],
@@ -2596,6 +2643,7 @@ def _run_paper_step_shadow_only(
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
         "scan_guard_meta": scan_guard_meta,
+        "event_risk_refresh": dict(event_risk_refresh or {}),
         "signals_source": signals_source,
         "bundle_id": resolved_bundle_id,
         "dataset_id": resolved_dataset_id,
@@ -2839,6 +2887,7 @@ def _run_paper_step_shadow_only(
                 "scan_guard_active": bool(scan_guard_active),
                 "scan_guard_meta": scan_guard_meta,
             },
+            "event_risk_refresh": dict(event_risk_refresh or {}),
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
             "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -3382,6 +3431,11 @@ def run_paper_step(
     )
     ensemble_meta: dict[str, Any] | None = None
     pre_skipped_signals: list[dict[str, Any]] = []
+    event_risk_refresh: dict[str, Any] = {
+        "status": "SKIPPED",
+        "reason": "signals_not_generated",
+        "refreshed": False,
+    }
 
     auto_generate = bool(payload.get("auto_generate_signals", False))
     should_generate = auto_generate or (
@@ -3393,6 +3447,16 @@ def run_paper_step(
         should_generate = False
 
     if should_generate:
+        event_risk_refresh = _refresh_event_risk_before_signals(
+            session=session,
+            settings=settings,
+            store=store,
+            state_settings=state_settings,
+            bundle_id=resolved_bundle_id,
+            asof_dt=asof_dt,
+            correlation_id=str(seed),
+            persist_log=True,
+        )
         symbol_scope = _resolve_symbol_scope(payload, policy)
         max_symbols_scan = _resolve_max_symbols_scan(payload, policy, state_settings, settings)
         if scan_guard_active:
@@ -4157,6 +4221,7 @@ def run_paper_step(
             cost_spike_meta=cost_spike_meta,
             scan_guard_active=scan_guard_active,
             scan_guard_meta=scan_guard_meta,
+            event_risk_refresh=event_risk_refresh,
             resolved_bundle_id=resolved_bundle_id,
             resolved_dataset_id=resolved_dataset_id,
             resolved_timeframes=resolved_timeframes,
@@ -4195,6 +4260,7 @@ def run_paper_step(
             cost_spike_meta=cost_spike_meta,
             scan_guard_active=scan_guard_active,
             scan_guard_meta=scan_guard_meta,
+            event_risk_refresh=event_risk_refresh,
             resolved_bundle_id=resolved_bundle_id,
             resolved_dataset_id=resolved_dataset_id,
             resolved_timeframes=resolved_timeframes,
@@ -4632,6 +4698,7 @@ def run_paper_step(
         "cost_ratio_spike_meta": cost_spike_meta,
         "scan_guard_active": bool(scan_guard_active),
         "scan_guard_meta": scan_guard_meta,
+        "event_risk_refresh": dict(event_risk_refresh or {}),
         "signals_source": signals_source,
         "bundle_id": resolved_bundle_id,
         "dataset_id": resolved_dataset_id,
@@ -4956,6 +5023,7 @@ def run_paper_step(
                 "scan_guard_active": bool(scan_guard_active),
                 "scan_guard_meta": scan_guard_meta,
             },
+            "event_risk_refresh": dict(event_risk_refresh or {}),
             "scan_truncated": generated_meta.scan_truncated,
             "scanned_symbols": generated_meta.scanned_symbols,
             "evaluated_candidates": generated_meta.evaluated_candidates,
@@ -5040,6 +5108,17 @@ def preview_policy_signals(
     state_settings = state.settings_json or {}
     bundle_id = _resolve_bundle_id(session, payload, policy, settings)
     dataset_id = _resolve_dataset_id(session, payload, policy, timeframes, settings)
+    seed = _resolve_seed(payload, policy, settings)
+    event_risk_refresh = _refresh_event_risk_before_signals(
+        session=session,
+        settings=settings,
+        store=store,
+        state_settings=state_settings,
+        bundle_id=bundle_id,
+        asof_dt=preview_asof,
+        correlation_id=str(seed),
+        persist_log=False,
+    )
     if bundle_id is None and dataset_id is None:
         return {
             "regime": regime,
@@ -5052,6 +5131,7 @@ def preview_policy_signals(
             "signals": [],
             "generated_signals_count": 0,
             "selected_signals_count": 0,
+            "event_risk_refresh": event_risk_refresh,
             "scan_truncated": False,
             "scanned_symbols": 0,
             "evaluated_candidates": 0,
@@ -5067,7 +5147,6 @@ def preview_policy_signals(
     symbol_scope = _resolve_symbol_scope(payload, policy)
     max_symbols_scan = _resolve_max_symbols_scan(payload, policy, state_settings, settings)
     max_runtime_seconds = _resolve_max_runtime_seconds(payload, state_settings, settings)
-    seed = _resolve_seed(payload, policy, settings)
     preferred_ensemble_id: int | None = None
     active_ensemble = None
     paper_mode_setting = str(state_settings.get("paper_mode", "strategy")).strip().lower()
@@ -5279,6 +5358,7 @@ def preview_policy_signals(
             "counts": quality_counts,
             "fail_reasons": quality_fail_reasons,
         },
+        "event_risk_refresh": event_risk_refresh,
         "bundle_id": bundle_id,
         "dataset_id": dataset_id,
         "timeframes": timeframes,

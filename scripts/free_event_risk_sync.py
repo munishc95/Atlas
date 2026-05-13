@@ -19,6 +19,9 @@ sys.path.insert(0, str(API_ROOT))
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import engine, init_db  # noqa: E402
 from app.services.data_store import DataStore  # noqa: E402
+from app.services.event_risk_sync import (  # noqa: E402
+    sync_event_risk_calendar as _sync_event_risk_calendar,
+)
 
 NSE_BASE_URL = "https://www.nseindia.com"
 NSE_ACTIONS_PAGE_URL = f"{NSE_BASE_URL}/companies-listing/corporate-filings-actions"
@@ -204,72 +207,24 @@ def sync_event_risk_calendar(
     output_path: Path,
     include_actions: bool,
     include_board_meetings: bool,
+    include_announcements: bool,
 ) -> dict[str, Any]:
     init_db()
+    settings = get_settings()
     store = _store()
     with Session(engine) as session:
-        bundle_symbols = set(store.get_bundle_symbols(session, bundle_id, timeframe="1d"))
-
-    frames: list[pd.DataFrame] = []
-    source_counts: dict[str, int] = {}
-    if include_actions:
-        raw_actions = _fetch_nse_csv(
-            page_url=NSE_ACTIONS_PAGE_URL,
-            api_url=NSE_ACTIONS_URL,
+        return _sync_event_risk_calendar(
+            session=session,
+            settings=settings,
+            store=store,
+            bundle_id=bundle_id,
             start_date=start_date,
             end_date=end_date,
+            output_path=output_path,
+            include_actions=include_actions,
+            include_board_meetings=include_board_meetings,
+            include_announcements=include_announcements,
         )
-        action_events = _action_events(raw_actions, bundle_symbols=bundle_symbols)
-        source_counts["NSE_CORPORATE_ACTIONS_SYNC"] = int(len(action_events))
-        frames.append(action_events)
-
-    if include_board_meetings:
-        raw_meetings = _fetch_nse_csv(
-            page_url=NSE_BOARD_MEETINGS_PAGE_URL,
-            api_url=NSE_BOARD_MEETINGS_URL,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        meeting_events = _board_meeting_events(raw_meetings, bundle_symbols=bundle_symbols)
-        source_counts["NSE_BOARD_MEETINGS_SYNC"] = int(len(meeting_events))
-        frames.append(meeting_events)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    columns = [
-        "event_date",
-        "scope",
-        "symbol",
-        "event_type",
-        "severity",
-        "title",
-        "source",
-        "blackout_before_days",
-        "blackout_after_days",
-    ]
-    non_empty_frames = [frame for frame in frames if not frame.empty]
-    if non_empty_frames:
-        merged = pd.concat(non_empty_frames, ignore_index=True)
-    else:
-        merged = pd.DataFrame(columns=columns)
-    if merged.empty:
-        merged = pd.DataFrame(columns=columns)
-    else:
-        merged = (
-            merged[columns]
-            .sort_values(["event_date", "scope", "symbol", "event_type", "source"])
-            .drop_duplicates(subset=["event_date", "scope", "symbol", "event_type", "source"])
-            .reset_index(drop=True)
-        )
-    merged.to_csv(output_path, index=False)
-    return {
-        "bundle_id": int(bundle_id),
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "output_path": str(output_path),
-        "event_count": int(len(merged)),
-        "source_counts": source_counts,
-        "symbols_with_events": int(merged["symbol"].nunique()) if not merged.empty else 0,
-    }
 
 
 def main() -> None:
@@ -286,6 +241,7 @@ def main() -> None:
     )
     parser.add_argument("--skip-actions", action="store_true")
     parser.add_argument("--skip-board-meetings", action="store_true")
+    parser.add_argument("--skip-announcements", action="store_true")
     args = parser.parse_args()
 
     result = sync_event_risk_calendar(
@@ -295,6 +251,7 @@ def main() -> None:
         output_path=Path(str(args.output_path)),
         include_actions=not bool(args.skip_actions),
         include_board_meetings=not bool(args.skip_board_meetings),
+        include_announcements=not bool(args.skip_announcements),
     )
     print(result)
 
