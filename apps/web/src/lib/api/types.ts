@@ -174,6 +174,33 @@ export type ApiPaperSignal = {
   correlations?: Record<string, number>;
 };
 
+export type ApiEventRiskEvent = {
+  event_date: string;
+  scope: string;
+  symbol?: string | null;
+  event_type: string;
+  severity: string;
+  title: string;
+  source: string;
+  blackout_before_days: number;
+  blackout_after_days: number;
+};
+
+export type ApiEventRiskRefresh = {
+  status: string;
+  reason?: string;
+  refreshed?: boolean;
+  bundle_id?: number;
+  start_date?: string;
+  end_date?: string;
+  output_path?: string;
+  event_count?: number;
+  symbols_with_events?: number;
+  source_counts?: Record<string, number>;
+  source_errors?: Record<string, string>;
+  age_minutes?: number;
+};
+
 export type ApiPaperSignalPreview = {
   regime: string;
   policy_mode: string;
@@ -203,6 +230,7 @@ export type ApiPaperSignalPreview = {
     counts?: Record<string, number>;
     fail_reasons?: Record<string, number>;
   };
+  event_risk_refresh?: ApiEventRiskRefresh;
   skipped_signals?: Array<Record<string, unknown>>;
   ensemble?: ApiPolicyEnsemble | null;
 };

@@ -12,7 +12,10 @@ import { atlasApi } from "@/src/lib/api/endpoints";
 import { useJobStream } from "@/src/hooks/useJobStream";
 import type {
   ApiEffectiveTradingContext,
+  ApiEventRiskEvent,
+  ApiEventRiskRefresh,
   ApiForwardJournalSummary,
+  ApiPaperSignal,
   ApiPaperSignalPreview,
 } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
@@ -30,6 +33,20 @@ function qualityBadgeClass(status: string | undefined): string {
   if (token === "FAIL") return "bg-danger/15 text-danger";
   if (token === "WARN") return "bg-warning/15 text-warning";
   return "bg-success/15 text-success";
+}
+
+function eventRiskBadgeClass(status: string | undefined): string {
+  const token = String(status ?? "SKIPPED").toUpperCase();
+  if (token === "FAILED" || token === "FAIL" || token === "BLOCK") {
+    return "border-danger/30 bg-danger/10 text-danger";
+  }
+  if (token === "PARTIAL" || token === "WARN" || token === "HIGH") {
+    return "border-warning/30 bg-warning/10 text-warning";
+  }
+  if (token === "SUCCEEDED" || token === "PASS" || token === "INFO" || token === "LOW") {
+    return "border-success/30 bg-success/10 text-success";
+  }
+  return "border-border bg-surface text-muted";
 }
 
 function journalStatusClass(status: string | undefined): string {
@@ -64,8 +81,134 @@ function asText(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "-";
 }
 
+function optionalText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function formatRecordNumber(row: Record<string, unknown>, key: string, digits = 2): string {
   return formatNumber(asNumber(row[key]), digits);
+}
+
+function sourceLabel(source: string | undefined): string {
+  const token = String(source ?? "").toUpperCase();
+  if (token.includes("ANNOUNCEMENTS")) return "NSE announcement";
+  if (token.includes("BOARD")) return "Board meeting";
+  if (token.includes("CORPORATE_ACTION")) return "Corporate action";
+  return source ? source.replaceAll("_", " ") : "Event risk";
+}
+
+function eventTypeLabel(eventType: string | undefined): string {
+  return String(eventType ?? "EVENT").replaceAll("_", " ").toLowerCase();
+}
+
+function eventRiskStatusFromSeverity(severity: string | undefined): "PASS" | "WARN" | "FAIL" {
+  const token = String(severity ?? "WARN").toUpperCase();
+  if (["BLOCK", "FAIL", "CRITICAL"].includes(token)) return "FAIL";
+  if (["WARN", "WARNING", "HIGH"].includes(token)) return "WARN";
+  return "PASS";
+}
+
+function eventRiskDecisionText(event: ApiEventRiskEvent): string {
+  const status = eventRiskStatusFromSeverity(event.severity);
+  const verb = status === "FAIL" ? "Blocked" : status === "WARN" ? "Warned" : "Flagged";
+  return `${verb}: ${eventTypeLabel(event.event_type)} on ${event.event_date}`;
+}
+
+function eventRiskEventsFromSignal(
+  signal: ApiPaperSignal | Record<string, unknown>,
+): ApiEventRiskEvent[] {
+  const metrics = isRecord(signal.quality_metrics) ? signal.quality_metrics : null;
+  const rawEvents = metrics?.event_risk_events;
+  if (!Array.isArray(rawEvents)) {
+    return [];
+  }
+  return rawEvents.filter(isRecord).map((event) => ({
+    event_date: optionalText(event.event_date) ?? "-",
+    scope: optionalText(event.scope) ?? "SYMBOL",
+    symbol: optionalText(event.symbol),
+    event_type: optionalText(event.event_type) ?? "EVENT",
+    severity: optionalText(event.severity) ?? "WARN",
+    title: optionalText(event.title) ?? "Event risk",
+    source: optionalText(event.source) ?? "event_risk",
+    blackout_before_days: asNumber(event.blackout_before_days) ?? 0,
+    blackout_after_days: asNumber(event.blackout_after_days) ?? 0,
+  }));
+}
+
+function EventRiskRefreshPanel({
+  refresh,
+  compact = false,
+}: {
+  refresh?: ApiEventRiskRefresh | Record<string, unknown> | null;
+  compact?: boolean;
+}) {
+  if (!isRecord(refresh)) {
+    return null;
+  }
+  const status = String(refresh.status ?? "SKIPPED").toUpperCase();
+  const reason = optionalText(refresh.reason)?.replaceAll("_", " ");
+  const eventCount = asNumber(refresh.event_count);
+  const symbolCount = asNumber(refresh.symbols_with_events);
+  const sourceErrors = isRecord(refresh.source_errors) ? Object.keys(refresh.source_errors) : [];
+  const window =
+    optionalText(refresh.start_date) && optionalText(refresh.end_date)
+      ? `${optionalText(refresh.start_date)} to ${optionalText(refresh.end_date)}`
+      : null;
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2 text-xs ${eventRiskBadgeClass(status)} ${
+        compact ? "mt-2" : ""
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">Event risk {status}</span>
+        <span className="text-current/80">
+          NSE announcements, board meetings, and corporate actions
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-current/80">
+        {eventCount !== null ? <span>{eventCount} active rows</span> : null}
+        {symbolCount !== null ? <span>{symbolCount} symbols</span> : null}
+        {window ? <span>{window}</span> : null}
+        {reason ? <span>{reason}</span> : null}
+        {sourceErrors.length > 0 ? <span>{sourceErrors.length} source issue(s)</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function EventRiskEventsList({
+  events,
+  compact = false,
+}: {
+  events: ApiEventRiskEvent[];
+  compact?: boolean;
+}) {
+  if (events.length === 0) {
+    return null;
+  }
+  return (
+    <div className={compact ? "mt-1 space-y-1" : "mt-2 space-y-2"}>
+      {events.slice(0, compact ? 2 : 5).map((event, index) => {
+        const status = eventRiskStatusFromSeverity(event.severity);
+        return (
+          <div
+            key={`${event.event_date}-${event.event_type}-${index}`}
+            className={`rounded-lg border px-2 py-1 ${eventRiskBadgeClass(status)}`}
+          >
+            <p className="font-medium">{eventRiskDecisionText(event)}</p>
+            <p className="text-current/80">
+              {sourceLabel(event.source)}: {event.title}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function PaperTradingPage() {
@@ -337,6 +480,9 @@ export default function PaperTradingPage() {
     (latestDecision?.skipped_signals as Array<Record<string, unknown>> | undefined) ?? [];
   const selectedSignals =
     (latestDecision?.selected_signals as Array<Record<string, unknown>> | undefined) ?? [];
+  const latestEventRiskRefresh = isRecord(latestDecision?.event_risk_refresh)
+    ? (latestDecision.event_risk_refresh as ApiEventRiskRefresh)
+    : null;
   const costSummary = (latestDecision?.cost_summary as Record<string, unknown> | undefined) ?? {};
   const riskScaled = Boolean(latestDecision?.risk_scaled);
   const reportId = Number(latestDecision?.report_id ?? 0);
@@ -478,6 +624,7 @@ export default function PaperTradingPage() {
             SAFE MODE - SHADOW run completed. Live state was not modified.
           </p>
         ) : null}
+        <EventRiskRefreshPanel refresh={latestEventRiskRefresh} compact />
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -878,117 +1025,130 @@ export default function PaperTradingPage() {
       >
         {!preview ? (
           <EmptyState title="No preview data" action="Run Preview Signals to inspect candidates." />
-        ) : preview.signals.length === 0 ? (
-          <EmptyState
-            title="No signals generated"
-            action="Adjust policy, dataset, or timeframe settings."
-          />
         ) : (
           <div className="space-y-2 text-sm">
-            <p>
-              <span className="text-muted">Regime:</span> {preview.regime}
-            </p>
-            <p>
-              <span className="text-muted">Generated candidates:</span>{" "}
-              {preview.generated_signals_count}
-            </p>
-            <p>
-              <span className="text-muted">Candidate quality:</span> PASS{" "}
-              {preview.candidate_quality?.counts?.PASS ?? 0} / WARN{" "}
-              {preview.candidate_quality?.counts?.WARN ?? 0} / FAIL{" "}
-              {preview.candidate_quality?.counts?.FAIL ?? 0}
-            </p>
-            <p>
-              <span className="text-muted">Policy status:</span> {preview.policy_status ?? "-"} /{" "}
-              {preview.health_status ?? "-"}
-            </p>
-            <p>
-              <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}
-            </p>
-            <p>
-              <span className="text-muted">Scan:</span> {preview.scanned_symbols ?? 0}/
-              {preview.total_symbols ?? 0}
-              {preview.scan_truncated ? " (truncated)" : ""}
-            </p>
-            <p>
-              <span className="text-muted">Trade plan:</span> equity{" "}
-              {formatMoney(preview.trade_plan?.equity)}, risk/trade{" "}
-              {formatMoney(preview.trade_plan?.risk_amount)} (
-              {((preview.trade_plan?.risk_per_trade ?? 0) * 100).toFixed(2)}%), max positions{" "}
-              {preview.trade_plan?.max_positions ?? "-"}
-            </p>
-            <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
-              <table className="w-full min-w-[1120px] text-xs">
-                <thead className="bg-surface text-left text-muted">
-                  <tr>
-                    <th className="px-2 py-2">Symbol</th>
-                    <th className="px-2 py-2">Side</th>
-                    <th className="px-2 py-2">Instrument</th>
-                    <th className="px-2 py-2">Template</th>
-                    <th className="px-2 py-2">Why</th>
-                    <th className="px-2 py-2">Plan</th>
-                    <th className="px-2 py-2">Size</th>
-                    <th className="px-2 py-2">Quality</th>
-                    <th className="px-2 py-2">Flags</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.signals.slice(0, 50).map((signal, index) => (
-                    <tr
-                      key={`${signal.symbol}-${signal.template}-${signal.timeframe}-${index}`}
-                      className="border-t border-border"
-                    >
-                      <td className="px-2 py-2">{signal.symbol}</td>
-                      <td className="px-2 py-2">{signal.side}</td>
-                      <td className="px-2 py-2">
-                        {signal.instrument_kind ?? "EQUITY_CASH"} ({signal.lot_size ?? 1})
-                      </td>
-                      <td className="px-2 py-2">{signal.template}</td>
-                      <td className="max-w-[260px] px-2 py-2 text-muted">
-                        {signal.explanation ?? "-"}
-                      </td>
-                      <td className="px-2 py-2 tabular-nums">
-                        <div className="grid min-w-[156px] grid-cols-2 gap-x-3 gap-y-1">
-                          <span className="text-muted">Entry</span>
-                          <span>{formatNumber(signal.entry_price ?? signal.price)}</span>
-                          <span className="text-muted">Stop</span>
-                          <span>{formatNumber(signal.stop_price)}</span>
-                          <span className="text-muted">T1</span>
-                          <span>{formatNumber(signal.target_1_price)}</span>
-                          <span className="text-muted">T2</span>
-                          <span>{formatNumber(signal.target_2_price)}</span>
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 tabular-nums">
-                        <div className="grid min-w-[150px] grid-cols-2 gap-x-3 gap-y-1">
-                          <span className="text-muted">Qty</span>
-                          <span>{signal.planned_qty ?? 0}</span>
-                          <span className="text-muted">Risk</span>
-                          <span>{formatMoney(signal.planned_risk_amount)}</span>
-                          <span className="text-muted">Value</span>
-                          <span>{formatMoney(signal.planned_position_value)}</span>
-                          <span className="text-muted">Strength</span>
-                          <span>{signal.signal_strength.toFixed(3)}</span>
-                        </div>
-                        {signal.position_size_status && signal.position_size_status !== "OK" ? (
-                          <p className="mt-1 text-[10px] text-warning">Risk cap gives 0 qty</p>
-                        ) : null}
-                      </td>
-                      <td className="px-2 py-2">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}
-                        >
-                          {signal.quality_status ?? "PASS"} {signal.quality_score?.toFixed(2) ?? ""}
-                        </span>
-                      </td>
-                      <td className="px-2 py-2 text-muted">
-                        {(signal.quality_flags ?? []).slice(0, 2).join(", ") || "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <EventRiskRefreshPanel refresh={preview.event_risk_refresh} />
+            {preview.signals.length === 0 ? (
+              <EmptyState
+                title="No signals generated"
+                action="Adjust policy, dataset, or timeframe settings."
+              />
+            ) : (
+              <>
+                <p>
+                  <span className="text-muted">Regime:</span> {preview.regime}
+                </p>
+                <p>
+                  <span className="text-muted">Generated candidates:</span>{" "}
+                  {preview.generated_signals_count}
+                </p>
+                <p>
+                  <span className="text-muted">Candidate quality:</span> PASS{" "}
+                  {preview.candidate_quality?.counts?.PASS ?? 0} / WARN{" "}
+                  {preview.candidate_quality?.counts?.WARN ?? 0} / FAIL{" "}
+                  {preview.candidate_quality?.counts?.FAIL ?? 0}
+                </p>
+                <p>
+                  <span className="text-muted">Policy status:</span>{" "}
+                  {preview.policy_status ?? "-"} / {preview.health_status ?? "-"}
+                </p>
+                <p>
+                  <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}
+                </p>
+                <p>
+                  <span className="text-muted">Scan:</span> {preview.scanned_symbols ?? 0}/
+                  {preview.total_symbols ?? 0}
+                  {preview.scan_truncated ? " (truncated)" : ""}
+                </p>
+                <p>
+                  <span className="text-muted">Trade plan:</span> equity{" "}
+                  {formatMoney(preview.trade_plan?.equity)}, risk/trade{" "}
+                  {formatMoney(preview.trade_plan?.risk_amount)} (
+                  {((preview.trade_plan?.risk_per_trade ?? 0) * 100).toFixed(2)}%), max
+                  positions {preview.trade_plan?.max_positions ?? "-"}
+                </p>
+                <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
+                  <table className="w-full min-w-[1120px] text-xs">
+                    <thead className="bg-surface text-left text-muted">
+                      <tr>
+                        <th className="px-2 py-2">Symbol</th>
+                        <th className="px-2 py-2">Side</th>
+                        <th className="px-2 py-2">Instrument</th>
+                        <th className="px-2 py-2">Template</th>
+                        <th className="px-2 py-2">Why</th>
+                        <th className="px-2 py-2">Plan</th>
+                        <th className="px-2 py-2">Size</th>
+                        <th className="px-2 py-2">Quality</th>
+                        <th className="px-2 py-2">Flags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.signals.slice(0, 50).map((signal, index) => {
+                        const eventRiskEvents = eventRiskEventsFromSignal(signal);
+                        return (
+                          <tr
+                            key={`${signal.symbol}-${signal.template}-${signal.timeframe}-${index}`}
+                            className="border-t border-border"
+                          >
+                            <td className="px-2 py-2">{signal.symbol}</td>
+                            <td className="px-2 py-2">{signal.side}</td>
+                            <td className="px-2 py-2">
+                              {signal.instrument_kind ?? "EQUITY_CASH"} ({signal.lot_size ?? 1})
+                            </td>
+                            <td className="px-2 py-2">{signal.template}</td>
+                            <td className="max-w-[300px] px-2 py-2 text-muted">
+                              <p>{signal.explanation ?? "-"}</p>
+                              <EventRiskEventsList events={eventRiskEvents} compact />
+                            </td>
+                            <td className="px-2 py-2 tabular-nums">
+                              <div className="grid min-w-[156px] grid-cols-2 gap-x-3 gap-y-1">
+                                <span className="text-muted">Entry</span>
+                                <span>{formatNumber(signal.entry_price ?? signal.price)}</span>
+                                <span className="text-muted">Stop</span>
+                                <span>{formatNumber(signal.stop_price)}</span>
+                                <span className="text-muted">T1</span>
+                                <span>{formatNumber(signal.target_1_price)}</span>
+                                <span className="text-muted">T2</span>
+                                <span>{formatNumber(signal.target_2_price)}</span>
+                              </div>
+                            </td>
+                            <td className="px-2 py-2 tabular-nums">
+                              <div className="grid min-w-[150px] grid-cols-2 gap-x-3 gap-y-1">
+                                <span className="text-muted">Qty</span>
+                                <span>{signal.planned_qty ?? 0}</span>
+                                <span className="text-muted">Risk</span>
+                                <span>{formatMoney(signal.planned_risk_amount)}</span>
+                                <span className="text-muted">Value</span>
+                                <span>{formatMoney(signal.planned_position_value)}</span>
+                                <span className="text-muted">Strength</span>
+                                <span>{signal.signal_strength.toFixed(3)}</span>
+                              </div>
+                              {signal.position_size_status &&
+                              signal.position_size_status !== "OK" ? (
+                                <p className="mt-1 text-[10px] text-warning">
+                                  Risk cap gives 0 qty
+                                </p>
+                              ) : null}
+                            </td>
+                            <td className="px-2 py-2">
+                              <span
+                                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}
+                              >
+                                {signal.quality_status ?? "PASS"}{" "}
+                                {signal.quality_score?.toFixed(2) ?? ""}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2 text-muted">
+                              {(signal.quality_flags ?? []).slice(0, 2).join(", ") || "-"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         )}
       </DetailsDrawer>
@@ -1034,6 +1194,7 @@ export default function PaperTradingPage() {
               <span className="text-muted">Selected:</span> {selectedSignals.length} |{" "}
               <span className="text-muted">Skipped:</span> {skippedSignals.length}
             </p>
+            <EventRiskRefreshPanel refresh={latestEventRiskRefresh} />
             <div className="rounded-xl border border-border p-3">
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
                 Selected trades
@@ -1049,6 +1210,7 @@ export default function PaperTradingPage() {
                     const qualityFlags = Array.isArray(signal.quality_flags)
                       ? signal.quality_flags.map(String).join(", ")
                       : "";
+                    const eventRiskEvents = eventRiskEventsFromSignal(signal);
                     return (
                       <li
                         key={`${asText(signal.symbol)}-${asText(signal.template)}-${index}`}
@@ -1103,6 +1265,7 @@ export default function PaperTradingPage() {
                         {qualityFlags ? (
                           <p className="mt-1 text-muted">Flags: {qualityFlags}</p>
                         ) : null}
+                        <EventRiskEventsList events={eventRiskEvents} />
                       </li>
                     );
                   })}
@@ -1132,11 +1295,17 @@ export default function PaperTradingPage() {
                 <p className="text-xs text-muted">No skipped signals.</p>
               ) : (
                 <ul className="space-y-1 text-xs">
-                  {skippedSignals.slice(0, 25).map((item, index) => (
-                    <li key={`${String(item.symbol ?? "item")}-${index}`}>
-                      {String(item.symbol ?? "-")}: {String(item.reason ?? "-")}
-                    </li>
-                  ))}
+                  {skippedSignals.slice(0, 25).map((item, index) => {
+                    const eventRiskEvents = eventRiskEventsFromSignal(item);
+                    return (
+                      <li key={`${String(item.symbol ?? "item")}-${index}`}>
+                        <p>
+                          {String(item.symbol ?? "-")}: {String(item.reason ?? "-")}
+                        </p>
+                        <EventRiskEventsList events={eventRiskEvents} compact />
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
