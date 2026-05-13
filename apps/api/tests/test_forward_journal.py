@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 from uuid import uuid4
 
@@ -14,7 +15,9 @@ from app.db.session import engine
 from app.jobs.tasks import _operate_run_result
 from app.main import app
 from app.services.data_store import DataStore
+from app.services.forward_journal import _capture_filter_reasons
 from app.services.jobs import create_job
+from app.services.paper import entry_quality_block_reason
 
 
 def _client_inline_jobs() -> TestClient:
@@ -73,6 +76,68 @@ def _reset_paper_state(session: Session) -> None:
         }
         session.add(state)
     session.commit()
+
+
+class _EmptyStore:
+    def load_ohlcv(self, **_: object) -> pd.DataFrame:
+        return pd.DataFrame()
+
+
+def test_entry_quality_blocks_weak_bar_and_breadth_deterioration() -> None:
+    signal = {
+        "side": "BUY",
+        "quality_flags": ["weak_signal_bar_close", "market_breadth_deteriorating"],
+    }
+
+    assert entry_quality_block_reason(signal) == "weak_signal_bar_close"
+
+    signal["quality_flags"] = ["market_breadth_deteriorating"]
+    assert entry_quality_block_reason(signal) == "long_entry_market_breadth_not_pass"
+
+    signal["side"] = "SELL"
+    assert entry_quality_block_reason(signal) is None
+
+
+def test_forward_journal_filter_records_hard_quality_reasons() -> None:
+    signal = {
+        "symbol": "FJQUAL",
+        "side": "BUY",
+        "entry_price": 100.0,
+        "stop_price": 95.0,
+        "target_1_price": 105.0,
+        "target_2_price": 110.0,
+        "planned_qty": 10,
+        "position_size_status": "OK",
+        "quality_status": "FAIL",
+        "quality_flags": ["weak_signal_bar_close", "market_breadth_deteriorating"],
+    }
+
+    with Session(engine) as session:
+        reasons = _capture_filter_reasons(
+            session=session,
+            store=_EmptyStore(),  # type: ignore[arg-type]
+            signal=signal,
+            timeframe="1d",
+            fill_at=datetime(2026, 5, 14, tzinfo=timezone.utc),
+            max_entry_extension_pct=1.0,
+        )
+
+    assert "weak_signal_bar_close" in reasons
+    assert "quality_fail" in reasons
+
+    signal["quality_status"] = "PASS"
+    signal["quality_flags"] = ["market_breadth_deteriorating"]
+    with Session(engine) as session:
+        breadth_reasons = _capture_filter_reasons(
+            session=session,
+            store=_EmptyStore(),  # type: ignore[arg-type]
+            signal=signal,
+            timeframe="1d",
+            fill_at=datetime(2026, 5, 14, tzinfo=timezone.utc),
+            max_entry_extension_pct=1.0,
+        )
+
+    assert "long_entry_market_breadth_not_pass" in breadth_reasons
 
 
 def test_forward_journal_captures_and_evaluates_signal_outcome() -> None:

@@ -307,6 +307,21 @@ def test_bearish_market_context_does_not_fail_sell_candidates() -> None:
     assert sell_quality["flags"] == []
 
 
+def test_breadth_deterioration_blocks_long_candidates() -> None:
+    context = {
+        "status": "WARN",
+        "flags": ["market_breadth_deteriorating"],
+    }
+
+    buy_quality = _market_context_quality_for_side(context, side="BUY")
+    sell_quality = _market_context_quality_for_side(context, side="SELL")
+
+    assert buy_quality["status"] == "FAIL"
+    assert "long_entry_market_breadth_not_pass" in buy_quality["flags"]
+    assert sell_quality["status"] == "PASS"
+    assert sell_quality["flags"] == []
+
+
 def test_event_risk_calendar_blocks_known_market_event() -> None:
     risk = evaluate_event_risk(asof_date=pd.Timestamp("2024-06-03").date(), symbol="RELIANCE")
 

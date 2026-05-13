@@ -92,6 +92,32 @@ DATA_QUALITY_SYMBOL_BLOCK_CODES = {
     "gap_exceeds_threshold",
     "return_outliers",
 }
+LONG_ENTRY_MARKET_BREADTH_FLAGS = {
+    "market_breadth_breakdown",
+    "market_breadth_weak",
+    "market_breadth_deteriorating",
+    "long_entry_market_breadth_not_pass",
+}
+
+
+def _quality_flags(signal: dict[str, Any]) -> set[str]:
+    flags = signal.get("quality_flags", [])
+    if not isinstance(flags, list):
+        return set()
+    return {str(flag).strip() for flag in flags if str(flag).strip()}
+
+
+def entry_quality_block_reason(signal: dict[str, Any]) -> str | None:
+    flags = _quality_flags(signal)
+    if "weak_signal_bar_close" in flags:
+        return "weak_signal_bar_close"
+    side = str(signal.get("side", "BUY")).strip().upper()
+    if side == "BUY" and (
+        bool(flags.intersection(LONG_ENTRY_MARKET_BREADTH_FLAGS))
+        or any(flag.startswith("market_breadth_") for flag in flags)
+    ):
+        return "long_entry_market_breadth_not_pass"
+    return None
 
 
 def _utc_now() -> datetime:
@@ -3945,6 +3971,20 @@ def run_paper_step(
                     }
                 )
                 continue
+
+        quality_block_reason = entry_quality_block_reason(signal)
+        if quality_block_reason is not None:
+            skipped_signals.append(
+                {
+                    **base_meta,
+                    "reason": quality_block_reason,
+                    "quality_score": signal.get("quality_score"),
+                    "quality_status": signal.get("quality_status", "PASS"),
+                    "quality_flags": signal.get("quality_flags", []),
+                    "quality_metrics": signal.get("quality_metrics", {}),
+                }
+            )
+            continue
 
         if str(signal.get("quality_status", "PASS")).upper() == "FAIL":
             skipped_signals.append(

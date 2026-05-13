@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from app.core.config import Settings
 from app.db.models import ForwardSignalJournal, utc_now
 from app.services.data_store import DataStore
-from app.services.paper import preview_policy_signals
+from app.services.paper import entry_quality_block_reason, preview_policy_signals
 
 
 TERMINAL_STATUSES = {"STOP_HIT", "T2_HIT", "EXPIRED"}
@@ -130,6 +130,9 @@ def _capture_filter_reasons(
     planned_qty = _as_int(signal.get("planned_qty"))
     position_status = str(signal.get("position_size_status", "OK")).strip().upper()
     quality_status = str(signal.get("quality_status", "PASS")).strip().upper()
+    quality_block_reason = entry_quality_block_reason(signal)
+    if quality_block_reason is not None:
+        reasons.append(quality_block_reason)
     if quality_status != "PASS":
         reasons.append(f"quality_{quality_status.lower()}")
     if position_status not in {"", "OK"}:

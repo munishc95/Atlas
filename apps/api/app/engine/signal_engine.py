@@ -384,6 +384,10 @@ def _market_context_quality_for_side(
             "status": status if adverse_flags else "PASS",
             "flags": adverse_flags,
         }
+    if any(flag.startswith("market_breadth_") for flag in flags):
+        if "long_entry_market_breadth_not_pass" not in flags:
+            flags.append("long_entry_market_breadth_not_pass")
+        return {"status": "FAIL", "flags": flags}
     return {"status": status, "flags": flags}
 
 
