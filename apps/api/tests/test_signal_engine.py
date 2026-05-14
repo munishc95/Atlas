@@ -293,10 +293,57 @@ def test_market_context_flags_breadth_breakdown() -> None:
     assert "market_breadth_breakdown" in context["flags"]
 
 
+def test_market_context_flags_overextended_breadth() -> None:
+    frames: dict[str, pd.DataFrame] = {}
+    for index in range(12):
+        frame = _flat_frame(240)
+        close = np.full(len(frame), 100.0)
+        close[-21:] = np.linspace(100.0, 116.0, 21)
+        frame["open"] = close
+        frame["high"] = close + 1.0
+        frame["low"] = close - 1.0
+        frame["close"] = close
+        frame["volume"] = 1_500_000 + index
+        frames[f"CHASE{index}"] = frame
+
+    context = _market_context_from_frames(frames)
+
+    assert context["status"] == "WARN"
+    assert "market_breadth_overextended" in context["flags"]
+
+
+def test_market_context_flags_short_term_rollover_from_high_breadth() -> None:
+    frames: dict[str, pd.DataFrame] = {}
+    for index in range(12):
+        frame = _flat_frame(240)
+        close = np.full(len(frame), 100.0)
+        if index < 11:
+            close[-21:] = np.linspace(100.0, 116.0, 21)
+        else:
+            close[-21:-1] = np.linspace(100.0, 110.0, 20)
+            close[-1] = 90.0
+        frame["open"] = close
+        frame["high"] = close + 1.0
+        frame["low"] = close - 1.0
+        frame["close"] = close
+        frame["volume"] = 1_500_000 + index
+        frames[f"ROLL{index}"] = frame
+
+    context = _market_context_from_frames(frames)
+
+    assert context["status"] == "WARN"
+    assert "market_breadth_short_term_rollover" in context["flags"]
+
+
 def test_bearish_market_context_does_not_fail_sell_candidates() -> None:
     context = {
         "status": "FAIL",
-        "flags": ["market_breadth_breakdown", "market_momentum_negative"],
+        "flags": [
+            "market_breadth_breakdown",
+            "market_breadth_overextended",
+            "market_breadth_short_term_rollover",
+            "market_momentum_negative",
+        ],
     }
 
     buy_quality = _market_context_quality_for_side(context, side="BUY")

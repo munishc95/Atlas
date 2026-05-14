@@ -302,10 +302,27 @@ def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, An
         if pd.isna(close.iloc[-1]) or pd.isna(sma50.iloc[-1]) or pd.isna(sma200.iloc[-1]):
             continue
         previous_idx = max(0, len(clean) - 6)
+        previous_idx_1 = max(0, len(clean) - 2)
+        previous_idx_2 = max(0, len(clean) - 3)
         rows.append(
             {
                 "above50": 1.0 if float(close.iloc[-1]) > float(sma50.iloc[-1]) else 0.0,
                 "above200": 1.0 if float(close.iloc[-1]) > float(sma200.iloc[-1]) else 0.0,
+                "above50_prev1": (
+                    1.0
+                    if float(close.iloc[previous_idx_1]) > float(sma50.iloc[previous_idx_1])
+                    else 0.0
+                ),
+                "above50_prev2": (
+                    1.0
+                    if float(close.iloc[previous_idx_2]) > float(sma50.iloc[previous_idx_2])
+                    else 0.0
+                ),
+                "above200_prev1": (
+                    1.0
+                    if float(close.iloc[previous_idx_1]) > float(sma200.iloc[previous_idx_1])
+                    else 0.0
+                ),
                 "above50_prev": (
                     1.0 if float(close.iloc[previous_idx]) > float(sma50.iloc[previous_idx]) else 0.0
                 ),
@@ -317,6 +334,11 @@ def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, An
                 "ret20": (
                     (float(close.iloc[-1]) / float(close.iloc[-21]) - 1.0) * 100.0
                     if len(close) >= 21 and float(close.iloc[-21]) > 0
+                    else 0.0
+                ),
+                "ret5": (
+                    (float(close.iloc[-1]) / float(close.iloc[-6]) - 1.0) * 100.0
+                    if len(close) >= 6 and float(close.iloc[-6]) > 0
                     else 0.0
                 ),
             }
@@ -336,11 +358,27 @@ def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, An
     context = pd.DataFrame(rows)
     breadth50 = float(context["above50"].mean() * 100.0)
     breadth200 = float(context["above200"].mean() * 100.0)
+    breadth50_chg1 = float(
+        (context["above50"].mean() - context["above50_prev1"].mean()) * 100.0
+    )
+    breadth50_chg2 = float(
+        (context["above50"].mean() - context["above50_prev2"].mean()) * 100.0
+    )
+    breadth200_chg1 = float(
+        (context["above200"].mean() - context["above200_prev1"].mean()) * 100.0
+    )
     breadth50_chg5 = float((context["above50"].mean() - context["above50_prev"].mean()) * 100.0)
     breadth200_chg5 = float((context["above200"].mean() - context["above200_prev"].mean()) * 100.0)
     avg_ret20 = float(context["ret20"].mean())
+    avg_ret5 = float(context["ret5"].mean())
 
     flags: list[str] = []
+    if breadth50 >= 80.0 and avg_ret20 >= 9.0 and avg_ret5 >= 1.5:
+        flags.append("market_breadth_overextended")
+    if breadth50 >= 70.0 and (
+        breadth50_chg1 <= -5.0 or breadth50_chg2 <= -7.0 or breadth200_chg1 <= -5.0
+    ):
+        flags.append("market_breadth_short_term_rollover")
     if breadth50 <= 25.0 or avg_ret20 <= -5.0 or breadth50_chg5 <= -15.0:
         flags.append("market_breadth_breakdown")
     elif breadth50 <= 35.0:
@@ -358,8 +396,12 @@ def _market_context_from_frames(frames: dict[str, pd.DataFrame]) -> dict[str, An
         "symbols": int(len(rows)),
         "breadth50": breadth50,
         "breadth200": breadth200,
+        "breadth50_chg1": breadth50_chg1,
+        "breadth50_chg2": breadth50_chg2,
+        "breadth200_chg1": breadth200_chg1,
         "breadth50_chg5": breadth50_chg5,
         "breadth200_chg5": breadth200_chg5,
+        "avg_ret5": avg_ret5,
         "avg_ret20": avg_ret20,
     }
 
@@ -377,6 +419,8 @@ def _market_context_quality_for_side(
             "market_breadth_breakdown",
             "market_breadth_weak",
             "market_breadth_deteriorating",
+            "market_breadth_overextended",
+            "market_breadth_short_term_rollover",
             "market_momentum_negative",
         }
         adverse_flags = [flag for flag in flags if flag not in bearish_flags]

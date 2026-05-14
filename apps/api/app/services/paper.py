@@ -96,6 +96,8 @@ LONG_ENTRY_MARKET_BREADTH_FLAGS = {
     "market_breadth_breakdown",
     "market_breadth_weak",
     "market_breadth_deteriorating",
+    "market_breadth_overextended",
+    "market_breadth_short_term_rollover",
     "long_entry_market_breadth_not_pass",
 }
 
