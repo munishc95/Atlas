@@ -56,15 +56,15 @@ def regime_policy(regime: str, base_risk: float, base_max_positions: int) -> dic
         }
     if regime == REGIME_RANGE:
         return {
-            "allowed_templates": ["pullback_trend", "squeeze_breakout"],
+            "allowed_templates": ["squeeze_breakout"],
             "risk_per_trade": base_risk * 0.75,
             "max_positions": min(base_max_positions, 3),
         }
     if regime == REGIME_HIGH_VOL:
         return {
-            "allowed_templates": ["pullback_trend", "squeeze_breakout"],
-            "risk_per_trade": min(base_risk, 0.0025),
-            "max_positions": min(base_max_positions, 2),
+            "allowed_templates": [],
+            "risk_per_trade": 0.0,
+            "max_positions": 0,
         }
     return {
         "allowed_templates": [],

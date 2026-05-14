@@ -27,22 +27,29 @@ ProgressCallback = Callable[[int, str | None], None]
 
 REGIME_TEMPLATE_PREFS: dict[str, list[str]] = {
     "TREND_UP": ["trend_breakout", "squeeze_breakout"],
-    "RANGE": ["pullback_trend", "squeeze_breakout"],
-    "HIGH_VOL": ["squeeze_breakout", "pullback_trend"],
+    "RANGE": ["squeeze_breakout"],
+    "HIGH_VOL": [],
     "RISK_OFF": [],
 }
 
 REGIME_RISK_SCALE: dict[str, float] = {
     "TREND_UP": 1.0,
     "RANGE": 0.8,
-    "HIGH_VOL": 0.6,
+    "HIGH_VOL": 0.0,
     "RISK_OFF": 0.0,
 }
 REGIME_POSITION_SCALE: dict[str, float] = {
     "TREND_UP": 1.0,
     "RANGE": 0.75,
-    "HIGH_VOL": 0.6,
+    "HIGH_VOL": 0.0,
     "RISK_OFF": 0.0,
+}
+
+DEFAULT_POLICY_RANKING_WEIGHTS: dict[str, float] = {
+    "signal": 0.70,
+    "liquidity": 0.05,
+    "stability": 0.00,
+    "quality": 0.25,
 }
 
 
@@ -317,7 +324,7 @@ def _policy_from_candidates(run_id: int, candidates: list[ResearchCandidate]) ->
         "ranking": {
             "method": "robust_score",
             "seed": 7,
-            "weights": {"signal": 0.65, "liquidity": 0.25, "stability": 0.10},
+            "weights": dict(DEFAULT_POLICY_RANKING_WEIGHTS),
         },
         "allowed_instruments": {
             "BUY": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
@@ -605,7 +612,7 @@ def execute_research_run(
     policy_preview["ranking"] = {
         "method": "robust_score",
         "seed": int(seed),
-        "weights": {"signal": 0.65, "liquidity": 0.25, "stability": 0.10},
+        "weights": dict(DEFAULT_POLICY_RANKING_WEIGHTS),
     }
     policy_preview["cost_model"] = {
         "enabled": bool(settings.cost_model_enabled),

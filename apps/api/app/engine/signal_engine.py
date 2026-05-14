@@ -27,10 +27,10 @@ SignalMode = Literal["paper", "preview", "audit"]
 SIGNAL_LOOKBACK_DAYS = 760
 
 DEFAULT_RANKING_WEIGHTS: dict[str, float] = {
-    "signal": 0.50,
-    "liquidity": 0.25,
-    "stability": 0.10,
-    "quality": 0.15,
+    "signal": 0.70,
+    "liquidity": 0.05,
+    "stability": 0.00,
+    "quality": 0.25,
 }
 
 

@@ -1128,10 +1128,10 @@ def _resolve_execution_policy(
             "SELL": ["EQUITY_CASH", "STOCK_FUT", "INDEX_FUT"],
         },
         "ranking_weights": {
-            "signal": 0.55,
-            "liquidity": 0.25,
-            "stability": 0.10,
-            "quality": 0.20,
+            "signal": 0.70,
+            "liquidity": 0.05,
+            "stability": 0.00,
+            "quality": 0.25,
         },
     }
 
@@ -1621,6 +1621,7 @@ def _selected_signal_summary(item: dict[str, Any]) -> dict[str, Any]:
         "side": str(item.get("side", "")),
         "instrument_kind": str(item.get("instrument_kind", "")),
         "selection_reason": selection_reason,
+        "instrument_choice_reason": selection_reason,
     }
 
     for key in (
