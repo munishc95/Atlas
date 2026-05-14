@@ -419,7 +419,7 @@ export default function PaperTradingPage() {
     }
   }, [activePolicy, bundleId, bundlesQuery.data]);
 
-  const runStep = useCallback(() => {
+  const runStep = useCallback((shadowOnly = false) => {
     const regime = regimeQuery.data?.regime ?? "TREND_UP";
     const useAutopilot = autopilotEnabled || paperMode === "policy";
     const fallbackSignals = useAutopilot
@@ -443,6 +443,7 @@ export default function PaperTradingPage() {
       bundle_id: bundleId ?? undefined,
       signals: fallbackSignals,
       mark_prices: {},
+      shadow_only: shadowOnly,
     });
   }, [autopilotEnabled, bundleId, paperMode, regimeQuery.data?.regime, runStepMutation]);
 
@@ -462,7 +463,7 @@ export default function PaperTradingPage() {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         if (!runStepMutation.isPending) {
-          runStep();
+          runStep(false);
         }
       }
       if (event.key.toLowerCase() === "p") {
@@ -621,7 +622,7 @@ export default function PaperTradingPage() {
         ) : null}
         {String(latestDecision?.execution_mode ?? "") === "SHADOW" ? (
           <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            SAFE MODE - SHADOW run completed. Live state was not modified.
+            SHADOW run completed. Live paper positions/cash were not modified.
           </p>
         ) : null}
         <EventRiskRefreshPanel refresh={latestEventRiskRefresh} compact />
@@ -648,11 +649,19 @@ export default function PaperTradingPage() {
           </button>
           <button
             type="button"
-            onClick={runStep}
+            onClick={() => runStep(false)}
             className="focus-ring rounded-xl bg-accent px-4 py-2 text-white"
             disabled={runStepMutation.isPending}
           >
             {runStepMutation.isPending ? "Queuing..." : "Run Step"}
+          </button>
+          <button
+            type="button"
+            onClick={() => runStep(true)}
+            className="focus-ring rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
+            disabled={runStepMutation.isPending}
+          >
+            {runStepMutation.isPending ? "Queuing..." : "Run Shadow Step"}
           </button>
           <button
             type="button"

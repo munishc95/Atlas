@@ -403,6 +403,12 @@ def get_operate_health_summary(
             settings.operate_auto_run_include_data_updates,
         )
     )
+    auto_run_shadow_only = bool(
+        state_settings.get(
+            "operate_auto_run_shadow_only",
+            settings.operate_auto_run_shadow_only,
+        )
+    )
     auto_eval_enabled = bool(
         state_settings.get("operate_auto_eval_enabled", settings.operate_auto_eval_enabled)
     )
@@ -587,6 +593,7 @@ def get_operate_health_summary(
         "auto_run_enabled": auto_run_enabled,
         "auto_run_time_ist": auto_run_time_ist,
         "auto_run_include_data_updates": auto_run_include_data_updates,
+        "auto_run_shadow_only": auto_run_shadow_only,
         "last_auto_run_date": last_auto_run_date,
         "next_scheduled_run_ist": next_scheduled_run_ist,
         "auto_eval_enabled": auto_eval_enabled,

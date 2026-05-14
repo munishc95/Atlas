@@ -222,12 +222,13 @@ export default function OpsPage() {
     },
   });
   const operateRunMutation = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (shadowOnly: boolean) =>
       (
         await atlasApi.operateRun({
           bundle_id: activeBundleId ?? undefined,
           timeframe: activeTimeframe,
           policy_id: activePolicyId ?? undefined,
+          shadow_only: shadowOnly,
           date: new Date().toISOString().slice(0, 10),
         })
       ).data,
@@ -552,6 +553,9 @@ export default function OpsPage() {
   const autoRunIncludesUpdates = Boolean(
     healthQuery.data?.auto_run_include_data_updates ??
       statusQuery.data?.auto_run_include_data_updates,
+  );
+  const autoRunShadowOnly = Boolean(
+    healthQuery.data?.auto_run_shadow_only ?? statusQuery.data?.auto_run_shadow_only ?? true,
   );
   const nextScheduledRun = String(
     healthQuery.data?.next_scheduled_run_ist ?? statusQuery.data?.next_scheduled_run_ist ?? "-",
@@ -1117,6 +1121,7 @@ export default function OpsPage() {
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             Auto-run: {autoRunEnabled ? "Enabled" : "Disabled"} ({autoRunTimeIst} IST)
             {autoRunEnabled ? ` - updates ${autoRunIncludesUpdates ? "on" : "off"}` : ""}
+            {autoRunEnabled ? ` - ${autoRunShadowOnly ? "shadow" : "paper"}` : ""}
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
             Next scheduled run: {nextScheduledRun}
@@ -1319,13 +1324,21 @@ export default function OpsPage() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => operateRunMutation.mutate()}
+              onClick={() => operateRunMutation.mutate(false)}
               disabled={operateRunMutation.isPending}
               className="focus-ring rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white"
             >
               {operateRunMutation.isPending
                 ? "Queuing..."
                 : "Run Today (Updates -> Quality -> Step -> Report)"}
+            </button>
+            <button
+              type="button"
+              onClick={() => operateRunMutation.mutate(true)}
+              disabled={operateRunMutation.isPending}
+              className="focus-ring rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm font-semibold text-warning"
+            >
+              {operateRunMutation.isPending ? "Queuing..." : "Run Today Shadow"}
             </button>
             <button
               type="button"

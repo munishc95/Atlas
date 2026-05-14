@@ -442,6 +442,7 @@ export type ApiOperateStatus = {
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
   auto_run_include_data_updates?: boolean;
+  auto_run_shadow_only?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
   auto_eval_enabled?: boolean;
@@ -1014,6 +1015,7 @@ export type ApiOperateHealth = {
   auto_run_enabled?: boolean;
   auto_run_time_ist?: string;
   auto_run_include_data_updates?: boolean;
+  auto_run_shadow_only?: boolean;
   last_auto_run_date?: string | null;
   next_scheduled_run_ist?: string | null;
   auto_eval_enabled?: boolean;
@@ -1060,6 +1062,8 @@ export type ApiOperateRunSummary = {
   regime?: string;
   provider_stage_status?: string;
   mode?: "NORMAL" | "SAFE" | "SHADOW";
+  shadow_only?: boolean;
+  shadow_reason?: string | null;
   quality_status?: string;
   update_status?: string;
   step_order?: string[];

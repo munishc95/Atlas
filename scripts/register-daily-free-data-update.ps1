@@ -10,6 +10,7 @@ param(
     [switch]$RunOperate,
     [string]$OperateTimeframe = "1d",
     [string]$OperateRegime = "TREND_UP",
+    [int]$OperateShadowOnly = 1,
     [int]$OperateMaxRuntimeSeconds = 10800,
     [int]$ExecutionHours = 4
 )
@@ -43,6 +44,7 @@ if ($RunOperate) {
         "-RunOperate",
         "-OperateTimeframe", "$OperateTimeframe",
         "-OperateRegime", "$OperateRegime",
+        "-OperateShadowOnly", "$OperateShadowOnly",
         "-OperateMaxRuntimeSeconds", "$OperateMaxRuntimeSeconds"
     )
 }
@@ -76,6 +78,7 @@ $Info = Get-ScheduledTaskInfo -TaskName $TaskName
     State = $Task.State
     StartTime = $At.ToString("HH:mm")
     RunOperate = [bool]$RunOperate
+    OperateShadowOnly = $OperateShadowOnly
     User = $UserId
     Script = $UpdateScript
     NextRunTime = $Info.NextRunTime

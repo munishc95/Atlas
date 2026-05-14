@@ -713,6 +713,7 @@ export const atlasApi = {
     timeframe?: string;
     regime?: string;
     policy_id?: number;
+    shadow_only?: boolean;
     include_data_updates?: boolean;
     date?: string;
     asof?: string;

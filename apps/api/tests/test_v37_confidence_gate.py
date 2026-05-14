@@ -232,6 +232,68 @@ def test_confidence_gate_shadow_only_keeps_live_state_intact() -> None:
         assert shadow_row is not None
 
 
+def test_requested_shadow_only_keeps_live_state_intact_with_passing_gate() -> None:
+    init_db()
+    settings = get_settings()
+    store = _store()
+    symbol = f"REQSHDW_{uuid4().hex[:8].upper()}"
+    with Session(engine) as session:
+        bundle_id, datetimes = _seed_bundle_with_low_confidence(
+            session=session,
+            store=store,
+            symbol=symbol,
+            confidence=90.0,
+            source_provider="NSE_BHAVCOPY",
+        )
+        state = get_or_create_paper_state(session, settings)
+        merged = dict(state.settings_json or {})
+        merged.update(_base_settings_payload(settings))
+        merged["data_updates_provider_kind"] = "NSE_BHAVCOPY"
+        state.settings_json = merged
+        session.add(state)
+        session.commit()
+        before = get_paper_state_payload(session, settings)
+        result = run_paper_step(
+            session=session,
+            settings=settings,
+            payload={
+                "regime": "TREND_UP",
+                "bundle_id": bundle_id,
+                "timeframes": ["1d"],
+                "asof": pd.Timestamp(datetimes[-1]).to_pydatetime().isoformat(),
+                "shadow_only": True,
+                "signals": [
+                    {
+                        "symbol": symbol,
+                        "side": "BUY",
+                        "template": "trend_breakout",
+                        "price": 104.0,
+                        "stop_distance": 2.0,
+                        "signal_strength": 1.0,
+                        "adv": 1_000_000.0,
+                        "vol_scale": 1.0,
+                    }
+                ],
+                "auto_generate_signals": False,
+            },
+            store=store,
+        )
+        after = get_paper_state_payload(session, settings)
+        assert str(result.get("execution_mode")) == "SHADOW"
+        assert bool(result.get("shadow_only")) is True
+        assert str(result.get("shadow_reason")) == "requested"
+        assert bool(result.get("live_state_mutated")) is False
+        confidence_gate = result.get("confidence_gate", {})
+        assert str(confidence_gate.get("decision", "")).upper() == "PASS"
+        assert before["state"]["cash"] == after["state"]["cash"]
+        assert before["state"]["equity"] == after["state"]["equity"]
+        assert len(after["positions"]) == len(before["positions"])
+        run_row = session.exec(select(PaperRun).order_by(PaperRun.id.desc())).first()
+        assert run_row is not None
+        assert run_row.mode == "SHADOW"
+        assert run_row.summary_json.get("shadow_reason") == "requested"
+
+
 def test_confidence_gate_block_entries_allows_exit_and_records_skip_reason() -> None:
     init_db()
     settings = get_settings()

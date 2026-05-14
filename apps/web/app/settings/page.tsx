@@ -156,6 +156,7 @@ export default function SettingsPage() {
         operate_auto_run_enabled: form.operate_auto_run_enabled === "true",
         operate_auto_run_time_ist: form.operate_auto_run_time_ist,
         operate_auto_run_include_data_updates: form.operate_auto_run_include_data_updates === "true",
+        operate_auto_run_shadow_only: form.operate_auto_run_shadow_only === "true",
         operate_auto_eval_enabled: form.operate_auto_eval_enabled === "true",
         operate_auto_eval_frequency: form.operate_auto_eval_frequency,
         operate_auto_eval_day_of_week: Number(form.operate_auto_eval_day_of_week),
@@ -468,6 +469,10 @@ export default function SettingsPage() {
       {
         key: "operate_auto_run_include_data_updates",
         label: "Auto-run includes data updates (true/false)",
+      },
+      {
+        key: "operate_auto_run_shadow_only",
+        label: "Auto-run shadow-only paper execution (true/false)",
       },
       { key: "operate_auto_eval_enabled", label: "Auto-evaluation enabled (true/false)" },
       { key: "operate_auto_eval_frequency", label: "Auto-eval frequency (WEEKLY/DAILY)" },

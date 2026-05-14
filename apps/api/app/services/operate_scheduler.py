@@ -221,6 +221,12 @@ def run_auto_operate_once(
             settings.operate_auto_run_include_data_updates,
         )
     )
+    shadow_only = bool(
+        state_settings.get(
+            "operate_auto_run_shadow_only",
+            settings.operate_auto_run_shadow_only,
+        )
+    )
     provider_updates_enabled = bool(
         state_settings.get(
             "data_updates_provider_enabled",
@@ -414,6 +420,7 @@ def run_auto_operate_once(
                 "timeframe": timeframe,
                 "regime": regime,
                 "include_data_updates": include_data_updates,
+                "shadow_only": shadow_only,
                 "asof": now.astimezone(ZoneInfo("UTC")).isoformat(),
                 "source": "scheduler_auto_run",
             }
@@ -440,6 +447,7 @@ def run_auto_operate_once(
                     "timeframe": timeframe,
                     "policy_id": policy_id,
                     "include_data_updates": include_data_updates,
+                    "shadow_only": shadow_only,
                     "provider_updates_enabled": provider_updates_enabled,
                     "provider_timeframe_allowed": provider_timeframe_allowed,
                     "calendar_segment": segment,

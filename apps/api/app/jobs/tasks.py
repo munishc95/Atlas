@@ -955,6 +955,7 @@ def _resolve_operate_context(
         "timeframe": timeframe,
         "regime": regime,
         "policy_id": policy_id,
+        "shadow_only": bool(payload.get("shadow_only", False)),
         "state_settings": state_settings,
         "include_data_updates": include_updates,
         "asof_dt": asof_dt,
@@ -974,6 +975,7 @@ def _operate_run_result(
     timeframe = context["timeframe"]
     regime = context["regime"]
     policy_id = context["policy_id"]
+    shadow_only = bool(context.get("shadow_only", False))
     include_data_updates = context["include_data_updates"]
     asof_dt: datetime = context["asof_dt"]
     state_settings: dict[str, Any] = context["state_settings"]
@@ -1009,6 +1011,7 @@ def _operate_run_result(
         "timeframe": timeframe,
         "policy_id": policy_id,
         "regime": regime,
+        "shadow_only": shadow_only,
         "step_order": step_order,
         "provider_stage_status": ("PENDING" if provider_stage_enabled else "NOT_ENABLED"),
         "steps": [],
@@ -1270,6 +1273,7 @@ def _operate_run_result(
         "mark_prices": {},
         "timeframes": [timeframe],
         "asof": asof_dt.isoformat(),
+        "shadow_only": shadow_only,
         "provider_stage_status": summary.get("provider_stage_status"),
     }
     if isinstance(policy_id, int) and policy_id > 0:
@@ -1290,6 +1294,8 @@ def _operate_run_result(
         ),
         "selected_signals_count": int(paper_result.get("selected_signals_count", 0)),
         "generated_signals_count": int(paper_result.get("generated_signals_count", 0)),
+        "shadow_only": bool(paper_result.get("shadow_only", False)),
+        "shadow_reason": paper_result.get("shadow_reason"),
         "safe_mode": paper_result.get("safe_mode", {}),
         "confidence_gate": paper_result.get("confidence_gate", {}),
         "scan_truncated": bool(paper_result.get("scan_truncated", False)),

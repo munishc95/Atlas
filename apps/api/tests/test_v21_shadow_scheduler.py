@@ -357,6 +357,7 @@ def test_operate_scheduler_runs_once_per_trading_day_and_skips_duplicates() -> N
         assert queued_payload["bundle_id"] == int(bundle.id)
         assert queued_payload["timeframe"] == "1d"
         assert queued_payload["include_data_updates"] is True
+        assert queued_payload["shadow_only"] is True
         assert queued_payload["source"] == "scheduler_auto_run"
 
         refreshed = session.get(PaperState, 1)
@@ -446,6 +447,7 @@ def test_operate_scheduler_prefers_configured_active_bundle() -> None:
         assert payload["bundle_id"] == int(active_bundle.id)
         assert payload["timeframe"] == "1d"
         assert payload["regime"] == "TREND_UP"
+        assert payload["shadow_only"] is True
 
 
 def test_operate_scheduler_auto_eval_weekly_queues_once() -> None:

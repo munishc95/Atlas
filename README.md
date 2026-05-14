@@ -71,6 +71,10 @@ pnpm dev:stack:e2e
 
 This path does not require Redis or the Atlas worker to stay open. It uses Windows Task Scheduler
 to wake the laptop, pull free NSE bhavcopy data, then run the operate pipeline inline.
+Operate runs are shadow-only by default, so scheduled monitoring does not mutate the main paper
+account unless you pass `-OperateShadowOnly $false`.
+If the in-app worker has already marked today's auto-run, the Windows task skips the duplicate
+operate step and still leaves the data refresh logs under `data/logs/`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/register-daily-free-data-update.ps1 `
@@ -447,9 +451,13 @@ Atlas v2.1 adds operator-safe automation while keeping live paper state protecte
 
 - True `shadow_only` safe mode:
   - when data quality fails and `operate_safe_mode_action=shadow_only`, Atlas runs full candidate selection + simulator execution
+  - operators can also request it explicitly with `shadow_only=true` on `POST /api/paper/run-step` or `POST /api/operate/run`
   - writes results to `PaperRun` with `mode=SHADOW`
   - persists separate `ShadowPaperState` per `(bundle_id, policy_id)`
   - does **not** mutate live `PaperState`/positions/orders/cash
+- UI actions:
+  - Paper Trading: `Run Shadow Step`
+  - Ops: `Run Today Shadow`
 - Daily reports now carry execution context:
   - `summary.mode` (`LIVE` or `SHADOW`)
   - `summary.shadow_note` for simulated-only runs
@@ -458,7 +466,8 @@ Atlas v2.1 adds operator-safe automation while keeping live paper state protecte
   - `data_quality_stale_severity`: `WARN` or `FAIL`
   - in `live` mode, stale defaults to `FAIL` unless explicitly overridden
 - Local scheduler in worker:
-  - reads runtime settings `operate_auto_run_enabled` and `operate_auto_run_time_ist`
+  - reads runtime settings `operate_auto_run_enabled`, `operate_auto_run_time_ist`, and `operate_auto_run_shadow_only`
+  - `operate_auto_run_shadow_only=true` is the default, so scheduled monitoring runs as explicit shadow
   - triggers on trading days (IST) once per day:
     1) data quality run
     2) paper run-step

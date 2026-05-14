@@ -30,11 +30,29 @@ def _parse_args() -> argparse.Namespace:
         help="Also run provider/inbox data updates inside operate_run.",
     )
     parser.add_argument(
+        "--shadow-only",
+        action="store_true",
+        help="Run operate in shadow mode without mutating live paper cash/positions/orders.",
+    )
+    parser.add_argument(
         "--mark-auto-run-date",
         action="store_true",
         help="Set operate_last_auto_run_date after a successful operate run.",
     )
+    parser.add_argument(
+        "--skip-if-auto-run-date-marked",
+        action="store_true",
+        help="Exit successfully without running if operate_last_auto_run_date already matches --date.",
+    )
     return parser.parse_args()
+
+
+def _auto_run_date_marked(session: Session, run_date: str) -> bool:
+    state = session.get(PaperState, 1)
+    if state is None:
+        return False
+    settings = dict(state.settings_json or {})
+    return str(settings.get("operate_last_auto_run_date") or "") == str(run_date)
 
 
 def _mark_auto_run_date(session: Session, run_date: str) -> None:
@@ -58,10 +76,20 @@ def main() -> int:
         "timeframe": str(args.timeframe),
         "regime": str(args.regime),
         "include_data_updates": bool(args.include_data_updates),
+        "shadow_only": bool(args.shadow_only),
         "asof": datetime.now(timezone.utc).isoformat(),
         "source": str(args.source),
     }
     with Session(engine) as session:
+        if bool(args.skip_if_auto_run_date_marked) and _auto_run_date_marked(session, run_date):
+            print(
+                {
+                    "event": "operate_inline_skipped",
+                    "reason": "auto_run_date_already_marked",
+                    "date": run_date,
+                }
+            )
+            return 0
         job = create_job(session, "operate_run")
         job_id = str(job.id)
     print({"event": "operate_inline_started", "job_id": job_id, "payload": payload})

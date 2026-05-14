@@ -102,6 +102,7 @@ class PaperRunStepRequest(BaseModel):
     signals: list[dict[str, Any]] = Field(default_factory=list)
     mark_prices: dict[str, float] = Field(default_factory=dict)
     auto_generate_signals: bool = False
+    shadow_only: bool = False
     bundle_id: int | None = None
     dataset_id: int | None = None
     timeframes: list[str] = Field(default_factory=list)
@@ -232,6 +233,7 @@ class OperateRunRequest(BaseModel):
     timeframe: str | None = None
     regime: str | None = None
     policy_id: int | None = None
+    shadow_only: bool = False
     include_data_updates: bool | None = None
     provider_kind: str | None = None
     provider_max_symbols_per_run: int | None = None
@@ -351,6 +353,7 @@ class RuntimeSettingsRequest(BaseModel):
     operate_auto_run_enabled: bool | None = None
     operate_auto_run_time_ist: str | None = None
     operate_auto_run_include_data_updates: bool | None = None
+    operate_auto_run_shadow_only: bool | None = None
     operate_auto_eval_enabled: bool | None = None
     operate_auto_eval_frequency: str | None = None
     operate_auto_eval_day_of_week: int | None = None

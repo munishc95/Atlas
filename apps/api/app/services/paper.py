@@ -256,6 +256,7 @@ def get_or_create_paper_state(session: Session, settings: Settings) -> PaperStat
             "operate_auto_run_enabled": settings.operate_auto_run_enabled,
             "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
             "operate_auto_run_include_data_updates": settings.operate_auto_run_include_data_updates,
+            "operate_auto_run_shadow_only": settings.operate_auto_run_shadow_only,
             "operate_last_auto_run_date": None,
             "operate_auto_eval_enabled": settings.operate_auto_eval_enabled,
             "operate_auto_eval_frequency": settings.operate_auto_eval_frequency,
@@ -2508,6 +2509,7 @@ def _run_paper_step_shadow_only(
     generated_meta: SignalGenerationResult,
     generated_signals_count: int,
     signals_source: str,
+    shadow_reason: str,
     safe_mode_active: bool,
     safe_mode_action: str,
     safe_mode_reason: str | None,
@@ -2635,6 +2637,7 @@ def _run_paper_step_shadow_only(
     run_summary = {
         "execution_mode": "SHADOW",
         "shadow_only": True,
+        "shadow_reason": shadow_reason,
         "shadow_note": "Shadow-only: no live state mutation; simulated trades shown for monitoring.",
         "live_state_mutated": False,
         "policy_mode": policy.get("mode"),
@@ -2793,13 +2796,18 @@ def _run_paper_step_shadow_only(
             "selected_signals_count": executed_count,
             "generated_signals_count": generated_signals_count,
             "safe_mode_reason": safe_mode_reason,
+            "shadow_reason": shadow_reason,
         },
     )
     emit_operate_event(
         session,
-        severity="WARN",
+        severity="WARN" if shadow_reason != "requested" else "INFO",
         category="EXECUTION",
-        message="safe_mode_shadow_run_completed",
+        message=(
+            "requested_shadow_run_completed"
+            if shadow_reason == "requested"
+            else "safe_mode_shadow_run_completed"
+        ),
         details={
             "paper_run_id": run_row.id,
             "bundle_id": resolved_bundle_id,
@@ -2807,6 +2815,7 @@ def _run_paper_step_shadow_only(
             "selected_signals_count": executed_count,
             "generated_signals_count": generated_signals_count,
             "safe_mode_reason": safe_mode_reason,
+            "shadow_reason": shadow_reason,
         },
         correlation_id=str(run_row.id),
     )
@@ -2977,6 +2986,8 @@ def _run_paper_step_shadow_only(
             "seed": sim_execution.metadata.get("seed"),
             "paper_engine": "simulator_shadow",
             "execution_mode": "SHADOW",
+            "shadow_only": True,
+            "shadow_reason": shadow_reason,
             "live_state_mutated": not live_state_unchanged,
             "shadow_note": "Shadow-only: no live state mutation; simulated trades shown for monitoring.",
             "result_digest": run_summary.get("result_digest"),
@@ -3009,6 +3020,7 @@ def run_paper_step(
     state = get_or_create_paper_state(session, settings)
     regime = str(payload.get("regime", "TREND_UP"))
     state_settings = state.settings_json or {}
+    requested_shadow_only = bool(payload.get("shadow_only", False))
     base_risk_per_trade = float(state_settings.get("risk_per_trade", settings.risk_per_trade))
     base_max_positions = int(state_settings.get("max_positions", settings.max_positions))
     asof_dt = _asof_datetime(payload)
@@ -3043,7 +3055,7 @@ def run_paper_step(
             bundle_id=None,
             policy_id=policy.get("policy_id"),
             asof_ts=asof_dt,
-            mode="LIVE",
+            mode="SHADOW" if requested_shadow_only else "LIVE",
             regime=regime,
             signals_source="provided",
             generated_signals_count=0,
@@ -3054,6 +3066,10 @@ def run_paper_step(
             scan_truncated=False,
             summary_json={
                 "status": "kill_switch_active",
+                "execution_mode": "SHADOW" if requested_shadow_only else "LIVE",
+                "shadow_only": bool(requested_shadow_only),
+                "shadow_reason": "requested" if requested_shadow_only else None,
+                "live_state_mutated": False,
                 "equity_before": equity_before,
                 "equity_after": float(state.equity),
                 "cash_before": cash_before,
@@ -3114,6 +3130,9 @@ def run_paper_step(
                 "generated_signals_count": 0,
                 "selected_signals_count": 0,
                 "paper_run_id": run_row.id,
+                "execution_mode": "SHADOW" if requested_shadow_only else "LIVE",
+                "shadow_only": bool(requested_shadow_only),
+                "live_state_mutated": False,
                 "positions": [_dump_model(p) for p in get_positions(session)],
                 "orders": [_dump_model(o) for o in get_orders(session)],
                 "effective_context": effective_context,
@@ -4232,7 +4251,16 @@ def run_paper_step(
         timeframe=primary_timeframe,
         asof_dt=asof_dt,
     )
-    if (safe_mode_active and safe_mode_action == "shadow_only") or confidence_gate_force_shadow:
+    if (
+        requested_shadow_only
+        or (safe_mode_active and safe_mode_action == "shadow_only")
+        or confidence_gate_force_shadow
+    ):
+        shadow_reason = (
+            "requested"
+            if requested_shadow_only
+            else ("confidence_gate" if confidence_gate_force_shadow else "safe_mode")
+        )
         return _run_paper_step_shadow_only(
             session=session,
             settings=settings,
@@ -4251,6 +4279,7 @@ def run_paper_step(
             generated_meta=generated_meta,
             generated_signals_count=generated_signals_count,
             signals_source=signals_source,
+            shadow_reason=shadow_reason,
             safe_mode_active=safe_mode_active,
             safe_mode_action=safe_mode_action,
             safe_mode_reason=safe_mode_reason,

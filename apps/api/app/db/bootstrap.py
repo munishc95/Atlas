@@ -77,6 +77,7 @@ def seed_defaults(session: Session, settings: Settings) -> None:
                     "operate_auto_run_enabled": settings.operate_auto_run_enabled,
                     "operate_auto_run_time_ist": settings.operate_auto_run_time_ist,
                     "operate_auto_run_include_data_updates": settings.operate_auto_run_include_data_updates,
+                    "operate_auto_run_shadow_only": settings.operate_auto_run_shadow_only,
                     "operate_last_auto_run_date": None,
                     "operate_auto_eval_enabled": settings.operate_auto_eval_enabled,
                     "operate_auto_eval_frequency": settings.operate_auto_eval_frequency,

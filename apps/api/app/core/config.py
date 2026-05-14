@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     operate_auto_run_enabled: bool = False
     operate_auto_run_time_ist: str = "15:35"
     operate_auto_run_include_data_updates: bool = True
+    operate_auto_run_shadow_only: bool = True
     operate_auto_eval_enabled: bool = True
     operate_auto_eval_frequency: str = "WEEKLY"
     operate_auto_eval_day_of_week: int = 0

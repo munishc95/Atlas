@@ -10,6 +10,7 @@ param(
     [switch]$RunOperate,
     [string]$OperateTimeframe = "1d",
     [string]$OperateRegime = "TREND_UP",
+    [int]$OperateShadowOnly = 1,
     [int]$OperateMaxRuntimeSeconds = 10800
 )
 
@@ -73,6 +74,7 @@ try {
     }
     if ($RunOperate) {
         Write-Host "Operate run: enabled ($OperateTimeframe, $OperateRegime)"
+        Write-Host "Operate shadow-only: $OperateShadowOnly"
     }
     Write-Host "Log: $LogPath"
     Invoke-AtlasPython -Arguments $ImportArgs -FailureLabel "Importer"
@@ -92,7 +94,7 @@ try {
             )
     }
     if ($RunOperate) {
-        Invoke-AtlasPython -FailureLabel "Operate inline run" -Arguments @(
+        $OperateArgs = @(
                 "scripts/run_operate_inline.py",
                 "--bundle-id", "$BundleId",
                 "--timeframe", "$OperateTimeframe",
@@ -100,8 +102,13 @@ try {
                 "--date", $EndDate,
                 "--source", "windows_daily_free_data_task",
                 "--max-runtime-seconds", "$OperateMaxRuntimeSeconds",
+                "--skip-if-auto-run-date-marked",
                 "--mark-auto-run-date"
             )
+        if ($OperateShadowOnly) {
+            $OperateArgs += "--shadow-only"
+        }
+        Invoke-AtlasPython -FailureLabel "Operate inline run" -Arguments $OperateArgs
     }
     Write-Host "Atlas free NSE daily update finished"
 }
