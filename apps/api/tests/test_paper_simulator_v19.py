@@ -11,7 +11,7 @@ import pytest
 from sqlmodel import Session, select
 
 from app.core.config import get_settings
-from app.db.models import PaperOrder, PaperPosition, PaperState
+from app.db.models import PaperOrder, PaperPosition, PaperRun, PaperState
 from app.db.session import engine
 from app.engine.simulator import SimulationConfig, simulate_portfolio_step
 from app.main import app
@@ -71,6 +71,7 @@ def _seed_symbol(symbol: str, *, instrument_kind: str = "EQUITY_CASH", lot_size:
 
 
 def _reset_paper_state(*, use_simulator_engine: bool) -> None:
+    settings = get_settings()
     with Session(engine) as session:
         state = session.get(PaperState, 1)
         if state is None:
@@ -90,6 +91,8 @@ def _reset_paper_state(*, use_simulator_engine: bool) -> None:
             "paper_mode": "strategy",
             "active_policy_id": None,
             "active_ensemble_id": None,
+            "risk_per_trade": settings.risk_per_trade,
+            "max_positions": settings.max_positions,
             "allowed_sides": ["BUY", "SELL"],
             "operate_mode": "offline",
             "data_quality_stale_severity": "WARN",
@@ -180,6 +183,73 @@ def test_paper_flag_true_returns_simulator_metadata() -> None:
         assert selected["quality_metrics"]["close_location"] == 0.78
         assert selected["signal_at"] == "2026-01-04T10:00:00+00:00"
         assert selected["fill_at"] == "2026-01-05T10:00:00+00:00"
+        assert selected["entry_price"] > 0
+        assert selected["stop_price"] > 0
+        assert selected["planned_qty"] > 0
+        assert selected["planned_risk_amount"] > 0
+        assert selected["risk_per_share"] == 5.0
+
+        with Session(engine) as session:
+            run_row = session.exec(select(PaperRun).order_by(PaperRun.id.desc())).first()
+            assert run_row is not None
+            persisted_selected = (run_row.summary_json.get("selected_signals") or [])[0]
+            assert persisted_selected["symbol"] == symbol
+            assert persisted_selected["entry_price"] == selected["entry_price"]
+            assert persisted_selected["stop_price"] == selected["stop_price"]
+            assert persisted_selected["planned_qty"] == selected["planned_qty"]
+            assert (
+                persisted_selected["planned_risk_amount"]
+                == selected["planned_risk_amount"]
+            )
+            assert run_row.summary_json.get("skipped_signals") == []
+
+
+def test_paper_run_summary_persists_skipped_signal_rows() -> None:
+    first_symbol = f"SKIPA_{uuid4().hex[:6].upper()}"
+    second_symbol = f"SKIPB_{uuid4().hex[:6].upper()}"
+    _seed_symbol(first_symbol)
+    _seed_symbol(second_symbol)
+
+    with _client_inline_jobs() as client:
+        _reset_paper_state(use_simulator_engine=True)
+        with Session(engine) as session:
+            state = session.get(PaperState, 1)
+            assert state is not None
+            state.settings_json = {**(state.settings_json or {}), "max_positions": 0}
+            session.add(state)
+            session.commit()
+
+        response = client.post(
+            "/api/paper/run-step",
+            json={
+                "regime": "TREND_UP",
+                "signals": [
+                    _manual_signal(first_symbol, side="BUY"),
+                    _manual_signal(second_symbol, side="BUY"),
+                ],
+                "mark_prices": {},
+            },
+        )
+        assert response.status_code == 200
+        job = _wait_job(client, response.json()["data"]["job_id"])
+        assert job["status"] == "SUCCEEDED"
+        result = job["result_json"] or {}
+        assert int(result.get("selected_signals_count", 0)) == 0
+        assert len(result.get("skipped_signals") or []) == 2
+
+        with Session(engine) as session:
+            run_row = session.exec(select(PaperRun).order_by(PaperRun.id.desc())).first()
+            assert run_row is not None
+            assert run_row.skipped_signals_count == 2
+            skipped = run_row.summary_json.get("skipped_signals") or []
+            assert len(skipped) == 2
+            assert {row.get("symbol") for row in skipped} == {
+                first_symbol,
+                second_symbol,
+            }
+            assert {row.get("reason") for row in skipped} == {"max_positions_reached"}
+            assert all(row.get("template") == "trend_breakout" for row in skipped)
+            assert all(row.get("instrument_kind") == "EQUITY_CASH" for row in skipped)
 
 
 def test_paper_simulator_matches_shadow_step_outputs() -> None:

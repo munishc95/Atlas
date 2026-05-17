@@ -1702,6 +1702,53 @@ def _selected_signal_summary(item: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _skipped_signal_summary(item: dict[str, Any]) -> dict[str, Any]:
+    summary = _selected_signal_summary(item)
+
+    for key in (
+        "reason",
+        "sector",
+        "policy_mode",
+        "policy_name",
+        "message",
+        "position_size_status",
+    ):
+        value = item.get(key)
+        if value is not None:
+            summary[key] = str(value)
+
+    for key in ("policy_id",):
+        value = item.get(key)
+        if isinstance(value, (int, float)):
+            summary[key] = int(value)
+
+    for key in (
+        "confidence_risk_scale",
+        "correlation",
+        "threshold",
+        "projected_notional",
+        "projected_gross_notional",
+        "cap_notional",
+        "member_required_risk",
+        "member_budget_remaining",
+    ):
+        number = _json_float(item.get(key))
+        if number is not None:
+            summary[key] = number
+
+    for key in ("data_quality_issue_codes", "quality_flags"):
+        value = item.get(key)
+        if isinstance(value, list):
+            summary[key] = [str(entry) for entry in value[:10]]
+
+    for key in ("details", "quality_metrics", "data_quality_issues"):
+        value = item.get(key)
+        if isinstance(value, (dict, list)):
+            summary[key] = jsonable_encoder(value)
+
+    return summary
+
+
 def _positions_notional(positions: list[PaperPosition]) -> float:
     total = 0.0
     for position in positions:
@@ -2107,6 +2154,7 @@ def _run_paper_step_with_simulator_engine(
         "closed_position_symbols": closed_position_symbols,
         "new_order_ids": new_order_ids,
         "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
+        "skipped_signals": [_skipped_signal_summary(item) for item in skipped_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(
@@ -2693,6 +2741,7 @@ def _run_paper_step_shadow_only(
         "positions_closed": max(0, len(shadow_positions_before) - len(shadow_positions_after)),
         "new_order_ids": [],
         "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
+        "skipped_signals": [_skipped_signal_summary(item) for item in skipped_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(
@@ -4205,6 +4254,10 @@ def run_paper_step(
             )
             continue
 
+        signal["symbol"] = symbol
+        signal["underlying_symbol"] = underlying_symbol
+        signal["side"] = side
+        signal["template"] = template
         signal["instrument_kind"] = instrument_kind
         signal["instrument_choice_reason"] = instrument_choice_reason
         signal["sector"] = sector
@@ -4585,11 +4638,25 @@ def run_paper_step(
                 **dict(signal),
                 "symbol": symbol,
                 "underlying_symbol": underlying_symbol,
+                "side": side,
+                "template": template,
                 "instrument_kind": instrument_kind,
+                "lot_size": lot_size,
                 "qty": qty,
                 "qty_lots": qty_lots,
+                "planned_qty": qty,
+                "planned_qty_lots": qty_lots,
                 "fill_price": fill_price,
+                "entry_price": fill_price,
+                "stop_price": stop_price,
+                "stop_distance": stop_distance,
+                "target_price": target_price,
+                "risk_per_share": stop_distance,
+                "planned_position_value": float(notional),
+                "planned_risk_amount": float(qty * stop_distance),
                 "entry_cost": entry_cost,
+                "margin_reserved": margin_required,
+                "must_exit_by_eod": must_exit_by_eod,
             }
         )
         if must_exit_by_eod:
@@ -4796,6 +4863,7 @@ def run_paper_step(
         "closed_position_symbols": closed_position_symbols,
         "new_order_ids": new_order_ids,
         "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
+        "skipped_signals": [_skipped_signal_summary(item) for item in skipped_signals],
         "selected_reason_histogram": selected_reason_histogram,
         "skipped_reason_histogram": skipped_reason_histogram,
         "risk_scale": float(risk_overlay.get("risk_scale", 1.0)),
