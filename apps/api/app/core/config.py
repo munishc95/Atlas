@@ -147,6 +147,11 @@ class Settings(BaseSettings):
     autopilot_max_symbols_scan: int = 500
     autopilot_max_runtime_seconds: int = 300
     reports_auto_generate_daily: bool = False
+    telegram_enabled: bool = False
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_send_reports: bool = False
+    telegram_timeout_seconds: float = 10.0
     health_window_days_short: int = 20
     health_window_days_long: int = 60
     drift_maxdd_multiplier: float = 1.25

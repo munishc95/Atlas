@@ -64,6 +64,7 @@ from app.schemas.api import (
     ProviderUpdatesRunRequest,
     DailyReportGenerateRequest,
     MonthlyReportGenerateRequest,
+    TelegramTestMessageRequest,
     MembershipHistoryImportRequest,
     OperateRunRequest,
     PaperSignalsPreviewRequest,
@@ -255,6 +256,12 @@ from app.services.reports import (
     list_monthly_reports,
     render_daily_report_pdf,
     render_monthly_report_pdf,
+)
+from app.services.telegram import (
+    send_daily_report_to_telegram,
+    send_monthly_report_to_telegram,
+    send_telegram_message,
+    telegram_status_payload,
 )
 from app.services.research import (
     create_policy_from_research_run,
@@ -3226,6 +3233,27 @@ def replay_run_export_json(
     return _data(row.summary_json if isinstance(row.summary_json, dict) else {})
 
 
+@router.get("/notifications/telegram/status")
+def get_telegram_status(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    return _data(telegram_status_payload(settings))
+
+
+@router.post("/notifications/telegram/test")
+def send_telegram_test_message(
+    payload: TelegramTestMessageRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    message = (
+        payload.message.strip()
+        if isinstance(payload.message, str) and payload.message.strip()
+        else (
+            "Atlas Telegram test message.\n"
+            "Research + paper trading only. Not financial advice."
+        )
+    )
+    return _data(send_telegram_message(settings, message))
+
+
 @router.post("/reports/daily/generate")
 def generate_daily_report_job(
     payload: DailyReportGenerateRequest,
@@ -3365,6 +3393,16 @@ def export_daily_report_pdf(report_id: int, session: Session = Depends(get_sessi
     )
 
 
+@router.post("/reports/daily/{report_id}/send-telegram")
+def send_daily_report_telegram(
+    report_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = get_daily_report(session, report_id)
+    return _data(send_daily_report_to_telegram(settings, row))
+
+
 @router.post("/reports/monthly/generate")
 def generate_monthly_report_job(
     payload: MonthlyReportGenerateRequest,
@@ -3428,6 +3466,16 @@ def export_monthly_report_pdf(report_id: int, session: Session = Depends(get_ses
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="monthly_report_{report_id}.pdf"'},
     )
+
+
+@router.post("/reports/monthly/{report_id}/send-telegram")
+def send_monthly_report_telegram(
+    report_id: int,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    row = get_monthly_report(session, report_id)
+    return _data(send_monthly_report_to_telegram(settings, row))
 
 
 @router.get("/settings")

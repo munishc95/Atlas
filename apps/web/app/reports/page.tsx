@@ -38,6 +38,11 @@ export default function ReportsPage() {
         })
       ).data,
   });
+  const telegramStatusQuery = useQuery({
+    queryKey: qk.telegramStatus,
+    queryFn: async () => (await atlasApi.telegramStatus()).data,
+  });
+  const telegramReady = Boolean(telegramStatusQuery.data?.ready);
 
   const generateMutation = useMutation({
     mutationFn: async () => (await atlasApi.generateDailyReport({ date: dateFilter || undefined })).data,
@@ -58,6 +63,45 @@ export default function ReportsPage() {
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not queue monthly report generation");
+    },
+  });
+  const telegramTestMutation = useMutation({
+    mutationFn: async () => (await atlasApi.telegramTest()).data,
+    onSuccess: (payload) => {
+      if (payload.status === "SENT") {
+        toast.success("Telegram test sent");
+      } else {
+        toast.error(payload.error?.message || "Telegram test was not sent");
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not send Telegram test");
+    },
+  });
+  const sendDailyTelegramMutation = useMutation({
+    mutationFn: async (reportId: number) => (await atlasApi.sendDailyReportTelegram(reportId)).data,
+    onSuccess: (payload) => {
+      if (payload.status === "SENT") {
+        toast.success("Daily report sent to Telegram");
+      } else {
+        toast.error(payload.error?.message || "Daily report was not sent");
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not send daily report to Telegram");
+    },
+  });
+  const sendMonthlyTelegramMutation = useMutation({
+    mutationFn: async (reportId: number) => (await atlasApi.sendMonthlyReportTelegram(reportId)).data,
+    onSuccess: (payload) => {
+      if (payload.status === "SENT") {
+        toast.success("Monthly report sent to Telegram");
+      } else {
+        toast.error(payload.error?.message || "Monthly report was not sent");
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not send monthly report to Telegram");
     },
   });
 
@@ -147,6 +191,34 @@ export default function ReportsPage() {
             </button>
           </div>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="rounded-full border border-border px-2 py-1">
+            Telegram:{" "}
+            {telegramStatusQuery.isLoading
+              ? "Checking"
+              : telegramReady
+                ? "Ready"
+                : "Not ready"}
+          </span>
+          {telegramStatusQuery.data?.chat_id_hint ? (
+            <span className="rounded-full border border-border px-2 py-1">
+              Chat {telegramStatusQuery.data.chat_id_hint}
+            </span>
+          ) : null}
+          {telegramStatusQuery.isError ? (
+            <span className="rounded-full border border-warning/30 px-2 py-1 text-warning">
+              Status unavailable
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="focus-ring rounded-md border border-border px-2 py-1"
+            onClick={() => telegramTestMutation.mutate()}
+            disabled={!telegramReady || telegramTestMutation.isPending}
+          >
+            {telegramTestMutation.isPending ? "Sending..." : "Send Test"}
+          </button>
+        </div>
       </section>
 
       <section className="card p-4">
@@ -186,13 +258,23 @@ export default function ReportsPage() {
                       <td className="px-3 py-2">{report.policy_id ?? "-"}</td>
                       <td className="px-3 py-2">{String(summary.net_pnl ?? "-")}</td>
                       <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
-                          onClick={() => setSelectedReportId(report.id)}
-                        >
-                          View
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                            onClick={() => setSelectedReportId(report.id)}
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                            onClick={() => sendDailyTelegramMutation.mutate(report.id)}
+                            disabled={!telegramReady || sendDailyTelegramMutation.isPending}
+                          >
+                            Telegram
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -253,6 +335,14 @@ export default function ReportsPage() {
                           >
                             PDF
                           </a>
+                          <button
+                            type="button"
+                            className="focus-ring rounded-md border border-border px-2 py-1 text-xs"
+                            onClick={() => sendMonthlyTelegramMutation.mutate(report.id)}
+                            disabled={!telegramReady || sendMonthlyTelegramMutation.isPending}
+                          >
+                            Telegram
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -363,6 +453,14 @@ export default function ReportsPage() {
               >
                 Export PDF
               </a>
+              <button
+                type="button"
+                className="focus-ring rounded-xl border border-border px-3 py-1.5 text-xs text-muted"
+                onClick={() => sendDailyTelegramMutation.mutate(selectedReport.id)}
+                disabled={!telegramReady || sendDailyTelegramMutation.isPending}
+              >
+                Send Telegram
+              </button>
             </div>
           </div>
         )}

@@ -384,6 +384,29 @@ export type ApiMonthlyReport = {
   created_at: string;
 };
 
+export type ApiTelegramStatus = {
+  enabled: boolean;
+  configured: boolean;
+  ready: boolean;
+  send_reports: boolean;
+  bot_token_configured: boolean;
+  chat_id_configured: boolean;
+  chat_id_hint?: string | null;
+  missing: string[];
+};
+
+export type ApiTelegramSendResult = {
+  status: "SENT" | "FAILED" | "SKIPPED" | string;
+  message_id?: number | null;
+  chat_id_hint?: string | null;
+  reason?: string;
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+};
+
 export type ApiPolicyEvaluation = {
   id: number;
   created_at: string;

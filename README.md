@@ -84,6 +84,29 @@ powershell -ExecutionPolicy Bypass -File scripts/register-daily-free-data-update
 The task writes logs under `data/logs/`. Keep Windows wake timers enabled and keep the laptop
 plugged in when possible.
 
+### Optional: Telegram report delivery
+
+Atlas can send daily/monthly report digests to a Telegram chat. Delivery is opt-in and uses local
+environment variables only.
+
+1. In Telegram, open `@BotFather`, run `/newbot`, and copy the bot token.
+2. Start a chat with the new bot and send any message to it.
+3. Get your chat ID by opening `https://api.telegram.org/bot<token>/getUpdates` in a browser and
+   reading `message.chat.id` from the JSON response.
+4. Add these values to your local `.env`:
+
+```env
+ATLAS_TELEGRAM_ENABLED=true
+ATLAS_TELEGRAM_BOT_TOKEN=123456:replace-with-your-token
+ATLAS_TELEGRAM_CHAT_ID=123456789
+ATLAS_TELEGRAM_SEND_REPORTS=false
+```
+
+Restart the API after changing `.env`. Use the `Reports` page `Send Test` button to verify setup,
+then send individual daily/monthly reports from the report table. Set
+`ATLAS_TELEGRAM_SEND_REPORTS=true` only when you want report jobs and operate runs to auto-send
+report digests.
+
 ## Job system
 
 Long-running APIs enqueue RQ jobs and return immediately with `job_id`:

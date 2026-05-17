@@ -36,6 +36,8 @@ import type {
   ApiMappingImportRun,
   ApiPolicySwitchEvent,
   ApiMonthlyReport,
+  ApiTelegramSendResult,
+  ApiTelegramStatus,
   ApiUpstoxMappingStatus,
   ApiUpstoxAuthUrl,
   ApiUpstoxNotifierEvent,
@@ -792,6 +794,22 @@ export const atlasApi = {
   monthlyReportById: (id: number) => apiFetch<ApiMonthlyReport>(`/api/reports/monthly/${id}`),
   monthlyReportExportJsonUrl: (id: number) => buildApiUrl(`/api/reports/monthly/${id}/export.json`),
   monthlyReportExportPdfUrl: (id: number) => buildApiUrl(`/api/reports/monthly/${id}/export.pdf`),
+  telegramStatus: () => apiFetch<ApiTelegramStatus>("/api/notifications/telegram/status"),
+  telegramTest: (payload?: { message?: string }) =>
+    apiFetch<ApiTelegramSendResult>("/api/notifications/telegram/test", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  sendDailyReportTelegram: (id: number) =>
+    apiFetch<ApiTelegramSendResult>(`/api/reports/daily/${id}/send-telegram`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  sendMonthlyReportTelegram: (id: number) =>
+    apiFetch<ApiTelegramSendResult>(`/api/reports/monthly/${id}/send-telegram`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
 
   runEvaluation: (payload: {
     bundle_id: number;

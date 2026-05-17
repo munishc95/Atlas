@@ -155,6 +155,7 @@ export const qk = {
   monthlyReports: (month?: string, bundleId?: number | null, policyId?: number | null) =>
     ["monthlyReports", month ?? "latest", bundleId ?? "all", policyId ?? "all"] as const,
   monthlyReport: (id: number | null) => ["monthlyReport", id] as const,
+  telegramStatus: ["telegramStatus"] as const,
   evaluations: (page: number, pageSize: number) => ["evaluations", page, pageSize] as const,
   evaluation: (id: number | null) => ["evaluation", id] as const,
   evaluationDetails: (id: number | null) => ["evaluationDetails", id] as const,

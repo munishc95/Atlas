@@ -36,6 +36,10 @@ from app.services.paper import run_paper_step
 from app.services.replay import execute_replay_run
 from app.services.reports import generate_daily_report, generate_monthly_report
 from app.services.research import execute_research_run
+from app.services.telegram import (
+    maybe_send_daily_report_to_telegram,
+    maybe_send_monthly_report_to_telegram,
+)
 from app.services.train_dataset import (
     build_train_dataset,
     serialize_train_dataset_run,
@@ -1439,6 +1443,14 @@ def _operate_run_result(
         "id": int(report_row.id) if report_row.id is not None else None,
         "date": report_row.date.isoformat(),
     }
+    telegram_payload = maybe_send_daily_report_to_telegram(settings, report_row)
+    if telegram_payload.get("status") != "SKIPPED":
+        report_payload["telegram"] = telegram_payload
+        append_job_log(
+            session,
+            job_id,
+            f"Operate run: Telegram report delivery {telegram_payload.get('status')}",
+        )
     summary["daily_report"] = report_payload
     report_payload["duration_seconds"] = round(time.perf_counter() - step_started, 3)
     summary["steps"].append({"name": "daily_report", **report_payload})
@@ -1717,6 +1729,11 @@ def _daily_report_result(
         policy_id=payload.get("policy_id"),
         overwrite=True,
     )
+    telegram_payload = maybe_send_daily_report_to_telegram(
+        settings,
+        row,
+        force=bool(payload.get("send_telegram", False)),
+    )
     return {
         "id": int(row.id) if row.id is not None else None,
         "date": row.date.isoformat(),
@@ -1724,6 +1741,7 @@ def _daily_report_result(
         "policy_id": row.policy_id,
         "content_json": row.content_json,
         "created_at": row.created_at.isoformat(),
+        "telegram": telegram_payload,
     }
 
 
@@ -1741,6 +1759,11 @@ def _monthly_report_result(
         policy_id=payload.get("policy_id"),
         overwrite=True,
     )
+    telegram_payload = maybe_send_monthly_report_to_telegram(
+        settings,
+        row,
+        force=bool(payload.get("send_telegram", False)),
+    )
     return {
         "id": int(row.id) if row.id is not None else None,
         "month": row.month,
@@ -1748,6 +1771,7 @@ def _monthly_report_result(
         "policy_id": row.policy_id,
         "content_json": row.content_json,
         "created_at": row.created_at.isoformat(),
+        "telegram": telegram_payload,
     }
 
 

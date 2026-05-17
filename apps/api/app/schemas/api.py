@@ -151,6 +151,7 @@ class DailyReportGenerateRequest(BaseModel):
     date: str | None = None
     bundle_id: int | None = None
     policy_id: int | None = None
+    send_telegram: bool = False
 
 
 class DataQualityRunRequest(BaseModel):
@@ -263,6 +264,11 @@ class MonthlyReportGenerateRequest(BaseModel):
     month: str | None = None  # YYYY-MM
     bundle_id: int | None = None
     policy_id: int | None = None
+    send_telegram: bool = False
+
+
+class TelegramTestMessageRequest(BaseModel):
+    message: str | None = None
 
 
 class PolicyEvaluationRunRequest(BaseModel):
