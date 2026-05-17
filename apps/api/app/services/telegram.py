@@ -6,7 +6,7 @@ from urllib import error, request
 
 from app.core.config import Settings
 from app.core.exceptions import APIError
-from app.db.models import DailyReport, MonthlyReport
+from app.db.models import DailyReport, MonthlyReport, PaperRun
 
 DISCLAIMER = "Research + paper trading only. Not financial advice."
 MAX_TELEGRAM_TEXT_CHARS = 3900
@@ -38,6 +38,10 @@ def _format_scale(value: Any) -> str:
     return f"{_safe_float(value, 1.0) * 100:.1f}%"
 
 
+def _format_number(value: Any, *, digits: int = 2) -> str:
+    return f"{_safe_float(value):,.{digits}f}"
+
+
 def _mask_secret(value: str | None) -> str | None:
     if not value:
         return None
@@ -66,6 +70,18 @@ def _add_histogram_lines(lines: list[str], title: str, source: Any) -> None:
     lines.append(f"{title}:")
     for reason, count in items:
         lines.append(f"- {reason}: {count}")
+
+
+def _first_present(source: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _line_parts(*parts: str | None) -> str:
+    return " | ".join(str(part) for part in parts if part)
 
 
 def _truncate_message(text: str) -> str:
@@ -324,12 +340,104 @@ def format_monthly_report_message(report: MonthlyReport) -> str:
     return _truncate_message("\n".join(lines))
 
 
+def _format_signal_candidate(item: dict[str, Any], *, skipped: bool = False) -> str:
+    symbol = str(_first_present(item, "underlying_symbol", "symbol") or "-").upper()
+    side = str(item.get("side", "-")).upper()
+    template = str(item.get("template", "-"))
+    instrument = str(item.get("instrument_kind", "-"))
+    title = _line_parts(symbol, side, template, instrument)
+
+    entry = _first_present(item, "fill_price", "entry_price", "price")
+    stop = _first_present(item, "stop_price")
+    qty = _first_present(item, "planned_qty", "qty")
+    risk = _first_present(item, "planned_risk_amount", "risk_budget")
+    strength = _first_present(item, "signal_strength", "raw_signal_strength")
+    quality = _first_present(item, "quality_status")
+
+    details: list[str] = []
+    if entry is not None:
+        details.append(f"entry {_format_number(entry)}")
+    if stop is not None:
+        details.append(f"stop {_format_number(stop)}")
+    if qty is not None:
+        details.append(f"qty {_safe_int(qty)}")
+    if risk is not None:
+        details.append(f"risk {_format_number(risk)}")
+    if strength is not None:
+        details.append(f"strength {_format_number(strength, digits=3)}")
+    if quality is not None:
+        details.append(f"quality {quality}")
+    if skipped:
+        reason = str(item.get("reason", "unknown")).strip() or "unknown"
+        details.insert(0, f"skip {reason}")
+
+    if not details:
+        return title
+    return f"{title} - {'; '.join(details)}"
+
+
+def _signal_rows(source: Any, *, limit: int) -> list[dict[str, Any]]:
+    if not isinstance(source, list):
+        return []
+    rows = [dict(item) for item in source if isinstance(item, dict)]
+    return rows[:limit]
+
+
+def format_signal_candidates_message(paper_run: PaperRun, *, limit: int = 5) -> str:
+    summary = paper_run.summary_json if isinstance(paper_run.summary_json, dict) else {}
+    selected = _signal_rows(summary.get("selected_signals", []), limit=limit)
+    skipped = _signal_rows(summary.get("skipped_signals", []), limit=limit)
+    selected_hist = summary.get("selected_reason_histogram", {})
+    skipped_hist = summary.get("skipped_reason_histogram", {})
+
+    lines = [
+        "Atlas Signal Candidates",
+        f"Paper run: {paper_run.id or '-'} | As-of: {paper_run.asof_ts.isoformat()}",
+        f"Bundle: {paper_run.bundle_id or '-'} | Policy: {paper_run.policy_id or '-'}",
+        f"Mode: {paper_run.mode} | Regime: {paper_run.regime}",
+        (
+            f"Generated: {_safe_int(paper_run.generated_signals_count)} | "
+            f"Selected: {_safe_int(paper_run.selected_signals_count)} | "
+            f"Skipped: {_safe_int(paper_run.skipped_signals_count)}"
+        ),
+        (
+            f"Scanned: {_safe_int(paper_run.scanned_symbols)} | "
+            f"Evaluated: {_safe_int(paper_run.evaluated_candidates)}"
+        ),
+        "",
+        "Selected candidates:",
+    ]
+    if selected:
+        for idx, item in enumerate(selected, start=1):
+            lines.append(f"{idx}. {_format_signal_candidate(item)}")
+    else:
+        lines.append("none")
+
+    lines.append("")
+    lines.append("Skipped candidates:")
+    if skipped:
+        for idx, item in enumerate(skipped, start=1):
+            lines.append(f"{idx}. {_format_signal_candidate(item, skipped=True)}")
+    else:
+        lines.append("none")
+
+    lines.append("")
+    _add_histogram_lines(lines, "Top selected reasons", selected_hist)
+    _add_histogram_lines(lines, "Top skipped reasons", skipped_hist)
+    lines.extend(["", "Paper candidates only; not orders.", DISCLAIMER])
+    return _truncate_message("\n".join(lines))
+
+
 def send_daily_report_to_telegram(settings: Settings, report: DailyReport) -> dict[str, Any]:
     return send_telegram_message(settings, format_daily_report_message(report))
 
 
 def send_monthly_report_to_telegram(settings: Settings, report: MonthlyReport) -> dict[str, Any]:
     return send_telegram_message(settings, format_monthly_report_message(report))
+
+
+def send_signal_candidates_to_telegram(settings: Settings, paper_run: PaperRun) -> dict[str, Any]:
+    return send_telegram_message(settings, format_signal_candidates_message(paper_run))
 
 
 def maybe_send_daily_report_to_telegram(

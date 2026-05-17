@@ -102,10 +102,11 @@ ATLAS_TELEGRAM_CHAT_ID=123456789
 ATLAS_TELEGRAM_SEND_REPORTS=false
 ```
 
-Restart the API after changing `.env`. Use the `Reports` page `Send Test` button to verify setup,
-then send individual daily/monthly reports from the report table. Set
-`ATLAS_TELEGRAM_SEND_REPORTS=true` only when you want report jobs and operate runs to auto-send
-report digests.
+Restart the API after changing `.env`. Use the `Reports` page `Send Test` button to verify setup.
+From the same page you can send individual daily/monthly report digests or `Send Latest Signals`,
+which delivers the newest paper-run candidate plan with selected symbols, entry/stop, planned size,
+risk, and skip reasons. Set `ATLAS_TELEGRAM_SEND_REPORTS=true` only when you want report jobs and
+operate runs to auto-send operating report digests.
 
 ## Job system
 

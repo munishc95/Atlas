@@ -104,6 +104,19 @@ export default function ReportsPage() {
       toast.error(error.message || "Could not send monthly report to Telegram");
     },
   });
+  const sendLatestSignalsTelegramMutation = useMutation({
+    mutationFn: async () => (await atlasApi.sendLatestSignalReportTelegram()).data,
+    onSuccess: (payload) => {
+      if (payload.status === "SENT") {
+        toast.success("Latest signal candidates sent to Telegram");
+      } else {
+        toast.error(payload.error?.message || "Signal candidate report was not sent");
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Could not send signal candidates to Telegram");
+    },
+  });
 
   const stream = useJobStream(activeJobId);
   useEffect(() => {
@@ -217,6 +230,14 @@ export default function ReportsPage() {
             disabled={!telegramReady || telegramTestMutation.isPending}
           >
             {telegramTestMutation.isPending ? "Sending..." : "Send Test"}
+          </button>
+          <button
+            type="button"
+            className="focus-ring rounded-md border border-border px-2 py-1"
+            onClick={() => sendLatestSignalsTelegramMutation.mutate()}
+            disabled={!telegramReady || sendLatestSignalsTelegramMutation.isPending}
+          >
+            {sendLatestSignalsTelegramMutation.isPending ? "Sending..." : "Send Latest Signals"}
           </button>
         </div>
       </section>

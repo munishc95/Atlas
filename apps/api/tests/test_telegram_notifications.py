@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 from app.core.config import Settings
-from app.db.models import DailyReport, MonthlyReport
+from app.db.models import DailyReport, MonthlyReport, PaperRun
 from app.services import telegram as telegram_service
 
 
@@ -98,6 +98,59 @@ def test_monthly_report_message_contains_best_and_worst_days() -> None:
     assert "Month: 2026-05" in message
     assert "Best day: 2026-05-14 (1,400.00)" in message
     assert "Worst day: 2026-05-15 (-300.00)" in message
+
+
+def test_signal_candidates_message_contains_trade_plan_and_skip_reasons() -> None:
+    run = PaperRun(
+        id=99,
+        bundle_id=7,
+        policy_id=11,
+        asof_ts=datetime(2026, 5, 17, 10, 30, tzinfo=timezone.utc),
+        mode="LIVE",
+        regime="TREND_UP",
+        signals_source="generated",
+        generated_signals_count=4,
+        selected_signals_count=1,
+        skipped_signals_count=3,
+        scanned_symbols=50,
+        evaluated_candidates=8,
+        summary_json={
+            "selected_signals": [
+                {
+                    "symbol": "TCS",
+                    "side": "BUY",
+                    "template": "pullback_trend",
+                    "instrument_kind": "EQUITY_CASH",
+                    "entry_price": 100.0,
+                    "stop_price": 95.0,
+                    "planned_qty": 10,
+                    "planned_risk_amount": 50.0,
+                    "signal_strength": 0.82,
+                    "quality_status": "PASS",
+                }
+            ],
+            "skipped_signals": [
+                {
+                    "symbol": "RELIANCE",
+                    "side": "BUY",
+                    "template": "trend_breakout",
+                    "instrument_kind": "EQUITY_CASH",
+                    "reason": "max_positions_reached",
+                }
+            ],
+            "selected_reason_histogram": {"policy_selected": 1},
+            "skipped_reason_histogram": {"max_positions_reached": 3},
+        },
+    )
+
+    message = telegram_service.format_signal_candidates_message(run)
+
+    assert "Atlas Signal Candidates" in message
+    assert "TCS | BUY | pullback_trend | EQUITY_CASH" in message
+    assert "entry 100.00; stop 95.00; qty 10; risk 50.00" in message
+    assert "RELIANCE | BUY | trend_breakout | EQUITY_CASH" in message
+    assert "skip max_positions_reached" in message
+    assert "Paper candidates only; not orders." in message
 
 
 def test_send_telegram_message_posts_json(monkeypatch) -> None:

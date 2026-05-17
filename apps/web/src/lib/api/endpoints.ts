@@ -810,6 +810,22 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  sendLatestSignalReportTelegram: (params?: { bundle_id?: number; policy_id?: number }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (typeof params?.policy_id === "number") search.set("policy_id", String(params.policy_id));
+    return apiFetch<
+      ApiTelegramSendResult & {
+        paper_run_id?: number | null;
+        asof_ts?: string;
+        bundle_id?: number | null;
+        policy_id?: number | null;
+      }
+    >(`/api/reports/signals/latest/send-telegram${search.toString() ? `?${search.toString()}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  },
 
   runEvaluation: (payload: {
     bundle_id: number;

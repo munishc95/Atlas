@@ -18,6 +18,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import APIError
 from app.db.models import (
     Backtest,
+    PaperRun,
     PaperState,
     PolicySwitchEvent,
     Policy,
@@ -260,6 +261,7 @@ from app.services.reports import (
 from app.services.telegram import (
     send_daily_report_to_telegram,
     send_monthly_report_to_telegram,
+    send_signal_candidates_to_telegram,
     send_telegram_message,
     telegram_status_payload,
 )
@@ -3252,6 +3254,37 @@ def send_telegram_test_message(
         )
     )
     return _data(send_telegram_message(settings, message))
+
+
+@router.post("/reports/signals/latest/send-telegram")
+def send_latest_signal_candidates_telegram(
+    bundle_id: int | None = Query(default=None, ge=1),
+    policy_id: int | None = Query(default=None, ge=1),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    stmt = select(PaperRun).order_by(PaperRun.created_at.desc(), PaperRun.id.desc())
+    if bundle_id is not None:
+        stmt = stmt.where(PaperRun.bundle_id == bundle_id)
+    if policy_id is not None:
+        stmt = stmt.where(PaperRun.policy_id == policy_id)
+    row = session.exec(stmt.limit(1)).first()
+    if row is None:
+        raise APIError(
+            code="not_found",
+            message="No paper run found for signal candidate report.",
+            status_code=404,
+        )
+    result = send_signal_candidates_to_telegram(settings, row)
+    return _data(
+        {
+            **result,
+            "paper_run_id": row.id,
+            "asof_ts": row.asof_ts.isoformat(),
+            "bundle_id": row.bundle_id,
+            "policy_id": row.policy_id,
+        }
+    )
 
 
 @router.post("/reports/daily/generate")
