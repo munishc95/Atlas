@@ -120,7 +120,10 @@ def _manual_signal(symbol: str, *, side: str, instrument_kind: str = "EQUITY_CAS
         "template": "trend_breakout",
         "instrument_kind": instrument_kind,
         "price": 100.0,
+        "entry_price": 100.0,
+        "stop_price": 95.0,
         "stop_distance": 5.0,
+        "risk_per_share": 5.0,
         "signal_strength": 0.9,
         "adv": 10_000_000_000.0,
         "vol_scale": 0.01,
@@ -131,6 +134,10 @@ def _manual_signal(symbol: str, *, side: str, instrument_kind: str = "EQUITY_CAS
         "explanation": "trend_breakout BUY signal at close on 1d.",
         "signal_at": "2026-01-04T10:00:00+00:00",
         "fill_at": "2026-01-05T10:00:00+00:00",
+        "planned_qty": 1000,
+        "planned_qty_lots": 1000,
+        "planned_position_value": 100_000.0,
+        "planned_risk_amount": 5000.0,
     }
 
 
@@ -250,6 +257,10 @@ def test_paper_run_summary_persists_skipped_signal_rows() -> None:
             assert {row.get("reason") for row in skipped} == {"max_positions_reached"}
             assert all(row.get("template") == "trend_breakout" for row in skipped)
             assert all(row.get("instrument_kind") == "EQUITY_CASH" for row in skipped)
+            assert all(row.get("entry_price") == 100.0 for row in skipped)
+            assert all(row.get("stop_price") == 95.0 for row in skipped)
+            assert all(row.get("planned_qty") == 1000 for row in skipped)
+            assert all(row.get("planned_risk_amount") == 5000.0 for row in skipped)
 
 
 def test_paper_simulator_matches_shadow_step_outputs() -> None:

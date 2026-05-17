@@ -4007,6 +4007,11 @@ def run_paper_step(
         )
         requested_kind = str(signal.get("instrument_kind", "EQUITY_CASH")).upper()
         underlying_symbol = str(signal.get("underlying_symbol", symbol)).upper()
+        signal = _preview_trade_plan(
+            signal,
+            equity=float(state.equity),
+            risk_per_trade=member_required_risk,
+        )
         allowed_set: set[str] | None = None
         if isinstance(policy_allowed_instruments, dict):
             allowed_for_side = policy_allowed_instruments.get(side)
@@ -4028,6 +4033,44 @@ def run_paper_step(
             "source_policy_id": source_policy_id if source_policy_id > 0 else None,
             "source_policy_name": source_policy_name if source_policy_id > 0 else None,
         }
+        for key in (
+            "timeframe",
+            "source_mode",
+            "signal_at",
+            "fill_at",
+            "explanation",
+            "quality_status",
+            "position_size_status",
+            "lot_size",
+            "qty_lots",
+            "qty",
+            "planned_qty",
+            "planned_qty_lots",
+            "price",
+            "entry_price",
+            "fill_price",
+            "stop_price",
+            "stop_distance",
+            "target_price",
+            "target_1_price",
+            "target_2_price",
+            "risk_per_share",
+            "signal_strength",
+            "raw_signal_strength",
+            "adv",
+            "vol_scale",
+            "quality_score",
+            "risk_budget",
+            "planned_position_value",
+            "planned_risk_amount",
+            "quality_flags",
+            "quality_metrics",
+            "ranking_weights",
+            "fill_bar",
+        ):
+            value = signal.get(key)
+            if value is not None:
+                base_meta[key] = value
         if ensemble_meta is not None and source_policy_id > 0:
             if source_policy_id not in member_budget_remaining:
                 skipped_signals.append({**base_meta, "reason": "ensemble_weight_zero"})
