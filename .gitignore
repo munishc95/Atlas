@@ -3,6 +3,7 @@ node_modules/
 .pnpm-store/
 .next/
 out/
+.tools/
 
 # Python
 __pycache__/
