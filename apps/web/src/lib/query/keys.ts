@@ -43,6 +43,8 @@ export const qk = {
   operateStatus: ["operateStatus"] as const,
   operateHealth: (bundleId?: number | null, timeframe?: string | null) =>
     ["operateHealth", bundleId ?? "active", timeframe ?? "active"] as const,
+  operateReadiness: (bundleId?: number | null, timeframe?: string | null) =>
+    ["operateReadiness", bundleId ?? "active", timeframe ?? "active"] as const,
   operateEvents: (severity?: string | null, category?: string | null, limit = 20) =>
     ["operateEvents", severity ?? "all", category ?? "all", limit] as const,
   operateAutoEvalHistory: (

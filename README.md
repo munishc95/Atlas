@@ -84,6 +84,33 @@ powershell -ExecutionPolicy Bypass -File scripts/register-daily-free-data-update
 The task writes logs under `data/logs/`. Keep Windows wake timers enabled and keep the laptop
 plugged in when possible.
 
+### Optional: unattended daily free data + operate run (macOS)
+
+This is the Mac equivalent of the Windows scheduled task. It registers a user LaunchAgent that runs
+Monday-Friday at the chosen local Mac time, refreshes free NSE bhavcopy/corporate-action/event-risk
+data, then runs operate inline in shadow-only mode.
+
+By default it uses the existing local SQLite Atlas state at `apps/api/.atlas/atlas.db`. To schedule
+against Docker/Postgres instead, pass `--database-url` after you have imported or migrated the real
+universe/results into Postgres.
+
+```bash
+chmod +x scripts/daily-free-data-update-macos.sh scripts/register-daily-macos-launchd.sh
+scripts/register-daily-macos-launchd.sh --start-time "18:45"
+```
+
+Useful checks:
+
+```bash
+launchctl print "gui/$(id -u)/com.atlas.daily-paper"
+scripts/daily-free-data-update-macos.sh --no-operate
+scripts/register-daily-macos-launchd.sh --unload-only
+```
+
+Logs are written under `data/logs/`. The Mac must be awake at the scheduled time; if it is asleep,
+launchd will normally run the job after the next wake. Shadow-only means the scheduled operate step
+does not place real-money orders and does not mutate the main paper account.
+
 ### Optional: Telegram report delivery
 
 Atlas can send daily/monthly report digests to a Telegram chat. Delivery is opt-in and uses local
@@ -382,6 +409,16 @@ New frontend page:
 
 - `Ops` page (`/ops`) with current mode (`NORMAL` / `SAFE MODE`), latest quality report, recent operate events, and quick actions.
 
+### Production Paper Readiness Gate
+
+Atlas exposes an operator gate for production paper/shadow operation:
+
+- `GET /api/operate/readiness`
+- evaluates active bundle, paper policy selection, kill-switch/cooldown, safe mode, risk limits, costs/slippage, scheduled shadow-only operation, data quality, provider updates, confidence gate, recent errors, fast mode, and latest paper run
+- returns `READY`, `ATTENTION`, or `BLOCKED` for `PRODUCTION_PAPER`
+- always returns real-money status as `BLOCKED` until broker execution, reconciliation, duplicate-order protection, hard loss/exposure limits, manual confirm/emergency controls, audit review, and compliance review exist
+- Ops page shows the readiness verdict, top blockers/warnings, and quick actions for data quality and shadow operate
+
 ## Historical NSE Bhavcopy Backfill (v4.0)
 
 Atlas now supports local-first long-range 1d history backfill using a new `NSE_BHAVCOPY` provider:
@@ -493,9 +530,9 @@ Atlas v2.1 adds operator-safe automation while keeping live paper state protecte
   - reads runtime settings `operate_auto_run_enabled`, `operate_auto_run_time_ist`, and `operate_auto_run_shadow_only`
   - `operate_auto_run_shadow_only=true` is the default, so scheduled monitoring runs as explicit shadow
   - triggers on trading days (IST) once per day:
-    1) data quality run
-    2) paper run-step
-    3) daily report generation
+    1. data quality run
+    2. paper run-step
+    3. daily report generation
   - deduplicates with `operate_last_auto_run_date`
 - Ops page shows scheduler status:
   - auto-run enabled/time
@@ -971,6 +1008,7 @@ A configurable cost model is available for both backtester and paper execution:
 - `GET /api/evaluations/{id}/details`
 - `POST /api/paper/signals/preview`
 - `GET /api/operate/status`
+- `GET /api/operate/readiness`
 - `POST /api/operate/run`
 - `POST /api/operate/auto-eval/run`
 - `GET /api/operate/auto-eval/history`

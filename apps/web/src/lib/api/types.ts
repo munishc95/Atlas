@@ -1078,6 +1078,41 @@ export type ApiOperateHealth = {
   last_job_durations?: Record<string, { duration_seconds: number; status: string; ts: string }>;
 };
 
+export type ApiOperateReadinessCheck = {
+  id: string;
+  category: "CONFIG" | "SAFETY" | "AUTOMATION" | "DATA" | "SYSTEM" | string;
+  label: string;
+  status: "PASS" | "WARN" | "FAIL";
+  detail: string;
+  action?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ApiOperateReadiness = {
+  target: "PRODUCTION_PAPER" | string;
+  verdict: "READY" | "ATTENTION" | "BLOCKED";
+  can_run_production_paper: boolean;
+  updated_at: string;
+  active_bundle_id?: number | null;
+  active_timeframe?: string | null;
+  operate_mode?: string | null;
+  paper_mode?: string | null;
+  summary: {
+    pass: number;
+    warn: number;
+    fail: number;
+    blockers: string[];
+    warnings: string[];
+  };
+  checks: ApiOperateReadinessCheck[];
+  real_money: {
+    verdict: "BLOCKED" | string;
+    reason: string;
+    required_controls: string[];
+  };
+  next_actions: string[];
+};
+
 export type ApiOperateRunSummary = {
   bundle_id?: number | null;
   timeframe?: string;

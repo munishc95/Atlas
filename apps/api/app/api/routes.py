@@ -222,6 +222,7 @@ from app.services.operate_events import (
     get_operate_health_summary,
     list_operate_events,
 )
+from app.services.operate_readiness import evaluate_operate_readiness
 from app.services.operate_context import latest_paper_run_for_bundle, positive_int
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.effective_context import build_effective_trading_context
@@ -2984,6 +2985,23 @@ def operate_health(
 ) -> dict[str, Any]:
     return _data(
         get_operate_health_summary(
+            session,
+            settings,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+        )
+    )
+
+
+@router.get("/operate/readiness")
+def operate_readiness(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(
+        evaluate_operate_readiness(
             session,
             settings,
             bundle_id=bundle_id,
