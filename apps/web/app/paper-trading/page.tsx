@@ -29,10 +29,18 @@ function isTypingElement(target: EventTarget | null): boolean {
 }
 
 function qualityBadgeClass(status: string | undefined): string {
-  const token = String(status ?? "PASS").toUpperCase();
+  const token = String(status ?? "UNKNOWN").toUpperCase();
   if (token === "FAIL") return "bg-danger/15 text-danger";
   if (token === "WARN") return "bg-warning/15 text-warning";
-  return "bg-success/15 text-success";
+  if (token === "PASS") return "bg-success/15 text-success";
+  return "bg-muted/15 text-muted";
+}
+
+function displayExecutionMode(value: unknown): string {
+  const token = String(value ?? "UNKNOWN")
+    .trim()
+    .toUpperCase();
+  return token === "LIVE" ? "PAPER" : token;
 }
 
 function eventRiskBadgeClass(status: string | undefined): string {
@@ -102,7 +110,9 @@ function sourceLabel(source: string | undefined): string {
 }
 
 function eventTypeLabel(eventType: string | undefined): string {
-  return String(eventType ?? "EVENT").replaceAll("_", " ").toLowerCase();
+  return String(eventType ?? "EVENT")
+    .replaceAll("_", " ")
+    .toLowerCase();
 }
 
 function eventRiskStatusFromSeverity(severity: string | undefined): "PASS" | "WARN" | "FAIL" {
@@ -217,7 +227,7 @@ export default function PaperTradingPage() {
   const [reportJobId, setReportJobId] = useState<string | null>(null);
   const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
-  const [autopilotEnabled, setAutopilotEnabled] = useState(true);
+  const [autopilotEnabled, setAutopilotEnabled] = useState(false);
   const [bundleId, setBundleId] = useState<number | null>(null);
   const [preview, setPreview] = useState<ApiPaperSignalPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -269,15 +279,66 @@ export default function PaperTradingPage() {
   });
 
   const state = paperStateQuery.data?.state;
-  const paperMode = String(state?.settings_json?.paper_mode ?? "strategy");
+  const paperMode = String(state?.settings_json?.paper_mode ?? "unknown").toLowerCase();
   const allowedSides = Array.isArray(state?.settings_json?.allowed_sides)
     ? (state?.settings_json?.allowed_sides as string[]).join(" / ")
-    : "BUY";
-  const squareoffCutoff = String(state?.settings_json?.paper_short_squareoff_time ?? "15:20");
+    : "UNKNOWN";
+  const squareoffCutoff = String(state?.settings_json?.paper_short_squareoff_time ?? "-");
+  const currentRegime = regimeQuery.data?.regime?.trim() || null;
+  const selectedBundleAvailable = Boolean(
+    bundleId !== null && (bundlesQuery.data ?? []).some((bundle) => bundle.id === bundleId),
+  );
+  const hasPromotedStrategy = (strategiesQuery.data ?? []).some((item) => Boolean(item.enabled));
+
+  const tradingContextBlockReason =
+    !paperStateQuery.isSuccess || !state
+      ? paperStateQuery.isError
+        ? "Paper account state is unavailable. Retry the failed request before running a step."
+        : "Paper account state is still loading."
+      : !regimeQuery.isSuccess || !currentRegime
+        ? regimeQuery.isError
+          ? "Current regime is unavailable. Retry the failed request before running a step."
+          : "Current regime is still loading."
+        : !bundlesQuery.isSuccess
+          ? bundlesQuery.isError
+            ? "Universe bundles are unavailable. Retry the failed request before running a step."
+            : "Universe bundles are still loading."
+          : bundleId === null
+            ? "Select a universe bundle before running a step."
+            : !selectedBundleAvailable
+              ? "The selected universe bundle is unavailable. Select a valid bundle."
+              : null;
+  const generationBlockReason =
+    tradingContextBlockReason ??
+    (paperMode === "strategy"
+      ? !strategiesQuery.isSuccess
+        ? strategiesQuery.isError
+          ? "Promoted strategies are unavailable. Retry before generating signals."
+          : "Promoted strategies are still loading."
+        : !hasPromotedStrategy
+          ? "No promoted strategy can generate signals. Promote one from Walk-Forward first."
+          : null
+      : paperMode === "policy"
+        ? null
+        : "Paper execution mode is unavailable. Reload the paper account state.");
+  const previewMatchesContext = Boolean(
+    preview && preview.bundle_id === bundleId && preview.regime === currentRegime,
+  );
+  const runStepBlockReason =
+    generationBlockReason ??
+    (!autopilotEnabled
+      ? "Manual execution is blocked because this screen has no validated provided signals. Turn on Autopilot and preview generated signals first."
+      : !previewMatchesContext
+        ? "Preview generated signals for the current regime and universe before running a step."
+        : null);
 
   useEffect(() => {
     setAutopilotEnabled(paperMode === "policy");
   }, [paperMode]);
+
+  useEffect(() => {
+    setPreview(null);
+  }, [bundleId, currentRegime]);
 
   const runStepMutation = useMutation({
     mutationFn: async (payload: Record<string, unknown>) =>
@@ -305,10 +366,16 @@ export default function PaperTradingPage() {
   });
 
   const captureJournalMutation = useMutation({
-    mutationFn: async () =>
-      (
+    mutationFn: async () => {
+      if (generationBlockReason || !currentRegime || bundleId === null) {
+        throw new Error(
+          generationBlockReason ??
+            "Trading context is unavailable. Retry before capturing signals.",
+        );
+      }
+      return (
         await atlasApi.captureForwardJournal({
-          regime: regimeQuery.data?.regime ?? "TREND_UP",
+          regime: currentRegime,
           bundle_id: bundleId ?? undefined,
           timeframe: "1d",
           symbol_scope: "all",
@@ -316,7 +383,8 @@ export default function PaperTradingPage() {
           max_runtime_seconds: 60,
           max_entry_extension_pct: 1,
         })
-      ).data,
+      ).data;
+    },
     onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: qk.forwardJournal(bundleId, "1d", null, 1, 50) });
       toast.success(`Captured ${payload.captured_count} signals`);
@@ -395,11 +463,19 @@ export default function PaperTradingPage() {
     activePolicyId === null
       ? null
       : ((policiesQuery.data ?? []).find((policy) => policy.id === activePolicyId) ?? null);
-  const healthStatus = operateQuery.data?.health_short?.status ?? "HEALTHY";
+  const healthStatus = String(operateQuery.data?.health_short?.status ?? "UNKNOWN").toUpperCase();
   const healthReasons = operateQuery.data?.health_short?.reasons_json ?? [];
-  const operateMode = String(operateQuery.data?.mode ?? "NORMAL");
+  const operateMode = String(operateQuery.data?.mode ?? "UNKNOWN").toUpperCase();
   const safeModeAction = String(operateQuery.data?.safe_mode_action ?? "none");
   const latestQuality = operateQuery.data?.latest_data_quality;
+  const healthTone =
+    healthStatus === "HEALTHY"
+      ? "border-success/30 bg-success/10 text-success"
+      : healthStatus === "WARNING"
+        ? "border-warning/30 bg-warning/10 text-warning"
+        : healthStatus === "DEGRADED" || healthStatus === "RETIRED"
+          ? "border-danger/30 bg-danger/10 text-danger"
+          : "border-border bg-surface text-muted";
 
   useEffect(() => {
     if (bundleId !== null) {
@@ -419,41 +495,45 @@ export default function PaperTradingPage() {
     }
   }, [activePolicy, bundleId, bundlesQuery.data]);
 
-  const runStep = useCallback((shadowOnly = false) => {
-    const regime = regimeQuery.data?.regime ?? "TREND_UP";
-    const useAutopilot = autopilotEnabled || paperMode === "policy";
-    const fallbackSignals = useAutopilot
-      ? []
-      : [
-          {
-            symbol: "NIFTY500",
-            side: "BUY",
-            template: "trend_breakout",
-            price: 1800,
-            stop_distance: 40,
-            target_price: 1880,
-            signal_strength: 0.5,
-            adv: 1_000_000_000,
-            vol_scale: 0.01,
-          },
-        ];
-    runStepMutation.mutate({
-      regime,
-      auto_generate_signals: useAutopilot,
-      bundle_id: bundleId ?? undefined,
-      signals: fallbackSignals,
-      mark_prices: {},
-      shadow_only: shadowOnly,
-    });
-  }, [autopilotEnabled, bundleId, paperMode, regimeQuery.data?.regime, runStepMutation]);
+  const runStep = useCallback(
+    (shadowOnly = false) => {
+      if (runStepMutation.isPending) {
+        return;
+      }
+      if (runStepBlockReason || !currentRegime || bundleId === null) {
+        toast.error(
+          runStepBlockReason ?? "Trading context is unavailable. Retry before running a step.",
+        );
+        return;
+      }
+      runStepMutation.mutate({
+        regime: currentRegime,
+        auto_generate_signals: true,
+        bundle_id: bundleId,
+        signals: [],
+        mark_prices: {},
+        shadow_only: shadowOnly,
+      });
+    },
+    [bundleId, currentRegime, runStepBlockReason, runStepMutation],
+  );
 
   const previewSignals = useCallback(() => {
+    if (previewMutation.isPending) {
+      return;
+    }
+    if (generationBlockReason || !currentRegime || bundleId === null) {
+      toast.error(
+        generationBlockReason ?? "Trading context is unavailable. Retry before previewing signals.",
+      );
+      return;
+    }
     previewMutation.mutate({
-      regime: regimeQuery.data?.regime ?? "TREND_UP",
-      bundle_id: bundleId ?? undefined,
+      regime: currentRegime,
+      bundle_id: bundleId,
       max_symbols_scan: 50,
     });
-  }, [bundleId, previewMutation, regimeQuery.data?.regime]);
+  }, [bundleId, currentRegime, generationBlockReason, previewMutation]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -541,7 +621,12 @@ export default function PaperTradingPage() {
           </p>
         </div>
         <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
-          Execution mode: {paperMode === "policy" ? "Policy mode" : "Single strategy mode"}
+          Execution mode:{" "}
+          {paperMode === "policy"
+            ? "Policy mode"
+            : paperMode === "strategy"
+              ? "Single strategy mode"
+              : "UNKNOWN"}
           {activePolicy ? ` (${activePolicy.name})` : ""}
         </p>
         {effectiveContext ? (
@@ -553,10 +638,13 @@ export default function PaperTradingPage() {
               as-of {effectiveContext.data_asof_ist ?? "-"}
             </span>
             <span className="rounded-full border border-border px-2 py-1 text-muted">
-              {String(effectiveContext.confidence_gate_decision ?? "PASS")}
+              {String(effectiveContext.confidence_gate_decision ?? "UNKNOWN")}
             </span>
             <span className="rounded-full border border-border px-2 py-1 text-muted">
-              scale {(Number(effectiveContext.confidence_risk_scale ?? 1) * 100).toFixed(1)}%
+              scale{" "}
+              {effectiveContext.confidence_risk_scale == null
+                ? "-"
+                : `${(Number(effectiveContext.confidence_risk_scale) * 100).toFixed(1)}%`}
             </span>
             <button
               type="button"
@@ -571,15 +659,7 @@ export default function PaperTradingPage() {
           Shorts: Allowed sides {allowedSides}. Short mode: Cash intraday (auto square-off{" "}
           {squareoffCutoff}) + Futures swing (if available).
         </p>
-        <p
-          className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
-            healthStatus === "DEGRADED"
-              ? "border-danger/30 bg-danger/10 text-danger"
-              : healthStatus === "WARNING"
-                ? "border-warning/30 bg-warning/10 text-warning"
-                : "border-success/30 bg-success/10 text-success"
-          }`}
-        >
+        <p className={`mt-2 rounded-xl border px-3 py-2 text-xs ${healthTone}`}>
           Policy health: {healthStatus}
           {healthReasons.length > 0 ? ` - ${healthReasons[0]}` : ""}
         </p>
@@ -643,7 +723,7 @@ export default function PaperTradingPage() {
             type="button"
             onClick={previewSignals}
             className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
-            disabled={previewMutation.isPending}
+            disabled={previewMutation.isPending || Boolean(generationBlockReason)}
           >
             {previewMutation.isPending ? "Previewing..." : "Preview Signals"}
           </button>
@@ -651,7 +731,7 @@ export default function PaperTradingPage() {
             type="button"
             onClick={() => runStep(false)}
             className="focus-ring rounded-xl bg-accent px-4 py-2 text-white"
-            disabled={runStepMutation.isPending}
+            disabled={runStepMutation.isPending || Boolean(runStepBlockReason)}
           >
             {runStepMutation.isPending ? "Queuing..." : "Run Step"}
           </button>
@@ -659,7 +739,7 @@ export default function PaperTradingPage() {
             type="button"
             onClick={() => runStep(true)}
             className="focus-ring rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning"
-            disabled={runStepMutation.isPending}
+            disabled={runStepMutation.isPending || Boolean(runStepBlockReason)}
           >
             {runStepMutation.isPending ? "Queuing..." : "Run Shadow Step"}
           </button>
@@ -680,6 +760,11 @@ export default function PaperTradingPage() {
             {generateReportMutation.isPending ? "Queuing report..." : "Generate Daily Report"}
           </button>
         </div>
+        {runStepBlockReason ? (
+          <p className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            {runStepBlockReason}
+          </p>
+        ) : null}
         {reportId > 0 ? (
           <p className="mt-2 text-xs text-muted">
             Latest run report:{" "}
@@ -1058,8 +1143,8 @@ export default function PaperTradingPage() {
                   {preview.candidate_quality?.counts?.FAIL ?? 0}
                 </p>
                 <p>
-                  <span className="text-muted">Policy status:</span>{" "}
-                  {preview.policy_status ?? "-"} / {preview.health_status ?? "-"}
+                  <span className="text-muted">Policy status:</span> {preview.policy_status ?? "-"}{" "}
+                  / {preview.health_status ?? "-"}
                 </p>
                 <p>
                   <span className="text-muted">Bundle:</span> {preview.bundle_id ?? "-"}
@@ -1073,8 +1158,8 @@ export default function PaperTradingPage() {
                   <span className="text-muted">Trade plan:</span> equity{" "}
                   {formatMoney(preview.trade_plan?.equity)}, risk/trade{" "}
                   {formatMoney(preview.trade_plan?.risk_amount)} (
-                  {((preview.trade_plan?.risk_per_trade ?? 0) * 100).toFixed(2)}%), max
-                  positions {preview.trade_plan?.max_positions ?? "-"}
+                  {((preview.trade_plan?.risk_per_trade ?? 0) * 100).toFixed(2)}%), max positions{" "}
+                  {preview.trade_plan?.max_positions ?? "-"}
                 </p>
                 <div className="max-h-[380px] overflow-auto rounded-xl border border-border">
                   <table className="w-full min-w-[1120px] text-xs">
@@ -1143,7 +1228,7 @@ export default function PaperTradingPage() {
                               <span
                                 className={`inline-flex rounded-full px-2 py-0.5 text-[10px] ${qualityBadgeClass(signal.quality_status)}`}
                               >
-                                {signal.quality_status ?? "PASS"}{" "}
+                                {signal.quality_status ?? "UNKNOWN"}{" "}
                                 {signal.quality_score?.toFixed(2) ?? ""}
                               </span>
                             </td>
@@ -1184,7 +1269,7 @@ export default function PaperTradingPage() {
             </p>
             <p>
               <span className="text-muted">Execution mode:</span>{" "}
-              {String(latestDecision.execution_mode ?? "LIVE")}
+              {displayExecutionMode(latestDecision.execution_mode)}
             </p>
             <p>
               <span className="text-muted">Safe mode:</span>{" "}
@@ -1240,8 +1325,7 @@ export default function PaperTradingPage() {
                         <p className="mt-1 text-muted">{asText(signal.explanation)}</p>
                         <div className="mt-2 grid gap-x-4 gap-y-1 tabular-nums sm:grid-cols-2">
                           <span>
-                            <span className="text-muted">Signal:</span>{" "}
-                            {asText(signal.signal_at)}
+                            <span className="text-muted">Signal:</span> {asText(signal.signal_at)}
                           </span>
                           <span>
                             <span className="text-muted">Fill:</span> {asText(signal.fill_at)}

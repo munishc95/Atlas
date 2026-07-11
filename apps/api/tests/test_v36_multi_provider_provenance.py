@@ -8,8 +8,8 @@ import pandas as pd
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.core.config import Settings, get_settings
-from app.db.models import DataProvenance, DatasetBundle, ProviderCredential
+from app.core.config import get_settings
+from app.db.models import DataProvenance, ProviderCredential
 from app.db.session import engine, init_db
 from app.main import app
 from app.providers.base import BaseProvider

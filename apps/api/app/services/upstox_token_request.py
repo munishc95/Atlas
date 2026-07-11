@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, select
 
 from app.core.config import Settings
+from app.core.exceptions import APIError
 from app.db.models import (
     PaperState,
     UpstoxNotifierEvent,
@@ -28,6 +29,7 @@ from app.services.upstox_auth import (
     resolve_client_id,
     resolve_client_secret,
     save_provider_credential,
+    verify_access_token,
 )
 
 PROVIDER_KIND_UPSTOX = "UPSTOX"
@@ -48,6 +50,7 @@ REASON_CLIENT_ID_MISMATCH = "client_id_mismatch"
 REASON_NONCE_MISMATCH = "nonce_mismatch"
 REASON_SECRET_MISMATCH = "secret_mismatch"
 REASON_TOKEN_STORE_FAILED = "token_store_failed"
+REASON_TOKEN_VERIFICATION_FAILED = "token_verification_failed"
 
 VALID_MESSAGE_TYPES = {"access_token", "token_issued"}
 IST_ZONE = ZoneInfo("Asia/Kolkata")
@@ -161,7 +164,9 @@ def _persist_secret_file(settings: Settings, secret: str) -> None:
     try:
         path = _secret_file_path(settings)
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
         path.write_text(f"{secret}\n", encoding="utf-8")
+        path.chmod(0o600)
     except Exception:  # noqa: BLE001
         return
 
@@ -215,9 +220,13 @@ def recommended_notifier_endpoint(
     if not secret and session is not None:
         secret = get_notifier_secret(session, settings=settings)
     if not secret:
-        return legacy_notifier_endpoint(
-            settings=settings,
-            nonce=(nonce if include_nonce_query else None),
+        path = _secret_file_path(settings)
+        if path.exists():
+            secret = str(path.read_text(encoding="utf-8").strip())
+    if not secret:
+        raise APIError(
+            code="upstox_notifier_secret_missing",
+            message="Configure a notifier secret before requesting an Upstox token.",
         )
     endpoint = f"{_notifier_base_url(settings)}/api/providers/upstox/notifier/{parse.quote(secret)}"
     if include_nonce_query and str(nonce or "").strip():
@@ -293,7 +302,11 @@ def _request_upstox_token(
     return parsed
 
 
-def serialize_request_run(row: UpstoxTokenRequestRun) -> dict[str, Any]:
+def serialize_request_run(
+    row: UpstoxTokenRequestRun,
+    *,
+    include_sensitive: bool = False,
+) -> dict[str, Any]:
     status = _normalize_run_status(row.status)
     return {
         "id": row.id,
@@ -307,10 +320,10 @@ def serialize_request_run(row: UpstoxTokenRequestRun) -> dict[str, Any]:
         "approved_at": row.approved_at.isoformat() if row.approved_at is not None else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at is not None else None,
         "resolution_reason": row.resolution_reason,
-        "notifier_url": row.notifier_url,
-        "client_id": row.client_id,
+        "notifier_url": row.notifier_url if include_sensitive else None,
+        "client_id": row.client_id if include_sensitive else None,
         "user_id": row.user_id,
-        "correlation_nonce": row.correlation_nonce,
+        "correlation_nonce": row.correlation_nonce if include_sensitive else None,
         "last_error": row.last_error,
         "created_at": row.created_at.isoformat() if row.created_at is not None else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at is not None else None,
@@ -616,7 +629,7 @@ def ensure_test_pending_run(
             settings=settings,
             session=session,
             nonce=nonce,
-            include_nonce_query=False,
+            include_nonce_query=True,
         ),
         client_id=client_id,
         user_id=None,
@@ -670,7 +683,7 @@ def request_token_run(
             settings=settings,
             session=session,
             nonce=nonce,
-            include_nonce_query=False,
+            include_nonce_query=True,
         ),
         client_id=client_id,
         user_id=None,
@@ -852,7 +865,7 @@ def _store_notifier_event(
         issued_at=_to_utc_datetime(payload.get("issued_at")),
         expires_at=_to_utc_datetime(payload.get("expires_at")),
         payload_digest=digest,
-        raw_payload_json=dict(payload),
+        raw_payload_json=_redacted_payload(payload),
         headers_json=_normalize_headers(headers),
         correlated_request_run_id=correlated_request_run_id,
     )
@@ -883,9 +896,29 @@ def _mask_user_id(value: str | None) -> str | None:
 def _redacted_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    out = dict(payload)
-    if "access_token" in out:
-        out["access_token"] = "***REDACTED***"
+    sensitive_keys = {
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "token",
+        "authorization",
+        "client_secret",
+        "api_secret",
+        "secret",
+    }
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        normalized_key = str(key).strip().lower()
+        if normalized_key in sensitive_keys or normalized_key.endswith("_token"):
+            out[key] = "***REDACTED***"
+        elif isinstance(value, dict):
+            out[key] = _redacted_payload(value)
+        elif isinstance(value, list):
+            out[key] = [
+                _redacted_payload(item) if isinstance(item, dict) else item for item in value
+            ]
+        else:
+            out[key] = value
     user_id = out.get("user_id")
     if user_id:
         out["user_id"] = _mask_user_id(str(user_id))
@@ -943,7 +976,8 @@ def process_notifier_payload(
     payload: dict[str, Any] | None,
     nonce: str | None,
     headers: dict[str, Any] | None = None,
-    secret_valid: bool = True,
+    secret_valid: bool = False,
+    verify_upstream: bool = True,
     correlation_id: str | None = None,
     source: str = "webhook",
 ) -> dict[str, Any]:
@@ -1050,7 +1084,12 @@ def process_notifier_payload(
     session.commit()
     session.refresh(notifier_event)
 
-    if incoming_nonce and incoming_nonce != str(run.correlation_nonce or "").strip():
+    expected_nonce = str(run.correlation_nonce or "").strip()
+    if (
+        not incoming_nonce
+        or not expected_nonce
+        or not secrets.compare_digest(incoming_nonce, expected_nonce)
+    ):
         emit_operate_event(
             session,
             severity="WARN",
@@ -1121,6 +1160,29 @@ def process_notifier_payload(
 
     issued_at = _to_utc_datetime(body.get("issued_at")) or _utc_now()
     expires_at = _to_utc_datetime(body.get("expires_at")) or _default_token_expiry(issued_at)
+    if verify_upstream and not fast_mode_enabled(settings):
+        verification = verify_access_token(
+            access_token=access_token,
+            base_url=settings.upstox_base_url,
+            timeout_seconds=settings.upstox_timeout_seconds,
+        )
+        if not bool(verification.get("valid")):
+            emit_operate_event(
+                session,
+                severity="WARN",
+                category="SYSTEM",
+                message="upstox_notifier_token_verification_failed",
+                details={"run_id": run.id, "source": source, "event_id": notifier_event.id},
+                correlation_id=correlation_id,
+                commit=True,
+            )
+            return {
+                "matched": True,
+                "accepted": False,
+                "reason": REASON_TOKEN_VERIFICATION_FAILED,
+                "run_id": run.id,
+                "event_id": notifier_event.id,
+            }
     try:
         row = save_provider_credential(
             session,
@@ -1302,7 +1364,6 @@ def notifier_status_payload(session: Session, *, settings: Settings) -> dict[str
         session=session,
         include_nonce_query=False,
     )
-    legacy_url = legacy_notifier_endpoint(settings=settings, nonce=None)
     health = notifier_health_payload(session, settings=settings)
     latest = latest_request_run(session)
     suggested_actions: list[str] = []
@@ -1317,9 +1378,10 @@ def notifier_status_payload(session: Session, *, settings: Settings) -> dict[str
     )
     suggested_actions.append("Request token now if token is missing or expired.")
     return {
-        "recommended_notifier_url": recommended_url,
-        "legacy_notifier_url": legacy_url,
-        "legacy_route_security": "less_secure",
+        "recommended_notifier_url": recommended_url.split("?", 1)[0].rsplit("/", 1)[0]
+        + "/***REDACTED***?nonce=***REDACTED***",
+        "legacy_notifier_url": None,
+        "legacy_route_security": "disabled",
         "secret_configured": bool(secret),
         "webhook_health": health,
         "last_request_run": (serialize_request_run(latest) if latest is not None else None),

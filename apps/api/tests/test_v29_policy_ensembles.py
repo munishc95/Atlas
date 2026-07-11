@@ -14,7 +14,6 @@ from app.db.models import (
     PaperOrder,
     PaperPosition,
     PaperRun,
-    PaperState,
     Policy,
     PolicyEnsemble,
     PolicyEnsembleMember,

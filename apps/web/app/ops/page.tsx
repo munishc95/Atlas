@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -49,7 +49,7 @@ function readinessTone(verdict: string): string {
   return "bg-success/15 text-success";
 }
 
-export default function OpsPage() {
+function OpsPageContent() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -1973,5 +1973,19 @@ export default function OpsPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function OpsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-4">
+          <LoadingState label="Loading operational readiness..." />
+        </div>
+      }
+    >
+      <OpsPageContent />
+    </Suspense>
   );
 }

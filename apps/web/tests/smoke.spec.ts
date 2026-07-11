@@ -114,7 +114,10 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   expect(settingsRes.ok()).toBeTruthy();
 
-  const mappingDir = path.resolve(__dirname, "../../../data/inbox/_metadata");
+  const mappingDir = path.resolve(
+    process.env.ATLAS_DATA_INBOX_ROOT ?? path.resolve(__dirname, "../.atlas/e2e-inbox"),
+    "_metadata",
+  );
   mkdirSync(mappingDir, { recursive: true });
   const mappingPath = path.resolve(mappingDir, "upstox_instruments.csv");
   writeFileSync(mappingPath, "symbol,instrument_key\nNIFTY500,NSE_EQ|NIFTY500\n", "utf-8");
@@ -257,7 +260,9 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   expect(enforceStrategyModeRes.ok()).toBeTruthy();
 
   await page.goto("/ops");
-  await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "Operate Mode" })).toBeVisible({
+    timeout: 20_000,
+  });
   await expect(page.getByText(/Fast mode:/i)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Renew Upstox Token Now" }).click();
   await expect
@@ -307,7 +312,12 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   });
   expect(runOperateRes.ok()).toBeTruthy();
   const runOperateBody = await runOperateRes.json();
-  const operateJob = await waitForJob(request, apiBase, String(runOperateBody?.data?.job_id), 240_000);
+  const operateJob = await waitForJob(
+    request,
+    apiBase,
+    String(runOperateBody?.data?.job_id),
+    240_000,
+  );
   const operateResult = (operateJob.result_json ?? {}) as Record<string, unknown>;
   const operateSummary = (operateResult.summary ?? {}) as Record<string, unknown>;
   expect(String(operateSummary.mode ?? "")).toBe("SHADOW");
@@ -417,7 +427,11 @@ test("@smoke fast operate run + report pdf + ops health", async ({ page, request
   await page.getByRole("button", { name: "View trend" }).click();
   await expect(page.getByText(/Data Confidence Trend/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Risk scale/i).first()).toBeVisible({ timeout: 20_000 });
-  await page.locator("button").filter({ hasText: /Avg confidence/i }).first().click();
+  await page
+    .locator("button")
+    .filter({ hasText: /Avg confidence/i })
+    .first()
+    .click();
   await expect(page.getByText(/Confidence Drilldown/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Worst symbols/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Provider mix delta:/i)).toBeVisible({ timeout: 20_000 });

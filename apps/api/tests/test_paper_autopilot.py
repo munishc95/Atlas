@@ -509,7 +509,7 @@ def test_bundle_entry_gate_ignores_positions_outside_active_bundle() -> None:
                         "vol_scale": 0.0,
                     }
                 ],
-                "mark_prices": {},
+                "mark_prices": {"OUTSIDE_TEST": 100.0},
             },
         )
         assert run.status_code == 200

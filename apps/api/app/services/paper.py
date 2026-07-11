@@ -2442,6 +2442,8 @@ def _run_paper_step_with_simulator_engine(
             "selected_signals_count": executed_count,
             "selected_signals": [_selected_signal_summary(item) for item in executed_signals],
             "skipped_signals": skipped_signals,
+            "positions_opened": len(new_position_ids),
+            "positions_closed": len(closed_position_ids),
             "entry_gate_positions_before": int(entry_gate_positions_count),
             "ignored_positions_outside_bundle_count": len(ignored_positions_outside_bundle),
             "ignored_positions_outside_bundle": [
@@ -3095,7 +3097,8 @@ def run_paper_step(
         mark = float(mark_prices.get(position.symbol, position.avg_price))
         mtm_before += _mark_to_market_component(position, mark)
 
-    if state.kill_switch_active:
+    kill_switch_active_at_start = bool(state.kill_switch_active)
+    if kill_switch_active_at_start and not positions_before:
         _log(session, "kill_switch", {"active": True})
         kill_timeframes = _resolve_timeframes(payload, policy)
         kill_primary_timeframe = kill_timeframes[0] if kill_timeframes else "1d"
@@ -3538,6 +3541,8 @@ def run_paper_step(
     should_generate = auto_generate or (
         (policy.get("mode") == "policy" or use_ensemble_mode) and len(provided_signals) == 0
     )
+    if kill_switch_active_at_start:
+        should_generate = False
     if safe_mode_active and safe_mode_action == "exits_only":
         should_generate = False
     if no_trade_active:
@@ -3884,7 +3889,27 @@ def run_paper_step(
             key=lambda item: float(item.get("signal_strength", 0.0)),
             reverse=True,
         )
-    if safe_mode_active and safe_mode_action == "exits_only":
+    if kill_switch_active_at_start:
+        for signal in candidates:
+            skipped_signals.append(
+                {
+                    "symbol": str(signal.get("symbol", "")).upper(),
+                    "underlying_symbol": str(
+                        signal.get("underlying_symbol", signal.get("symbol", ""))
+                    ).upper(),
+                    "template": str(signal.get("template", "trend_breakout")),
+                    "side": str(signal.get("side", "BUY")).upper(),
+                    "instrument_kind": str(
+                        signal.get("instrument_kind", "EQUITY_CASH")
+                    ).upper(),
+                    "policy_mode": policy.get("mode"),
+                    "policy_id": policy.get("policy_id"),
+                    "policy_name": policy.get("policy_name"),
+                    "reason": "kill_switch_blocks_entries",
+                }
+            )
+        candidates = []
+    elif safe_mode_active and safe_mode_action == "exits_only":
         for signal in candidates:
             skipped_signals.append(
                 {
@@ -4940,6 +4965,8 @@ def run_paper_step(
         "exposure": exposure,
         "avg_holding_days": avg_holding_days,
         "kill_switch_active": bool(state.kill_switch_active),
+        "kill_switch_active_at_start": kill_switch_active_at_start,
+        "kill_switch_entries_blocked": kill_switch_active_at_start,
         "paper_engine": "legacy",
     }
     if "data_digest" not in run_summary:
@@ -5243,6 +5270,10 @@ def run_paper_step(
                 "caps_applied": dict(risk_overlay.get("caps", {})),
             },
             "paper_engine": "legacy",
+            "positions_opened": len(new_position_ids),
+            "positions_closed": len(closed_position_ids),
+            "kill_switch_active_at_start": kill_switch_active_at_start,
+            "kill_switch_entries_blocked": kill_switch_active_at_start,
             "result_digest": run_summary.get("result_digest"),
             "report_id": generated_report_id,
             "health_short": health_short_payload,

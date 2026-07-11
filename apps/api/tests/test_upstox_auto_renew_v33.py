@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import Settings, get_settings
-from app.db.models import OperateEvent, ProviderCredential, UpstoxTokenRequestRun
+from app.db.models import ProviderCredential, UpstoxTokenRequestRun
 from app.db.session import engine, init_db
 from app.main import app
 from app.services.operate_scheduler import run_auto_operate_once
@@ -123,6 +123,8 @@ def test_notifier_accepts_matching_nonce_and_stores_encrypted_credential(
                 "expires_at": (datetime.now(UTC) + timedelta(hours=10)).isoformat(),
             },
             nonce=run.correlation_nonce,
+            secret_valid=True,
+            verify_upstream=False,
             source="test",
         )
         assert result["accepted"] is True
@@ -138,7 +140,7 @@ def test_notifier_accepts_matching_nonce_and_stores_encrypted_credential(
         assert refreshed_run.status == upstox_token_request.STATUS_APPROVED
 
 
-def test_notifier_unmatched_returns_200_and_warn_event(tmp_path: Path) -> None:
+def test_legacy_notifier_rejects_unmatched_payload(tmp_path: Path) -> None:
     import os
 
     init_db()
@@ -154,22 +156,8 @@ def test_notifier_unmatched_returns_200_and_warn_event(tmp_path: Path) -> None:
                 "access_token": "missing",
             },
         )
-        assert response.status_code == 200
-        body = response.json()["data"]
-        assert body["acknowledged"] is True
-        assert body["accepted"] is False
-
-    with Session(engine) as session:
-        events = session.exec(
-            select(OperateEvent)
-            .where(
-                OperateEvent.message.in_(
-                    ["upstox_notifier_unmatched", "upstox_notifier_client_id_mismatch"]
-                )
-            )
-            .order_by(OperateEvent.ts.desc())
-        ).all()
-        assert len(events) >= 1
+        assert response.status_code == 410
+        assert response.json()["error"]["code"] == "upstox_legacy_notifier_disabled"
 
 
 def test_scheduler_enqueues_auto_renew_when_token_expiring_soon(tmp_path: Path) -> None:

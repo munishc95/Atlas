@@ -352,10 +352,13 @@ def _resolve_cred_key(settings: Settings) -> bytes:
         return env_key.encode("utf-8")
     key_file = Path(settings.cred_key_path)
     if key_file.exists():
+        key_file.chmod(0o600)
         return key_file.read_bytes().strip()
     generated = Fernet.generate_key()
     key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.parent.chmod(0o700)
     key_file.write_bytes(generated + b"\n")
+    key_file.chmod(0o600)
     return generated
 
 

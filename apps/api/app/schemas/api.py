@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, field_validator
 
 
 class DataEnvelope(BaseModel):
@@ -47,11 +47,24 @@ class BacktestRunRequest(BaseModel):
     strategy_id: int | None = None
 
 
+class WalkForwardConfig(BaseModel):
+    train_months: int | None = Field(default=None, ge=1, le=240)
+    test_months: int | None = Field(default=None, ge=1, le=60)
+    step_months: int | None = Field(default=None, ge=1, le=60)
+    trials: int | None = Field(default=None, ge=1, le=10_000)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    sampler: Literal["tpe", "random", "cmaes"] = "tpe"
+    pruner: Literal["median", "none", "successive_halving"] = "median"
+    seed: int | None = None
+    min_train_trades: int = Field(default=5, ge=1, le=100_000)
+    max_oos_drawdown: float = Field(default=0.2, gt=0, le=1)
+
+
 class WalkForwardRunRequest(BaseModel):
     symbol: str
     timeframe: str = "1d"
     strategy_template: str
-    config: dict[str, Any] = Field(default_factory=dict)
+    config: WalkForwardConfig = Field(default_factory=WalkForwardConfig)
 
 
 class ResearchRunRequest(BaseModel):
@@ -66,10 +79,12 @@ class ResearchRunRequest(BaseModel):
 
 
 class PromoteStrategyRequest(BaseModel):
-    strategy_id: int | None = None
     strategy_name: str
     template: str
     params_json: dict[str, Any] = Field(default_factory=dict)
+    walkforward_run_id: int
+    promotion_method: Literal["train_fold_consensus_median_mode_v1"]
+    promotion_params_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class CreatePolicyRequest(BaseModel):
@@ -298,19 +313,19 @@ class ReplayRunRequest(BaseModel):
 
 
 class RuntimeSettingsRequest(BaseModel):
-    risk_per_trade: float | None = None
-    max_positions: int | None = None
-    kill_switch_dd: float | None = None
-    cooldown_days: int | None = None
-    commission_bps: float | None = None
-    slippage_base_bps: float | None = None
-    slippage_vol_factor: float | None = None
-    max_position_value_pct_adv: float | None = None
-    diversification_corr_threshold: float | None = None
+    risk_per_trade: float | None = Field(default=None, gt=0, le=0.01)
+    max_positions: int | None = Field(default=None, ge=1, le=5)
+    kill_switch_dd: float | None = Field(default=None, ge=0.01, le=0.12)
+    cooldown_days: int | None = Field(default=None, ge=1, le=60)
+    commission_bps: float | None = Field(default=None, ge=0, le=100)
+    slippage_base_bps: float | None = Field(default=None, ge=0, le=100)
+    slippage_vol_factor: float | None = Field(default=None, ge=0, le=1_000)
+    max_position_value_pct_adv: float | None = Field(default=None, gt=0, le=0.1)
+    diversification_corr_threshold: float | None = Field(default=None, ge=0, le=1)
     allowed_sides: list[str] | None = None
     paper_short_squareoff_time: str | None = None
-    autopilot_max_symbols_scan: int | None = None
-    autopilot_max_runtime_seconds: int | None = None
+    autopilot_max_symbols_scan: int | None = Field(default=None, ge=1, le=500)
+    autopilot_max_runtime_seconds: int | None = Field(default=None, ge=1, le=3_600)
     reports_auto_generate_daily: bool | None = None
     health_window_days_short: int | None = None
     health_window_days_long: int | None = None
@@ -346,7 +361,7 @@ class RuntimeSettingsRequest(BaseModel):
     futures_stt_sell_bps: float | None = None
     futures_exchange_txn_bps: float | None = None
     futures_stamp_buy_bps: float | None = None
-    futures_initial_margin_pct: float | None = None
+    futures_initial_margin_pct: float | None = Field(default=None, gt=0, le=1)
     futures_symbol_mapping_strategy: str | None = None
     paper_use_simulator_engine: bool | None = None
     trading_calendar_segment: str | None = None
@@ -426,13 +441,15 @@ class RuntimeSettingsRequest(BaseModel):
     coverage_missing_latest_fail_pct: float | None = None
     coverage_inactive_after_missing_days: int | None = None
     risk_overlay_enabled: bool | None = None
-    risk_overlay_target_vol_annual: float | None = None
-    risk_overlay_lookback_days: int | None = None
-    risk_overlay_min_scale: float | None = None
-    risk_overlay_max_scale: float | None = None
-    risk_overlay_max_gross_exposure_pct: float | None = None
-    risk_overlay_max_single_name_exposure_pct: float | None = None
-    risk_overlay_max_sector_exposure_pct: float | None = None
+    risk_overlay_target_vol_annual: float | None = Field(default=None, gt=0, le=1)
+    risk_overlay_lookback_days: int | None = Field(default=None, ge=2, le=504)
+    risk_overlay_min_scale: float | None = Field(default=None, ge=0, le=1)
+    risk_overlay_max_scale: float | None = Field(default=None, gt=0, le=2)
+    risk_overlay_max_gross_exposure_pct: float | None = Field(default=None, gt=0, le=2)
+    risk_overlay_max_single_name_exposure_pct: float | None = Field(
+        default=None, gt=0, le=1
+    )
+    risk_overlay_max_sector_exposure_pct: float | None = Field(default=None, gt=0, le=1)
     risk_overlay_corr_clamp_enabled: bool | None = None
     risk_overlay_corr_threshold: float | None = None
     risk_overlay_corr_reduce_factor: float | None = None
@@ -466,6 +483,16 @@ class RuntimeSettingsRequest(BaseModel):
     confidence_risk_scaling_enabled: bool | None = None
     confidence_risk_scale_exponent: float | None = None
     confidence_risk_scale_low_threshold: float | None = None
+
+    @field_validator("allowed_sides")
+    @classmethod
+    def validate_allowed_sides(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = list(dict.fromkeys(str(item).strip().upper() for item in value))
+        if not normalized or any(item not in {"BUY", "SELL"} for item in normalized):
+            raise ValueError("allowed_sides must contain BUY and/or SELL")
+        return normalized
 
 
 class ConfidenceAggRecomputeRequest(BaseModel):

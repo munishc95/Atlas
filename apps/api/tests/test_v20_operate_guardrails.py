@@ -67,6 +67,65 @@ def _reset_paper_state(*, settings, allow_sell: bool = True) -> None:
         session.commit()
 
 
+def test_kill_switch_blocks_entries_but_still_executes_protective_exits() -> None:
+    init_db()
+    settings = get_settings()
+    _reset_paper_state(settings=settings)
+
+    with Session(engine) as session:
+        state = get_or_create_paper_state(session, settings)
+        state.cash = 900.0
+        state.equity = 1_000.0
+        state.peak_equity = 1_000.0
+        state.kill_switch_active = True
+        state.settings_json = {
+            **(state.settings_json or {}),
+            "paper_use_simulator_engine": False,
+            "operate_safe_mode_on_fail": False,
+            "confidence_gate_enabled": False,
+            "no_trade_enabled": False,
+        }
+        session.add(state)
+        session.add(
+            PaperPosition(
+                symbol="KILL_EXIT",
+                side="BUY",
+                qty=1,
+                avg_price=100.0,
+                stop_price=95.0,
+            )
+        )
+        session.commit()
+
+        result = run_paper_step(
+            session=session,
+            settings=settings,
+            store=_store(),
+            payload={
+                "regime": "TREND_UP",
+                "signals": [
+                    {
+                        "symbol": "BLOCKED_ENTRY",
+                        "side": "BUY",
+                        "price": 100.0,
+                        "stop_distance": 5.0,
+                        "adv": 1_000_000.0,
+                    }
+                ],
+                "mark_prices": {"KILL_EXIT": 90.0},
+            },
+        )
+
+        assert session.exec(select(PaperPosition)).all() == []
+        assert result["kill_switch_active_at_start"] is True
+        assert result["positions_closed"] == 1
+        assert result["positions_opened"] == 0
+        assert any(
+            row.get("reason") == "kill_switch_blocks_entries"
+            for row in result["skipped_signals"]
+        )
+
+
 def test_data_quality_report_detects_bad_sample_fixture() -> None:
     init_db()
     settings = get_settings()

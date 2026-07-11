@@ -257,11 +257,10 @@ def _flatten_candidate_metrics(
 
 
 def _best_params(summary: dict[str, Any]) -> dict[str, Any]:
-    folds = list(summary.get("folds", []))
-    if not folds:
+    promotion = summary.get("promotion")
+    if not isinstance(promotion, dict):
         return {}
-    best = max(folds, key=lambda row: float(row.get("oos_score", -10_000.0)))
-    params = best.get("params", {})
+    params = promotion.get("params")
     return dict(params) if isinstance(params, dict) else {}
 
 

@@ -298,6 +298,26 @@ def _stop_trigger(position: SimulationPosition) -> float:
     return min(position.stop_price, position.trail_price)
 
 
+def _fill_bar_exit_reason(
+    position: SimulationPosition,
+    *,
+    high: float,
+    low: float,
+) -> tuple[str | None, float | None]:
+    """Resolve an open-fill bar conservatively when only OHLC is available.
+
+    The initial stop is active immediately after the open fill. When both the
+    stop and target are inside the same bar, their intrabar ordering is
+    unknowable, so capital protection wins and the stop is applied first.
+    """
+    trigger = _stop_trigger(position)
+    if _stop_hit(position, high, low, trigger):
+        return "STOP_HIT", trigger
+    if _target_hit(position, high, low):
+        return "TARGET_HIT", None
+    return None, None
+
+
 def _exit_price(
     *,
     position: SimulationPosition,
@@ -456,8 +476,6 @@ def run_simulation(
         survivors: list[SimulationPosition] = []
         for position in positions:
             position.bars_held += 1
-            trail_candidate = _trailing_candidate(position, float(bar["close"]), atr_now, config)
-            position.trail_price = _updated_trail(position, trail_candidate)
 
             reason: str | None = None
             trigger = _stop_trigger(position)
@@ -469,6 +487,16 @@ def run_simulation(
                 reason = "TIME_STOP"
 
             if reason is None:
+                # The close and current ATR are only known after this bar has
+                # finished. Carry the updated trail into the next bar rather
+                # than applying future-within-bar information retroactively.
+                trail_candidate = _trailing_candidate(
+                    position,
+                    float(bar["close"]),
+                    atr_now,
+                    config,
+                )
+                position.trail_price = _updated_trail(position, trail_candidate)
                 survivors.append(position)
                 continue
 
@@ -635,27 +663,55 @@ def run_simulation(
                 and config.equity_short_intraday_only
             )
             start_stop = entry_price - stop_distance if side == "BUY" else entry_price + stop_distance
-            positions.append(
-                SimulationPosition(
-                    symbol=symbol,
-                    side=side_label,
-                    instrument_kind=instrument_kind,
-                    entry_idx=i,
-                    entry_time=timestamp,
-                    qty=qty,
-                    lot_size=lot_size if _is_futures(instrument_kind) else 1,
-                    qty_lots=qty_lots,
-                    entry_price=entry_price,
-                    stop_price=start_stop,
-                    trail_price=start_stop,
-                    target_price=target_price,
-                    stop_distance=stop_distance,
-                    entry_cost=entry_cost,
-                    entry_notional=notional,
-                    margin_reserved=margin_reserved,
-                    force_eod=force_eod,
-                )
+            new_position = SimulationPosition(
+                symbol=symbol,
+                side=side_label,
+                instrument_kind=instrument_kind,
+                entry_idx=i,
+                entry_time=timestamp,
+                qty=qty,
+                lot_size=lot_size if _is_futures(instrument_kind) else 1,
+                qty_lots=qty_lots,
+                entry_price=entry_price,
+                stop_price=start_stop,
+                trail_price=start_stop,
+                target_price=target_price,
+                stop_distance=stop_distance,
+                entry_cost=entry_cost,
+                entry_notional=notional,
+                margin_reserved=margin_reserved,
+                force_eod=force_eod,
             )
+
+            fill_reason, fill_trigger = _fill_bar_exit_reason(
+                new_position,
+                high=float(bar["high"]),
+                low=float(bar["low"]),
+            )
+            if fill_reason is not None:
+                cash_delta, trade = _exit_position(
+                    position=new_position,
+                    bar=bar,
+                    timestamp=timestamp,
+                    atr_value=atr_now,
+                    reason=fill_reason,
+                    trigger=fill_trigger,
+                    config=config,
+                )
+                cash += cash_delta
+                trades.append(trade)
+                continue
+
+            # A fill-bar close may establish the trail used from the next bar
+            # onward, but cannot create a stop earlier within this bar.
+            trail_candidate = _trailing_candidate(
+                new_position,
+                float(bar["close"]),
+                atr_now,
+                config,
+            )
+            new_position.trail_price = _updated_trail(new_position, trail_candidate)
+            positions.append(new_position)
 
         # Intraday cash shorts cannot carry overnight.
         next_ts = frame.index[i + 1] if i + 1 < len(frame) else None
@@ -803,6 +859,32 @@ def _position_step_bar(
     return pd.Series({"open": mark_val, "high": mark_val, "low": mark_val, "close": mark_val})
 
 
+def _position_effective_mark(
+    position: SimulationPosition,
+    mark_prices: dict[str, float],
+) -> float | None:
+    explicit = _finite_float(mark_prices.get(position.symbol))
+    if explicit is not None and explicit > 0:
+        return explicit
+    if isinstance(position.metadata_json, dict):
+        keys = (
+            ("mark_bar", "fill_bar")
+            if position.source_position_id is not None
+            else ("fill_bar", "mark_bar")
+        )
+        for key in keys:
+            raw_bar = position.metadata_json.get(key)
+            if not isinstance(raw_bar, dict):
+                continue
+            close = _finite_float(raw_bar.get("close"))
+            if close is not None and close > 0:
+                return close
+    # Entry is an authoritative mark only for a position filled in this step.
+    if position.source_position_id is None and position.entry_price > 0:
+        return float(position.entry_price)
+    return None
+
+
 def _to_internal_position(position: dict[str, Any]) -> SimulationPosition:
     side = str(position.get("side", "BUY")).upper()
     side_label = _side_label(side)
@@ -941,7 +1023,10 @@ def simulate_portfolio_step(
     equity_reference: float,
     config: SimulationConfig,
 ) -> PortfolioStepResult:
-    ordered_signals = sorted([dict(item) for item in signals], key=lambda row: _step_signal_sort_key(row, config.seed))
+    ordered_signals = sorted(
+        [dict(item) for item in signals],
+        key=lambda row: _step_signal_sort_key(row, config.seed),
+    )
     positions: list[SimulationPosition] = []
     normalized_positions: list[dict[str, Any]] = []
     for row in open_positions:
@@ -973,6 +1058,30 @@ def simulate_portfolio_step(
     executed_signals: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
+    effective_marks = {
+        str(symbol).upper(): float(value)
+        for symbol, raw in mark_prices.items()
+        if (value := _finite_float(raw)) is not None and value > 0
+    }
+    missing_mark_symbols: list[str] = []
+    for position in positions:
+        if position.symbol in effective_marks:
+            continue
+        mark = _position_effective_mark(position, effective_marks)
+        if mark is None:
+            missing_mark_symbols.append(position.symbol)
+        else:
+            effective_marks[position.symbol] = mark
+    if missing_mark_symbols:
+        skipped.extend(
+            {
+                **signal,
+                "reason": "missing_position_mark",
+                "missing_mark_symbols": sorted(set(missing_mark_symbols)),
+            }
+            for signal in ordered_signals
+        )
+        ordered_signals = []
     overlay_enabled = bool(config.risk_overlay_enabled)
     overlay_scale = (
         max(0.0, float(config.risk_overlay_scale)) if overlay_enabled else 1.0
@@ -1001,7 +1110,7 @@ def simulate_portfolio_step(
     single_name_exposure_notional: dict[str, float] = {}
     sector_exposure_notional: dict[str, float] = {}
     for position in positions:
-        position_notional = _position_exposure_notional(position, mark_prices)
+        position_notional = _position_exposure_notional(position, effective_marks)
         gross_exposure_notional += position_notional
         underlying = _position_underlying(position)
         sector = _position_sector(position)
@@ -1279,7 +1388,7 @@ def simulate_portfolio_step(
 
     survivors: list[SimulationPosition] = []
     for position in positions:
-        bar = _position_step_bar(position, mark_prices)
+        bar = _position_step_bar(position, effective_marks)
         if bar is None:
             survivors.append(position)
             continue
@@ -1335,13 +1444,20 @@ def simulate_portfolio_step(
 
     positions = survivors
 
+    for position in positions:
+        if position.symbol in effective_marks:
+            continue
+        mark = _position_effective_mark(position, effective_marks)
+        if mark is not None:
+            effective_marks[position.symbol] = mark
+
     if _is_squareoff_due(asof.to_pydatetime(), _squareoff_cutoff(config.squareoff_time)):
         carry: list[SimulationPosition] = []
         for position in positions:
             if not (position.side == "SHORT" and position.force_eod):
                 carry.append(position)
                 continue
-            mark_val = float(mark_prices.get(position.symbol, position.entry_price))
+            mark_val = float(effective_marks.get(position.symbol, position.entry_price))
             pseudo_bar = pd.Series({"open": mark_val, "high": mark_val, "low": mark_val, "close": mark_val})
             exit_cfg = _step_cost_config(config, intraday=True)
             cash_delta, trade = _exit_position(
@@ -1373,7 +1489,7 @@ def simulate_portfolio_step(
 
     equity = float(cash)
     for position in positions:
-        mark = float(mark_prices.get(position.symbol, position.entry_price))
+        mark = float(effective_marks.get(position.symbol, position.entry_price))
         equity += _mark_to_market(position, mark)
 
     result_positions: list[dict[str, Any]] = []
@@ -1386,7 +1502,7 @@ def simulate_portfolio_step(
         "data_digest": _step_data_digest(
             signals=ordered_signals,
             positions=normalized_positions,
-            mark_prices=mark_prices,
+            mark_prices=effective_marks,
             cash=float(cash),
             equity_reference=float(equity_reference),
             asof=asof,
@@ -1411,6 +1527,11 @@ def simulate_portfolio_step(
                 "threshold": float(config.risk_overlay_corr_threshold),
                 "reduce_factor": float(config.risk_overlay_corr_reduce_factor),
             },
+        },
+        "mark_snapshot": {
+            "effective_marks": dict(sorted(effective_marks.items())),
+            "missing_mark_symbols": sorted(set(missing_mark_symbols)),
+            "entries_blocked": bool(missing_mark_symbols),
         },
     }
 

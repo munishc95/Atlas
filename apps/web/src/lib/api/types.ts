@@ -920,7 +920,7 @@ export type ApiUpstoxNotifierHealth = {
 
 export type ApiUpstoxNotifierStatus = {
   recommended_notifier_url: string;
-  legacy_notifier_url: string;
+  legacy_notifier_url: string | null;
   legacy_route_security?: "less_secure" | string;
   secret_configured: boolean;
   webhook_health: ApiUpstoxNotifierHealth;
