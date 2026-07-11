@@ -187,7 +187,6 @@ from app.services.upstox_token_request import (
     create_notifier_ping,
     ensure_test_pending_run,
     get_notifier_secret,
-    legacy_notifier_endpoint,
     latest_request_run,
     list_notifier_events,
     list_request_runs,
@@ -222,6 +221,7 @@ from app.services.operate_events import (
     get_operate_health_summary,
     list_operate_events,
 )
+from app.services.operate_readiness import evaluate_operate_readiness
 from app.services.operate_context import latest_paper_run_for_bundle, positive_int
 from app.services.fast_mode import clamp_job_timeout_seconds, fast_mode_enabled
 from app.services.effective_context import build_effective_trading_context
@@ -1041,10 +1041,10 @@ def upstox_token_request(
             settings=settings,
             session=session,
             nonce=str(run.correlation_nonce or ""),
-            include_nonce_query=False,
+            include_nonce_query=True,
         ),
-        "legacy_notifier_endpoint": legacy_notifier_endpoint(settings=settings, nonce=None),
-        "nonce_hint": str(run.correlation_nonce or ""),
+        "legacy_notifier_endpoint": None,
+        "nonce_hint": "set_in_recommended_url",
         "secret_hint": ("set" if secret else "missing"),
     }
     return _data(
@@ -1088,7 +1088,7 @@ def upstox_token_renew(
                 settings=settings,
                 session=session,
                 nonce=str(run.correlation_nonce or ""),
-                include_nonce_query=False,
+                include_nonce_query=True,
             ),
         }
     )
@@ -1132,32 +1132,12 @@ def _notifier_response(result: dict[str, Any]) -> dict[str, Any]:
 
 @router.post("/providers/upstox/notifier")
 async def upstox_notifier_legacy(
-    request: Request,
-    nonce: str | None = Query(default=None),
-    session: Session = Depends(get_session),
-    settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    payload = await _parse_upstox_notifier_payload(request)
-    check_notifier_rate_limit(
-        session,
-        ip=_request_client_ip(request),
-        source="webhook_legacy",
-        correlation_id=None,
+    raise APIError(
+        code="upstox_legacy_notifier_disabled",
+        message="Use the secret and nonce protected Upstox notifier URL.",
+        status_code=410,
     )
-    try:
-        result = process_notifier_payload(
-            session,
-            settings=settings,
-            payload=payload,
-            nonce=nonce,
-            headers=dict(request.headers),
-            secret_valid=True,
-            correlation_id=None,
-            source="webhook_legacy",
-        )
-    except Exception:  # noqa: BLE001
-        result = {"matched": False, "accepted": False, "reason": "handler_error"}
-    return _notifier_response(result)
 
 
 @router.get("/providers/upstox/notifier/status")
@@ -1248,6 +1228,7 @@ def upstox_notifier_test(
         nonce=str(run.correlation_nonce or ""),
         headers={"x-atlas-notifier-test": "1"},
         secret_valid=True,
+        verify_upstream=False,
         correlation_id=None,
         source="notifier_test",
     )
@@ -1329,12 +1310,16 @@ async def upstox_notifier_secure(
     payload = await _parse_upstox_notifier_payload(request)
     expected_secret = get_notifier_secret(session, settings=settings)
     secret_valid = secrets.compare_digest(str(secret).strip(), str(expected_secret).strip())
-    check_notifier_rate_limit(
+    rate_limited = check_notifier_rate_limit(
         session,
         ip=_request_client_ip(request),
         source="webhook_secret",
         correlation_id=None,
     )
+    if rate_limited:
+        return _notifier_response(
+            {"matched": False, "accepted": False, "reason": "rate_limited"}
+        )
     try:
         result = process_notifier_payload(
             session,
@@ -2699,17 +2684,60 @@ def set_active_policy(
 def promote_strategy(
     payload: PromoteStrategyRequest, session: Session = Depends(get_session)
 ) -> dict[str, Any]:
+    walkforward = session.get(WalkForwardRun, payload.walkforward_run_id)
+    if walkforward is None:
+        raise APIError(code="not_found", message="Walk-forward run not found", status_code=404)
+    summary = dict(walkforward.summary_json or {})
+    promotion = summary.get("promotion")
+    expected_params = promotion.get("params") if isinstance(promotion, dict) else None
+    if not bool(summary.get("eligible_for_promotion")) or not isinstance(expected_params, dict):
+        raise APIError(
+            code="walkforward_not_eligible",
+            message="Walk-forward run is not eligible for promotion.",
+            status_code=409,
+        )
+    expected_method = str(promotion.get("method") or "")
+    expected_digest = str(promotion.get("params_digest") or "")
+    expected_template = str((walkforward.config_json or {}).get("strategy_template") or "")
+    if (
+        payload.params_json != expected_params
+        or payload.promotion_method != expected_method
+        or payload.promotion_params_digest != expected_digest
+        or payload.template != expected_template
+    ):
+        raise APIError(
+            code="promotion_provenance_mismatch",
+            message="Promotion payload does not match the locked train-only consensus.",
+            status_code=409,
+        )
+    persisted_params = {
+        **payload.params_json,
+        "_atlas_promotion": {
+            "walkforward_run_id": payload.walkforward_run_id,
+            "method": expected_method,
+            "params_digest": expected_digest,
+            "engine_version": summary.get("engine_version"),
+            "data_digest": summary.get("data_digest"),
+        },
+    }
     strategy = Strategy(
         name=payload.strategy_name,
         template=payload.template,
-        params_json=payload.params_json,
+        params_json=persisted_params,
         enabled=True,
         promoted_at=datetime.now(timezone.utc),
     )
     session.add(strategy)
     session.commit()
     session.refresh(strategy)
-    return _data({"strategy_id": strategy.id, "status": "promoted"})
+    return _data(
+        {
+            "strategy_id": strategy.id,
+            "status": "promoted",
+            "walkforward_run_id": payload.walkforward_run_id,
+            "promotion_params_digest": expected_digest,
+        }
+    )
 
 
 @router.get("/regime/current")
@@ -2984,6 +3012,23 @@ def operate_health(
 ) -> dict[str, Any]:
     return _data(
         get_operate_health_summary(
+            session,
+            settings,
+            bundle_id=bundle_id,
+            timeframe=timeframe,
+        )
+    )
+
+
+@router.get("/operate/readiness")
+def operate_readiness(
+    bundle_id: int | None = Query(default=None, ge=1),
+    timeframe: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    return _data(
+        evaluate_operate_readiness(
             session,
             settings,
             bundle_id=bundle_id,
@@ -3709,6 +3754,16 @@ def put_settings_payload(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     clean = payload.model_dump(exclude_unset=True)
+    nullable_selection_fields = {"active_policy_id", "active_ensemble_id", "active_ensemble_name"}
+    invalid_null_fields = sorted(
+        key for key, value in clean.items() if value is None and key not in nullable_selection_fields
+    )
+    if invalid_null_fields:
+        raise APIError(
+            code="invalid_settings",
+            message="Settings values cannot be null.",
+            details={"fields": invalid_null_fields},
+        )
     if not clean:
         raise APIError(code="invalid_payload", message="No settings fields provided")
     return _data(update_runtime_settings(session=session, settings=settings, payload=clean))

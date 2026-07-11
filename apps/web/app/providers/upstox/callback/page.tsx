@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -16,7 +16,7 @@ function resolveRedirectUri(): string {
   return `${window.location.origin}/providers/upstox/callback`;
 }
 
-export default function UpstoxCallbackPage() {
+function UpstoxCallbackContent() {
   const params = useSearchParams();
   const [state, setState] = useState<ExchangeState>("idle");
   const [message, setMessage] = useState<string>("Waiting for authorization response...");
@@ -88,9 +88,7 @@ export default function UpstoxCallbackPage() {
     <div className="mx-auto max-w-2xl space-y-4 py-12">
       <section className="card p-6">
         <h1 className="text-2xl font-semibold">Connect Upstox</h1>
-        <p className="mt-1 text-sm text-muted">
-          Atlas is finalizing your Upstox connection.
-        </p>
+        <p className="mt-1 text-sm text-muted">Atlas is finalizing your Upstox connection.</p>
         <p className={`mt-4 rounded-xl border px-4 py-3 text-sm ${toneClass}`}>{message}</p>
         <div className="mt-5 flex gap-2">
           <Link
@@ -111,3 +109,22 @@ export default function UpstoxCallbackPage() {
   );
 }
 
+function UpstoxCallbackFallback() {
+  return (
+    <div className="mx-auto max-w-2xl space-y-4 py-12">
+      <section className="card p-6" role="status" aria-live="polite">
+        <h1 className="text-2xl font-semibold">Connect Upstox</h1>
+        <p className="mt-1 text-sm text-muted">Atlas is reading the authorization response.</p>
+        <div className="mt-4 skeleton h-11 w-full rounded-xl" />
+      </section>
+    </div>
+  );
+}
+
+export default function UpstoxCallbackPage() {
+  return (
+    <Suspense fallback={<UpstoxCallbackFallback />}>
+      <UpstoxCallbackContent />
+    </Suspense>
+  );
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -22,6 +22,7 @@ import type {
   ApiEffectiveTradingContext,
   ApiOperateEvent,
   ApiOperateRunSummary,
+  ApiOperateReadiness,
   ApiPolicySwitchEvent,
 } from "@/src/lib/api/types";
 import { qk } from "@/src/lib/query/keys";
@@ -37,7 +38,18 @@ function badgeTone(status: string): string {
   return "bg-success/15 text-success";
 }
 
-export default function OpsPage() {
+function readinessTone(verdict: string): string {
+  const token = verdict.toUpperCase();
+  if (token === "BLOCKED") {
+    return "bg-danger/15 text-danger";
+  }
+  if (token === "ATTENTION") {
+    return "bg-warning/15 text-warning";
+  }
+  return "bg-success/15 text-success";
+}
+
+function OpsPageContent() {
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -59,6 +71,11 @@ export default function OpsPage() {
   const healthQuery = useQuery({
     queryKey: qk.operateHealth(null, null),
     queryFn: async () => (await atlasApi.operateHealth()).data,
+    refetchInterval: 8_000,
+  });
+  const readinessQuery = useQuery({
+    queryKey: qk.operateReadiness(null, null),
+    queryFn: async () => (await atlasApi.operateReadiness()).data,
     refetchInterval: 8_000,
   });
   const activeBundleId =
@@ -115,9 +132,7 @@ export default function OpsPage() {
     queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60),
     enabled: Boolean(activeBundleId),
     queryFn: async () =>
-      (
-        await atlasApi.confidenceTimeline(activeBundleId ?? 0, activeTimeframe, 60)
-      ).data,
+      (await atlasApi.confidenceTimeline(activeBundleId ?? 0, activeTimeframe, 60)).data,
     refetchInterval: 8_000,
   });
   const confidenceDrilldownQuery = useQuery({
@@ -267,6 +282,7 @@ export default function OpsPage() {
       toast.success("Active policy switched");
       queryClient.invalidateQueries({ queryKey: qk.settings });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.paperState });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
     },
@@ -280,6 +296,7 @@ export default function OpsPage() {
       toast.success("Active ensemble switched");
       queryClient.invalidateQueries({ queryKey: qk.settings });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
+      queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.paperState });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       queryClient.invalidateQueries({ queryKey: qk.ensembles(1, 100, activeBundleId) });
@@ -379,6 +396,7 @@ export default function OpsPage() {
       toast.success("Webhook test sent");
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+      queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.upstoxTokenStatus });
       queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
     },
@@ -405,6 +423,7 @@ export default function OpsPage() {
       queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+      queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
     },
     onError: (error: Error) => {
       toast.error(error.message || "Could not submit Upstox renew request");
@@ -424,12 +443,21 @@ export default function OpsPage() {
       }
       queryClient.invalidateQueries({ queryKey: qk.operateStatus });
       queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+      queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
       queryClient.invalidateQueries({ queryKey: qk.operateEvents(null, null, 20) });
       queryClient.invalidateQueries({ queryKey: qk.providersStatus });
-      queryClient.invalidateQueries({ queryKey: qk.historicalBackfillLatest(activeBundleId, "1d") });
-      queryClient.invalidateQueries({ queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe) });
-      queryClient.invalidateQueries({ queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30) });
-      queryClient.invalidateQueries({ queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60) });
+      queryClient.invalidateQueries({
+        queryKey: qk.historicalBackfillLatest(activeBundleId, "1d"),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceAggLatest(activeBundleId, activeTimeframe),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceAggHistory(activeBundleId, activeTimeframe, 30),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceTimeline(activeBundleId, activeTimeframe, 60),
+      });
       queryClient.invalidateQueries({
         queryKey: qk.confidenceDrilldown(activeBundleId, activeTimeframe, selectedTimelineDate),
       });
@@ -442,14 +470,24 @@ export default function OpsPage() {
           120,
         ),
       });
-      queryClient.invalidateQueries({ queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe) });
-      queryClient.invalidateQueries({ queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId) });
+      queryClient.invalidateQueries({
+        queryKey: qk.confidenceGateLatest(activeBundleId, activeTimeframe),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.operateAutoEvalHistory(1, 10, activeBundleId, activePolicyId),
+      });
       queryClient.invalidateQueries({ queryKey: qk.operatePolicySwitches(10) });
       if (activeBundleId) {
-        queryClient.invalidateQueries({ queryKey: qk.dataQualityLatest(activeBundleId, activeTimeframe) });
-        queryClient.invalidateQueries({ queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7) });
+        queryClient.invalidateQueries({
+          queryKey: qk.dataQualityLatest(activeBundleId, activeTimeframe),
+        });
+        queryClient.invalidateQueries({
+          queryKey: qk.dataQualityHistory(activeBundleId, activeTimeframe, 7),
+        });
         queryClient.invalidateQueries({ queryKey: ["dataUpdatesLatest"] });
-        queryClient.invalidateQueries({ queryKey: qk.providerUpdatesLatest(activeBundleId, activeTimeframe) });
+        queryClient.invalidateQueries({
+          queryKey: qk.providerUpdatesLatest(activeBundleId, activeTimeframe),
+        });
         queryClient.invalidateQueries({
           queryKey: qk.dataProvenance(
             activeBundleId,
@@ -460,7 +498,9 @@ export default function OpsPage() {
             400,
           ),
         });
-        queryClient.invalidateQueries({ queryKey: qk.upstoxMappingStatus(activeBundleId, activeTimeframe, 20) });
+        queryClient.invalidateQueries({
+          queryKey: qk.upstoxMappingStatus(activeBundleId, activeTimeframe, 20),
+        });
         queryClient.invalidateQueries({ queryKey: ["dataCoverage"] });
       }
       toast.success("Ops action complete");
@@ -519,6 +559,7 @@ export default function OpsPage() {
           queryClient.invalidateQueries({ queryKey: qk.upstoxNotifierStatus });
           queryClient.invalidateQueries({ queryKey: qk.operateStatus });
           queryClient.invalidateQueries({ queryKey: qk.operateHealth(null, null) });
+          queryClient.invalidateQueries({ queryKey: qk.operateReadiness(null, null) });
           return;
         }
       } catch {
@@ -540,19 +581,32 @@ export default function OpsPage() {
   }, [queryClient, renewRunId]);
 
   const mode = String(healthQuery.data?.mode ?? statusQuery.data?.mode ?? "NORMAL");
-  const latestQuality = healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
-  const latestUpdate = healthQuery.data?.latest_data_update ?? statusQuery.data?.latest_data_update ?? null;
+  const readiness = (readinessQuery.data as ApiOperateReadiness | undefined) ?? null;
+  const readinessVerdict = String(readiness?.verdict ?? "ATTENTION");
+  const readinessChecks = readiness?.checks ?? [];
+  const failedReadinessChecks = readinessChecks.filter((check) => check.status === "FAIL");
+  const warnedReadinessChecks = readinessChecks.filter((check) => check.status === "WARN");
+  const topReadinessChecks =
+    failedReadinessChecks.length > 0
+      ? failedReadinessChecks.slice(0, 4)
+      : warnedReadinessChecks.slice(0, 4);
+  const latestQuality =
+    healthQuery.data?.latest_data_quality ?? statusQuery.data?.latest_data_quality ?? null;
+  const latestUpdate =
+    healthQuery.data?.latest_data_update ?? statusQuery.data?.latest_data_update ?? null;
   const latestProviderUpdate =
     healthQuery.data?.latest_provider_update ?? statusQuery.data?.latest_provider_update ?? null;
   const latestBackfillRun = historicalBackfillLatestQuery.data ?? null;
   const eventCounts = healthQuery.data?.recent_event_counts_24h ?? {};
-  const autoRunEnabled = Boolean(healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled);
+  const autoRunEnabled = Boolean(
+    healthQuery.data?.auto_run_enabled ?? statusQuery.data?.auto_run_enabled,
+  );
   const autoRunTimeIst = String(
     healthQuery.data?.auto_run_time_ist ?? statusQuery.data?.auto_run_time_ist ?? "15:35",
   );
   const autoRunIncludesUpdates = Boolean(
     healthQuery.data?.auto_run_include_data_updates ??
-      statusQuery.data?.auto_run_include_data_updates,
+    statusQuery.data?.auto_run_include_data_updates,
   );
   const autoRunShadowOnly = Boolean(
     healthQuery.data?.auto_run_shadow_only ?? statusQuery.data?.auto_run_shadow_only ?? true,
@@ -581,12 +635,15 @@ export default function OpsPage() {
     healthQuery.data?.calendar_segment ?? statusQuery.data?.calendar_segment ?? "EQUITIES",
   );
   const tradingDayToday = Boolean(
-    healthQuery.data?.calendar_is_trading_day_today ?? statusQuery.data?.calendar_is_trading_day_today,
+    healthQuery.data?.calendar_is_trading_day_today ??
+    statusQuery.data?.calendar_is_trading_day_today,
   );
   const calendarSession =
     healthQuery.data?.calendar_session_today ?? statusQuery.data?.calendar_session_today ?? null;
   const nextTradingDay = String(
-    healthQuery.data?.calendar_next_trading_day ?? statusQuery.data?.calendar_next_trading_day ?? "-",
+    healthQuery.data?.calendar_next_trading_day ??
+      statusQuery.data?.calendar_next_trading_day ??
+      "-",
   );
   const fastModeEnabled = Boolean(
     healthQuery.data?.fast_mode_enabled ?? statusQuery.data?.fast_mode_enabled ?? false,
@@ -612,7 +669,9 @@ export default function OpsPage() {
     latestConfidenceAgg?.decision ?? latestConfidenceGate?.decision ?? "PASS",
   ).toUpperCase();
   const confidenceReasons = (
-    latestConfidenceAgg?.reasons ?? latestConfidenceGate?.reasons ?? []
+    latestConfidenceAgg?.reasons ??
+    latestConfidenceGate?.reasons ??
+    []
   ).slice(0, 4);
   const confidenceAvg = Number(
     latestConfidenceAgg?.avg_confidence ?? latestConfidenceGate?.avg_confidence ?? 0,
@@ -642,11 +701,11 @@ export default function OpsPage() {
               ),
           ]),
         )
-      : latestConfidenceGate?.provider_mix ?? {};
+      : (latestConfidenceGate?.provider_mix ?? {});
   const effectiveContext =
     (statusQuery.data?.effective_context as ApiEffectiveTradingContext | null | undefined) ?? null;
   const confidenceTimeline = useMemo(
-    () => ((confidenceTimelineQuery.data as ApiConfidenceTimeline | null | undefined)?.rows ?? []),
+    () => (confidenceTimelineQuery.data as ApiConfidenceTimeline | null | undefined)?.rows ?? [],
     [confidenceTimelineQuery.data],
   );
   const confidenceTrendRows = useMemo(
@@ -656,9 +715,7 @@ export default function OpsPage() {
   const confidenceDrilldown =
     (confidenceDrilldownQuery.data as ApiConfidenceDrilldown | null | undefined) ?? null;
   const ensembleWeightsSource = String(
-    statusQuery.data?.ensemble_weights_source ??
-      healthQuery.data?.ensemble_weights_source ??
-      "-",
+    statusQuery.data?.ensemble_weights_source ?? healthQuery.data?.ensemble_weights_source ?? "-",
   );
   const latestRunSummary =
     ((statusQuery.data?.latest_run as Record<string, unknown> | null)?.summary_json as
@@ -672,13 +729,16 @@ export default function OpsPage() {
   const mappingMissingCount = Number(mappingStatusQuery.data?.missing_count ?? 0);
   const provenanceLatestSummary = provenanceQuery.data?.latest_day_summary ?? {};
   const coverageByProvider = Object.entries(
-    (provenanceLatestSummary.coverage_by_source_provider as Record<string, number> | undefined) ?? {},
+    (provenanceLatestSummary.coverage_by_source_provider as Record<string, number> | undefined) ??
+      {},
   )
     .map(([provider, pct]) => `${provider}: ${Number(pct).toFixed(1)}%`)
     .join(" | ");
   const providerRows = providersStatusQuery.data?.providers ?? [];
   const providerEnabled = Boolean(paperStateSettings.data_updates_provider_enabled ?? false);
-  const providerKind = String(paperStateSettings.data_updates_provider_kind ?? "UPSTOX").toUpperCase();
+  const providerKind = String(
+    paperStateSettings.data_updates_provider_kind ?? "UPSTOX",
+  ).toUpperCase();
   const upstoxTokenStatus =
     (statusQuery.data?.upstox_token_status as Record<string, unknown> | null | undefined) ??
     (healthQuery.data?.upstox_token_status as Record<string, unknown> | null | undefined) ??
@@ -695,12 +755,17 @@ export default function OpsPage() {
     (healthQuery.data?.upstox_notifier_health as Record<string, unknown> | null | undefined) ??
     null;
   const upstoxPendingNoCallback = Boolean(upstoxNotifierHealth?.pending_no_callback);
-  const upstoxPendingRequest = (upstoxNotifierHealth?.pending_request as Record<string, unknown> | null | undefined) ?? null;
+  const upstoxPendingRequest =
+    (upstoxNotifierHealth?.pending_request as Record<string, unknown> | null | undefined) ?? null;
   const upstoxAutoRenewEnabled = Boolean(
-    statusQuery.data?.upstox_auto_renew_enabled ?? healthQuery.data?.upstox_auto_renew_enabled ?? false,
+    statusQuery.data?.upstox_auto_renew_enabled ??
+    healthQuery.data?.upstox_auto_renew_enabled ??
+    false,
   );
   const upstoxNextAutoRenew = String(
-    statusQuery.data?.next_upstox_auto_renew_ist ?? healthQuery.data?.next_upstox_auto_renew_ist ?? "-",
+    statusQuery.data?.next_upstox_auto_renew_ist ??
+      healthQuery.data?.next_upstox_auto_renew_ist ??
+      "-",
   );
   const upstoxTokenExpiresAt = String(upstoxTokenStatus?.expires_at ?? "");
   const upstoxExpiresInLabel = useMemo(() => {
@@ -743,7 +808,8 @@ export default function OpsPage() {
     [switchHistoryQuery.data],
   );
   const recommendedPolicyId =
-    latestAutoEval?.recommended_action === "SWITCH" && typeof latestAutoEval.recommended_policy_id === "number"
+    latestAutoEval?.recommended_action === "SWITCH" &&
+    typeof latestAutoEval.recommended_policy_id === "number"
       ? latestAutoEval.recommended_policy_id
       : null;
   const recommendedEnsembleId =
@@ -830,8 +896,9 @@ export default function OpsPage() {
                   <p className="mt-1 text-muted">
                     Provider mix:{" "}
                     {Object.entries(providerMix)
-                      .map(([provider, count]) =>
-                        `${provider} ${((Number(count) / total) * 100).toFixed(0)}%`,
+                      .map(
+                        ([provider, count]) =>
+                          `${provider} ${((Number(count) / total) * 100).toFixed(0)}%`,
                       )
                       .join(" | ") || "-"}
                   </p>
@@ -862,7 +929,10 @@ export default function OpsPage() {
             onRetry={() => void confidenceDrilldownQuery.refetch()}
           />
         ) : !confidenceDrilldown?.summary ? (
-          <EmptyState title="No drilldown available" action="Run operate once to generate confidence rows." />
+          <EmptyState
+            title="No drilldown available"
+            action="Run operate once to generate confidence rows."
+          />
         ) : (
           <div className="space-y-3 text-sm">
             <p>
@@ -870,7 +940,9 @@ export default function OpsPage() {
             </p>
             <p>
               <span className="text-muted">Decision:</span>{" "}
-              <span className={`badge ${badgeTone(String(confidenceDrilldown.summary.gate_decision))}`}>
+              <span
+                className={`badge ${badgeTone(String(confidenceDrilldown.summary.gate_decision))}`}
+              >
                 {String(confidenceDrilldown.summary.gate_decision)}
               </span>
             </p>
@@ -908,13 +980,18 @@ export default function OpsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(confidenceDrilldown.worst_symbols_by_confidence ?? []).slice(0, 10).map((row) => (
-                      <tr key={`${row.symbol}-${row.provider ?? "n/a"}`} className="border-t border-border">
-                        <td className="px-2 py-1">{row.symbol}</td>
-                        <td className="px-2 py-1">{Number(row.confidence ?? 0).toFixed(1)}</td>
-                        <td className="px-2 py-1">{row.provider ?? "-"}</td>
-                      </tr>
-                    ))}
+                    {(confidenceDrilldown.worst_symbols_by_confidence ?? [])
+                      .slice(0, 10)
+                      .map((row) => (
+                        <tr
+                          key={`${row.symbol}-${row.provider ?? "n/a"}`}
+                          className="border-t border-border"
+                        >
+                          <td className="px-2 py-1">{row.symbol}</td>
+                          <td className="px-2 py-1">{Number(row.confidence ?? 0).toFixed(1)}</td>
+                          <td className="px-2 py-1">{row.provider ?? "-"}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               )}
@@ -942,10 +1019,114 @@ export default function OpsPage() {
       </DetailsDrawer>
 
       <section className="card p-4">
+        {readinessQuery.isLoading ? (
+          <LoadingState label="Loading readiness" />
+        ) : readinessQuery.isError ? (
+          <ErrorState
+            title="Could not load readiness"
+            action="Retry the production paper readiness query."
+            onRetry={() => void readinessQuery.refetch()}
+          />
+        ) : !readiness ? (
+          <EmptyState
+            title="No readiness payload"
+            action="Refresh once the backend readiness endpoint is reachable."
+          />
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold">Production Paper Readiness</h2>
+                <p className="mt-1 text-sm text-muted">
+                  Active bundle {readiness.active_bundle_id ?? "-"} | timeframe{" "}
+                  {readiness.active_timeframe ?? "-"} | paper mode {readiness.paper_mode ?? "-"}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`badge ${readinessTone(readinessVerdict)}`}>
+                  {readinessVerdict}
+                </span>
+                <span className="badge bg-danger/15 text-danger">
+                  Real money {readiness.real_money.verdict}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Pass: {readiness.summary.pass}
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Warn: {readiness.summary.warn}
+              </p>
+              <p className="rounded-xl border border-border px-3 py-2 text-sm">
+                Fail: {readiness.summary.fail}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">Operator Gate</h3>
+                  <p className="mt-1 text-xs text-muted">
+                    {readiness.can_run_production_paper
+                      ? "Production paper can run with the warnings shown below."
+                      : "Production paper is blocked until failing checks are resolved."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => runQualityMutation.mutate()}
+                    disabled={runQualityMutation.isPending || !activeBundleId}
+                    className="focus-ring rounded-xl border border-border px-3 py-2 text-xs font-semibold"
+                  >
+                    {runQualityMutation.isPending ? "Queueing..." : "Run Quality"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => operateRunMutation.mutate(true)}
+                    disabled={operateRunMutation.isPending}
+                    className="focus-ring rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white"
+                  >
+                    {operateRunMutation.isPending ? "Queueing..." : "Shadow Operate"}
+                  </button>
+                </div>
+              </div>
+              {topReadinessChecks.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {topReadinessChecks.map((check) => (
+                    <div key={check.id} className="rounded-lg border border-border px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-medium">{check.label}</p>
+                        <span className={`badge ${badgeTone(check.status)}`}>{check.status}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted">{check.detail}</p>
+                      {check.action ? (
+                        <p className="mt-1 text-xs text-muted">Next: {check.action}</p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-muted">No blocking or warning checks.</p>
+              )}
+            </div>
+
+            <p className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {readiness.real_money.reason}
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section className="card p-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-semibold">Operate Mode</h2>
-            <p className="mt-1 text-sm text-muted">Operational trust, guardrails, and explainable safety controls.</p>
+            <p className="mt-1 text-sm text-muted">
+              Operational trust, guardrails, and explainable safety controls.
+            </p>
             {effectiveContext ? (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span className="rounded-full border border-border px-2 py-1 text-muted">
@@ -986,14 +1167,19 @@ export default function OpsPage() {
             Timeframe: {activeTimeframe}
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
-            Last run-step: {healthQuery.data?.last_run_step_at ?? statusQuery.data?.last_run_step_at ?? "-"}
+            Last run-step:{" "}
+            {healthQuery.data?.last_run_step_at ?? statusQuery.data?.last_run_step_at ?? "-"}
           </p>
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <p className="rounded-xl border border-border px-3 py-2 text-sm">Regime: {currentRegime}</p>
+          <p className="rounded-xl border border-border px-3 py-2 text-sm">
+            Regime: {currentRegime}
+          </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
             No-trade gate:{" "}
-            <span className={`badge ${noTradeTriggered ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>
+            <span
+              className={`badge ${noTradeTriggered ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}
+            >
               {noTradeTriggered ? "Active" : "Inactive"}
             </span>
           </p>
@@ -1012,7 +1198,9 @@ export default function OpsPage() {
           <div className="flex items-center justify-between gap-2">
             <div>
               <h3 className="text-sm font-semibold">Data Confidence</h3>
-              <p className="mt-1 text-xs text-muted">Confidence gate decision as of {confidenceTradingDate}</p>
+              <p className="mt-1 text-xs text-muted">
+                Confidence gate decision as of {confidenceTradingDate}
+              </p>
             </div>
             <span
               className={`badge ${
@@ -1027,7 +1215,8 @@ export default function OpsPage() {
             </span>
           </div>
           <p className="mt-2 text-xs text-muted">
-            Avg confidence {confidenceAvg.toFixed(1)} | low-confidence symbols {(confidenceLowPct * 100).toFixed(1)}%
+            Avg confidence {confidenceAvg.toFixed(1)} | low-confidence symbols{" "}
+            {(confidenceLowPct * 100).toFixed(1)}%
           </p>
           <p className="mt-1 text-xs text-muted">
             Confidence risk scale: {(confidenceRiskScale * 100).toFixed(1)}%
@@ -1068,7 +1257,9 @@ export default function OpsPage() {
               onClick={() => {
                 setShowConfidenceTrend(true);
                 if (!selectedTimelineDate && confidenceTimeline.length > 0) {
-                  setSelectedTimelineDate(String(confidenceTimeline[confidenceTimeline.length - 1]?.trading_date ?? ""));
+                  setSelectedTimelineDate(
+                    String(confidenceTimeline[confidenceTimeline.length - 1]?.trading_date ?? ""),
+                  );
                 }
               }}
               className="focus-ring rounded-md border border-border px-2 py-1 text-xs text-muted"
@@ -1079,13 +1270,16 @@ export default function OpsPage() {
         </div>
         <p className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
           Fast mode:{" "}
-          <span className={`badge ${fastModeEnabled ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>
+          <span
+            className={`badge ${fastModeEnabled ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}
+          >
             {fastModeEnabled ? "Enabled" : "Disabled"}
           </span>
         </p>
         {mappingMissingCount > 0 ? (
           <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-            Mapping health warning: {mappingMissingCount} symbol(s) missing Upstox instrument mapping.
+            Mapping health warning: {mappingMissingCount} symbol(s) missing Upstox instrument
+            mapping.
           </p>
         ) : null}
         {showUpstoxReconnectBanner ? (
@@ -1172,13 +1366,9 @@ export default function OpsPage() {
                 Run: {String(renewRun.id ?? "-")} | status: {String(renewRun.status ?? "-")} | auth
                 expiry: {String(renewRun.authorization_expiry ?? "-")}
               </p>
-              <p className="break-all">
-                Notifier URL: {renewRecommendedNotifierUrl}
-              </p>
+              <p className="break-all">Notifier URL: {renewRecommendedNotifierUrl}</p>
               <details className="rounded-lg border border-border px-2 py-2">
-                <summary className="cursor-pointer text-foreground">
-                  Approval instructions
-                </summary>
+                <summary className="cursor-pointer text-foreground">Approval instructions</summary>
                 <ol className="mt-2 list-decimal space-y-1 pl-4">
                   <li>Open Upstox My Apps and set the notifier URL.</li>
                   <li>Approve the pending token request in Upstox.</li>
@@ -1198,7 +1388,8 @@ export default function OpsPage() {
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <p className="rounded-xl border border-border px-3 py-2 text-sm">
-            Auto-eval: {autoEvalEnabled ? "Enabled" : "Disabled"} ({autoEvalFrequency} @ {autoEvalTimeIst} IST)
+            Auto-eval: {autoEvalEnabled ? "Enabled" : "Disabled"} ({autoEvalFrequency} @{" "}
+            {autoEvalTimeIst} IST)
           </p>
           <p className="rounded-xl border border-border px-3 py-2 text-sm lg:col-span-2">
             Next evaluation: {nextAutoEvalRun}
@@ -1251,7 +1442,10 @@ export default function OpsPage() {
                   </tr>
                 ) : (
                   (activeEnsemble.members ?? []).map((member) => (
-                    <tr key={`${member.ensemble_id}-${member.policy_id}`} className="border-t border-border">
+                    <tr
+                      key={`${member.ensemble_id}-${member.policy_id}`}
+                      className="border-t border-border"
+                    >
                       <td className="px-3 py-2">
                         {member.policy_name ?? `Policy ${member.policy_id}`} (#{member.policy_id})
                       </td>
@@ -1283,18 +1477,25 @@ export default function OpsPage() {
               onRetry={() => void healthQuery.refetch()}
             />
           ) : !latestQuality ? (
-            <EmptyState title="No quality report yet" action="Run data quality from quick actions." />
+            <EmptyState
+              title="No quality report yet"
+              action="Run data quality from quick actions."
+            />
           ) : (
             <div className="mt-3 space-y-2 text-sm">
               <p>
                 <span className="text-muted">Status:</span>{" "}
-                <span className={`badge ${badgeTone(String(latestQuality.status))}`}>{latestQuality.status}</span>
+                <span className={`badge ${badgeTone(String(latestQuality.status))}`}>
+                  {latestQuality.status}
+                </span>
               </p>
               <p>
-                <span className="text-muted">Coverage:</span> {Number(latestQuality.coverage_pct ?? 0).toFixed(2)}%
+                <span className="text-muted">Coverage:</span>{" "}
+                {Number(latestQuality.coverage_pct ?? 0).toFixed(2)}%
               </p>
               <p>
-                <span className="text-muted">Checked symbols:</span> {latestQuality.checked_symbols} / {latestQuality.total_symbols}
+                <span className="text-muted">Checked symbols:</span> {latestQuality.checked_symbols}{" "}
+                / {latestQuality.total_symbols}
               </p>
               <p>
                 <span className="text-muted">Last bar:</span> {latestQuality.last_bar_ts ?? "-"}
@@ -1320,7 +1521,9 @@ export default function OpsPage() {
 
         <article className="card p-4">
           <h3 className="text-base font-semibold">Quick actions</h3>
-          <p className="mt-1 text-xs text-muted">Run quality checks, generate reports, and replay policy deterministically.</p>
+          <p className="mt-1 text-xs text-muted">
+            Run quality checks, generate reports, and replay policy deterministically.
+          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
@@ -1382,22 +1585,28 @@ export default function OpsPage() {
             </button>
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
-            <p className="rounded-lg border border-border px-2 py-2">INFO: {eventCounts.INFO ?? 0}</p>
-            <p className="rounded-lg border border-border px-2 py-2">WARN: {eventCounts.WARN ?? 0}</p>
-            <p className="rounded-lg border border-border px-2 py-2">ERROR: {eventCounts.ERROR ?? 0}</p>
+            <p className="rounded-lg border border-border px-2 py-2">
+              INFO: {eventCounts.INFO ?? 0}
+            </p>
+            <p className="rounded-lg border border-border px-2 py-2">
+              WARN: {eventCounts.WARN ?? 0}
+            </p>
+            <p className="rounded-lg border border-border px-2 py-2">
+              ERROR: {eventCounts.ERROR ?? 0}
+            </p>
           </div>
           <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-            {(["data_updates", "data_quality", "paper_step", "daily_report", "auto_eval"] as const).map(
-              (jobKind) => {
-                const row = lastJobDurations[jobKind] ?? {};
-                const duration = Number(row.duration_seconds ?? 0);
-                return (
-                  <p key={jobKind} className="rounded-lg border border-border px-2 py-2">
-                    {jobKind}: {duration > 0 ? `${duration.toFixed(2)}s` : "-"}
-                  </p>
-                );
-              },
-            )}
+            {(
+              ["data_updates", "data_quality", "paper_step", "daily_report", "auto_eval"] as const
+            ).map((jobKind) => {
+              const row = lastJobDurations[jobKind] ?? {};
+              const duration = Number(row.duration_seconds ?? 0);
+              return (
+                <p key={jobKind} className="rounded-lg border border-border px-2 py-2">
+                  {jobKind}: {duration > 0 ? `${duration.toFixed(2)}s` : "-"}
+                </p>
+              );
+            })}
           </div>
           <div className="mt-3 rounded-xl border border-border px-3 py-2 text-xs text-muted">
             <p>
@@ -1452,7 +1661,11 @@ export default function OpsPage() {
           <button
             type="button"
             onClick={() => autoEvalMutation.mutate()}
-            disabled={autoEvalMutation.isPending || !activeBundleId || (!activePolicyId && !activeEnsembleId)}
+            disabled={
+              autoEvalMutation.isPending ||
+              !activeBundleId ||
+              (!activePolicyId && !activeEnsembleId)
+            }
             className="focus-ring rounded-xl border border-border px-3 py-2 text-sm text-muted"
           >
             {autoEvalMutation.isPending ? "Queuing..." : "Run Evaluation Now"}
@@ -1497,7 +1710,10 @@ export default function OpsPage() {
           </div>
         ) : !latestAutoEval ? (
           <div className="mt-3">
-            <EmptyState title="No evaluations yet" action="Run evaluation to generate a recommendation." />
+            <EmptyState
+              title="No evaluations yet"
+              action="Run evaluation to generate a recommendation."
+            />
           </div>
         ) : (
           <div className="mt-3 space-y-2 text-sm">
@@ -1569,7 +1785,10 @@ export default function OpsPage() {
       <section className="card p-4">
         <h3 className="text-base font-semibold">Latest operate run</h3>
         {!lastOperateSummary ? (
-          <EmptyState title="No operate run summary yet" action="Run the one-button operate flow above." />
+          <EmptyState
+            title="No operate run summary yet"
+            action="Run the one-button operate flow above."
+          />
         ) : (
           <div className="mt-3 space-y-2 text-sm">
             <p>
@@ -1579,10 +1798,12 @@ export default function OpsPage() {
               </span>
             </p>
             <p>
-              <span className="text-muted">Data updates:</span> {String(lastOperateSummary.update_status ?? "-")}
+              <span className="text-muted">Data updates:</span>{" "}
+              {String(lastOperateSummary.update_status ?? "-")}
             </p>
             <p>
-              <span className="text-muted">Data quality:</span> {String(lastOperateSummary.quality_status ?? "-")}
+              <span className="text-muted">Data quality:</span>{" "}
+              {String(lastOperateSummary.quality_status ?? "-")}
             </p>
             <p>
               <span className="text-muted">Paper:</span>{" "}
@@ -1595,7 +1816,9 @@ export default function OpsPage() {
                 <>
                   #{lastOperateSummary.daily_report.id}{" "}
                   <a
-                    href={atlasApi.dailyReportExportPdfUrl(Number(lastOperateSummary.daily_report.id))}
+                    href={atlasApi.dailyReportExportPdfUrl(
+                      Number(lastOperateSummary.daily_report.id),
+                    )}
                     target="_blank"
                     rel="noreferrer"
                     className="text-accent underline underline-offset-2"
@@ -1666,13 +1889,23 @@ export default function OpsPage() {
       >
         {selectedEvent ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Timestamp:</span> {selectedEvent.ts}</p>
-            <p><span className="text-muted">Severity:</span> {selectedEvent.severity}</p>
-            <p><span className="text-muted">Category:</span> {selectedEvent.category}</p>
-            <p><span className="text-muted">Correlation:</span> {selectedEvent.correlation_id ?? "-"}</p>
-            <p><span className="text-muted">Message:</span> {selectedEvent.message}</p>
+            <p>
+              <span className="text-muted">Timestamp:</span> {selectedEvent.ts}
+            </p>
+            <p>
+              <span className="text-muted">Severity:</span> {selectedEvent.severity}
+            </p>
+            <p>
+              <span className="text-muted">Category:</span> {selectedEvent.category}
+            </p>
+            <p>
+              <span className="text-muted">Correlation:</span> {selectedEvent.correlation_id ?? "-"}
+            </p>
+            <p>
+              <span className="text-muted">Message:</span> {selectedEvent.message}
+            </p>
             <pre className="max-h-[280px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
-{JSON.stringify(selectedEvent.details_json ?? {}, null, 2)}
+              {JSON.stringify(selectedEvent.details_json ?? {}, null, 2)}
             </pre>
           </div>
         ) : null}
@@ -1685,14 +1918,26 @@ export default function OpsPage() {
       >
         {selectedSwitch ? (
           <div className="space-y-2 text-sm">
-            <p><span className="text-muted">Timestamp:</span> {selectedSwitch.ts}</p>
-            <p><span className="text-muted">From policy:</span> {selectedSwitch.from_policy_id}</p>
-            <p><span className="text-muted">To policy:</span> {selectedSwitch.to_policy_id}</p>
-            <p><span className="text-muted">Mode:</span> {selectedSwitch.mode}</p>
-            <p><span className="text-muted">Reason:</span> {selectedSwitch.reason}</p>
-            <p><span className="text-muted">Auto-eval:</span> {selectedSwitch.auto_eval_id ?? "-"}</p>
+            <p>
+              <span className="text-muted">Timestamp:</span> {selectedSwitch.ts}
+            </p>
+            <p>
+              <span className="text-muted">From policy:</span> {selectedSwitch.from_policy_id}
+            </p>
+            <p>
+              <span className="text-muted">To policy:</span> {selectedSwitch.to_policy_id}
+            </p>
+            <p>
+              <span className="text-muted">Mode:</span> {selectedSwitch.mode}
+            </p>
+            <p>
+              <span className="text-muted">Reason:</span> {selectedSwitch.reason}
+            </p>
+            <p>
+              <span className="text-muted">Auto-eval:</span> {selectedSwitch.auto_eval_id ?? "-"}
+            </p>
             <pre className="max-h-[280px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
-{JSON.stringify(selectedSwitch.cooldown_state_json ?? {}, null, 2)}
+              {JSON.stringify(selectedSwitch.cooldown_state_json ?? {}, null, 2)}
             </pre>
           </div>
         ) : null}
@@ -1704,10 +1949,13 @@ export default function OpsPage() {
       >
         {effectiveContext ? (
           <pre className="max-h-[360px] overflow-auto rounded-xl border border-border bg-surface p-3 text-xs text-muted">
-{JSON.stringify(effectiveContext, null, 2)}
+            {JSON.stringify(effectiveContext, null, 2)}
           </pre>
         ) : (
-          <EmptyState title="Context unavailable" action="Run operate once to populate effective context." />
+          <EmptyState
+            title="Context unavailable"
+            action="Run operate once to populate effective context."
+          />
         )}
       </DetailsDrawer>
 
@@ -1725,5 +1973,19 @@ export default function OpsPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function OpsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-4">
+          <LoadingState label="Loading operational readiness..." />
+        </div>
+      }
+    >
+      <OpsPageContent />
+    </Suspense>
   );
 }

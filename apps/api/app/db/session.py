@@ -25,6 +25,8 @@ if is_sqlite:
 
 
 def init_db() -> None:
+    from app.db import models as _models  # noqa: F401
+
     SQLModel.metadata.create_all(engine)
     _ensure_indexes_and_columns()
 
@@ -34,6 +36,15 @@ def _has_column(table: str, column: str) -> bool:
         if engine.url.get_backend_name().startswith("sqlite"):
             rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()  # noqa: S608
             return any(str(row[1]) == column for row in rows)
+        table_exists = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = :table_name"
+            ),
+            {"table_name": table},
+        ).first()
+        if table_exists is None:
+            return True
         rows = conn.execute(
             text(
                 "SELECT column_name FROM information_schema.columns "

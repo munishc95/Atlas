@@ -13,7 +13,6 @@ from app.db.models import (
     DatasetBundle,
     HistoricalBackfillRun,
     ProviderUpdateItem,
-    ProviderUpdateRun,
 )
 from app.services.data_store import DataStore
 from app.services.operate_events import emit_operate_event

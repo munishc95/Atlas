@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import Counter
+import hashlib
+import json
 from typing import Any, Callable
 
 import numpy as np
@@ -36,6 +39,11 @@ def _build_folds(
 ) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]]:
     if len(index) == 0:
         return []
+    if min(train_m, test_m, step_m) <= 0:
+        raise APIError(
+            code="invalid_walkforward_config",
+            message="Walk-forward train, test, and step windows must all be positive.",
+        )
 
     folds: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]] = []
     cursor = index.min().normalize()
@@ -50,6 +58,39 @@ def _build_folds(
         cursor = cursor + pd.DateOffset(months=step_m)
 
     return folds
+
+
+def _promotion_consensus(
+    fold_rows: list[dict[str, Any]],
+    *,
+    default_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Build deployable params from train-optimized folds without consulting OOS results."""
+
+    params_by_fold = [
+        dict(row.get("params", {})) for row in fold_rows if isinstance(row.get("params"), dict)
+    ]
+    keys = sorted({key for params in params_by_fold for key in params})
+    consensus: dict[str, Any] = {}
+    for key in keys:
+        values = [params[key] for params in params_by_fold if key in params]
+        if not values:
+            continue
+        default = default_params.get(key)
+        numeric = all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values)
+        if numeric:
+            median = float(np.median(np.asarray(values, dtype=float)))
+            consensus[key] = int(round(median)) if isinstance(default, int) else median
+            continue
+
+        canonical = [json.dumps(value, sort_keys=True, separators=(",", ":")) for value in values]
+        counts = Counter(canonical)
+        winner = min(
+            (token for token, count in counts.items() if count == max(counts.values())),
+            default="null",
+        )
+        consensus[key] = json.loads(winner)
+    return consensus
 
 
 def _with_adaptive_windows(
@@ -101,9 +142,9 @@ def execute_walkforward(
 
     train_m, test_m, step_m = _window_defaults(timeframe)
     cfg = payload.get("config", {})
-    train_m = int(cfg.get("train_months", train_m))
-    test_m = int(cfg.get("test_months", test_m))
-    step_m = int(cfg.get("step_months", step_m))
+    train_m = int(cfg.get("train_months") or train_m)
+    test_m = int(cfg.get("test_months") or test_m)
+    step_m = int(cfg.get("step_months") or step_m)
 
     folds, train_m, test_m, step_m = _with_adaptive_windows(frame.index, train_m, test_m, step_m)
     if not folds:
@@ -118,7 +159,7 @@ def execute_walkforward(
 
     trials = clamp_optuna_trials(
         settings=settings,
-        requested=int(cfg.get("trials", settings.optuna_default_trials)),
+        requested=int(cfg.get("trials") or settings.optuna_default_trials),
     )
     timeout_seconds = cfg.get("timeout_seconds", settings.optuna_default_timeout_seconds)
     timeout_seconds = int(timeout_seconds) if timeout_seconds is not None else None
@@ -333,6 +374,13 @@ def execute_walkforward(
     parameter_stability_score = (
         float(np.mean(stability_components)) if stability_components else 0.0
     )
+    promotion_params = _promotion_consensus(
+        fold_rows,
+        default_params=dict(template.default_params),
+    )
+    promotion_params_digest = hashlib.sha256(
+        json.dumps(promotion_params, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
     promoted_ok = True
     reasons: list[str] = []
@@ -374,6 +422,18 @@ def execute_walkforward(
         "stress_failures": stress_failures,
         "eligible_for_promotion": promoted_ok,
         "rejection_reasons": reasons,
+        "promotion": {
+            "method": "train_fold_consensus_median_mode_v1",
+            "params": promotion_params,
+            "params_digest": promotion_params_digest,
+            "source_folds": [
+                {
+                    "fold_index": int(fold["fold_index"]),
+                    "train_end": str(fold["train_end"]),
+                }
+                for fold in fold_rows
+            ],
+        },
         "engine_version": (
             fold_rows[0].get("simulation_meta", {}).get("test", {}).get("engine_version")
             if fold_rows

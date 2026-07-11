@@ -11,7 +11,7 @@ from app.core.config import get_settings
 from app.db.models import Policy
 from app.db.session import engine
 from app.engine.backtester import BacktestConfig, run_backtest
-from app.engine.simulator import SimulationConfig, run_simulation
+from app.engine.simulator import SimulationConfig, run_simulation, simulate_portfolio_step
 from app.services.data_store import DataStore
 from app.services.policy_simulation import simulate_policy_on_bundle
 from app.strategies.templates import generate_signal_sides
@@ -47,6 +47,115 @@ def _sell_signal(index: pd.DatetimeIndex, at: int) -> dict[str, pd.Series]:
     sell = pd.Series(False, index=index)
     sell.iloc[at] = True
     return {"BUY": buy, "SELL": sell}
+
+
+def _buy_signal(index: pd.DatetimeIndex, at: int) -> dict[str, pd.Series]:
+    buy = pd.Series(False, index=index)
+    sell = pd.Series(False, index=index)
+    buy.iloc[at] = True
+    return {"BUY": buy, "SELL": sell}
+
+
+def _safety_config(**overrides: object) -> SimulationConfig:
+    base: dict[str, object] = {
+        "initial_equity": 100_000.0,
+        "risk_per_trade": 0.005,
+        "allow_long": True,
+        "allow_short": True,
+        "min_notional": 0.0,
+        "max_position_value_pct_adv": 1.0,
+        "slippage_base_bps": 0.0,
+        "slippage_vol_factor": 0.0,
+        "commission_bps": 0.0,
+        "atr_period": 1,
+        "atr_stop_mult": 1.0,
+        "atr_trail_mult": 0.1,
+        "time_stop_bars": None,
+    }
+    base.update(overrides)
+    return SimulationConfig(**base)
+
+
+def test_trailing_stop_uses_prior_bar_state_only() -> None:
+    index = pd.date_range("2026-01-01", periods=4, freq="D", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "datetime": index,
+            "open": [100.0, 100.0, 100.0, 110.0],
+            "high": [102.0, 101.0, 110.0, 111.0],
+            "low": [98.0, 99.9, 99.9, 108.0],
+            "close": [100.0, 100.0, 110.0, 109.0],
+            "volume": [1_000_000.0] * 4,
+        }
+    )
+
+    result = run_simulation(
+        price_df=frame,
+        entries=_buy_signal(index, at=0),
+        symbol="TRAIL_CAUSAL",
+        config=_safety_config(),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades.iloc[0]
+    assert trade["reason"] == "STOP_HIT"
+    assert pd.Timestamp(trade["exit_dt"]) == index[3]
+
+
+def test_fill_bar_stop_is_applied_immediately_and_wins_ambiguity() -> None:
+    index = pd.date_range("2026-02-01", periods=3, freq="D", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "datetime": index,
+            "open": [100.0, 100.0, 100.0],
+            "high": [102.0, 106.0, 101.0],
+            "low": [98.0, 90.0, 99.0],
+            "close": [100.0, 100.0, 100.0],
+            "volume": [1_000_000.0] * 3,
+        }
+    )
+
+    result = run_simulation(
+        price_df=frame,
+        entries=_buy_signal(index, at=0),
+        symbol="FILL_STOP",
+        config=_safety_config(take_profit_r=1.0),
+    )
+
+    assert len(result.trades) == 1
+    trade = result.trades.iloc[0]
+    assert trade["reason"] == "STOP_HIT"
+    assert pd.Timestamp(trade["entry_dt"]) == pd.Timestamp(trade["exit_dt"]) == index[1]
+
+
+def test_portfolio_step_marks_existing_position_from_latest_bar_close() -> None:
+    result = simulate_portfolio_step(
+        signals=[],
+        open_positions=[
+            {
+                "id": 1,
+                "symbol": "MTM_LONG",
+                "side": "BUY",
+                "instrument_kind": "EQUITY_CASH",
+                "qty": 1,
+                "avg_price": 100.0,
+                "stop_price": 90.0,
+                "opened_at": "2026-01-01T00:00:00+00:00",
+                "metadata_json": {
+                    "mark_bar": {"open": 100.0, "high": 101.0, "low": 94.0, "close": 95.0}
+                },
+            }
+        ],
+        mark_prices={},
+        asof=pd.Timestamp("2026-01-02T10:00:00+00:00"),
+        cash=900.0,
+        equity_reference=1_000.0,
+        config=_safety_config(),
+    )
+
+    assert result.equity == 995.0
+    assert result.metadata["mark_snapshot"]["effective_marks"] == {"MTM_LONG": 95.0}
+    assert result.metadata["mark_snapshot"]["missing_mark_symbols"] == []
 
 
 def test_simulator_deterministic_for_same_inputs() -> None:

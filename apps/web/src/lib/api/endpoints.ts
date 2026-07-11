@@ -30,6 +30,7 @@ import type {
   ApiProviderStatusTrend,
   ApiOperateEvent,
   ApiOperateHealth,
+  ApiOperateReadiness,
   ApiOperateRunSummary,
   ApiOperateStatus,
   ApiAutoEvalRun,
@@ -710,6 +711,14 @@ export const atlasApi = {
       `/api/operate/health${search.toString() ? `?${search.toString()}` : ""}`,
     );
   },
+  operateReadiness: (params?: { bundle_id?: number; timeframe?: string }) => {
+    const search = new URLSearchParams();
+    if (typeof params?.bundle_id === "number") search.set("bundle_id", String(params.bundle_id));
+    if (params?.timeframe) search.set("timeframe", params.timeframe);
+    return apiFetch<ApiOperateReadiness>(
+      `/api/operate/readiness${search.toString() ? `?${search.toString()}` : ""}`,
+    );
+  },
   operateRun: (payload?: {
     bundle_id?: number;
     timeframe?: string;
@@ -821,10 +830,13 @@ export const atlasApi = {
         bundle_id?: number | null;
         policy_id?: number | null;
       }
-    >(`/api/reports/signals/latest/send-telegram${search.toString() ? `?${search.toString()}` : ""}`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    >(
+      `/api/reports/signals/latest/send-telegram${search.toString() ? `?${search.toString()}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    );
   },
 
   runEvaluation: (payload: {

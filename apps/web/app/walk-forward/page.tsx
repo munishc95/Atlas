@@ -122,23 +122,30 @@ export default function WalkForwardPage() {
   );
   const eligible = Boolean(summary.eligible_for_promotion);
 
-  const bestFold = useMemo(() => {
-    if (folds.length === 0) {
-      return null;
-    }
-    return [...folds].sort((a, b) => b.oos_score - a.oos_score)[0];
-  }, [folds]);
+  const promotion = useMemo(
+    () =>
+      (summary.promotion ?? {}) as {
+        method?: string;
+        params?: Record<string, unknown>;
+        params_digest?: string;
+      },
+    [summary],
+  );
+  const promotionParams = promotion.params ?? null;
 
   const promoteMutation = useMutation({
     mutationFn: async () => {
-      if (!bestFold) {
-        throw new Error("No valid fold to promote");
+      if (!eligible || !promotionParams || Object.keys(promotionParams).length === 0) {
+        throw new Error("No train-only consensus is eligible for promotion");
       }
       return (
         await atlasApi.promoteStrategy({
           strategy_name: `${template}-${new Date().toISOString().slice(0, 10)}`,
           template,
-          params_json: bestFold.params,
+          params_json: promotionParams,
+          walkforward_run_id: runId,
+          promotion_method: promotion.method,
+          promotion_params_digest: promotion.params_digest,
         })
       ).data;
     },
@@ -204,6 +211,8 @@ export default function WalkForwardPage() {
             <input
               className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
               type="number"
+              min={1}
+              max={240}
               value={trainMonths}
               onChange={(event) => setTrainMonths(Number(event.target.value))}
             />
@@ -213,6 +222,8 @@ export default function WalkForwardPage() {
             <input
               className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
               type="number"
+              min={1}
+              max={60}
               value={testMonths}
               onChange={(event) => setTestMonths(Number(event.target.value))}
             />
@@ -222,6 +233,8 @@ export default function WalkForwardPage() {
             <input
               className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
               type="number"
+              min={1}
+              max={60}
               value={stepMonths}
               onChange={(event) => setStepMonths(Number(event.target.value))}
             />
@@ -231,6 +244,8 @@ export default function WalkForwardPage() {
             <input
               className="focus-ring mt-1 w-full rounded-xl border border-border px-3 py-2"
               type="number"
+              min={1}
+              max={10000}
               value={trials}
               onChange={(event) => setTrials(Number(event.target.value))}
             />
@@ -241,7 +256,13 @@ export default function WalkForwardPage() {
           type="button"
           onClick={() => runMutation.mutate()}
           className="focus-ring mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white"
-          disabled={runMutation.isPending}
+          disabled={
+            runMutation.isPending ||
+            trainMonths < 1 ||
+            testMonths < 1 ||
+            stepMonths < 1 ||
+            trials < 1
+          }
         >
           {runMutation.isPending ? "Queuing..." : "Run Walk-Forward"}
         </button>
@@ -323,7 +344,7 @@ export default function WalkForwardPage() {
             type="button"
             className="focus-ring rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
             onClick={() => promoteMutation.mutate()}
-            disabled={!eligible || promoteMutation.isPending || !bestFold}
+            disabled={!eligible || promoteMutation.isPending || !promotionParams}
           >
             {promoteMutation.isPending ? "Promoting..." : "Promote to Paper"}
           </button>
@@ -332,6 +353,11 @@ export default function WalkForwardPage() {
               Promotion blocked. Check rejection reasons in summary payload.
             </p>
           )}
+          {eligible && promotionParams ? (
+            <p className="text-xs text-muted">
+              Deploys the locked train-fold consensus ({promotion.method ?? "unknown method"}).
+            </p>
+          ) : null}
         </div>
       </section>
 

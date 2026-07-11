@@ -46,12 +46,12 @@ def test_secret_route_mismatch_returns_200_and_records_warning(tmp_path: Path) -
 
     with Session(engine) as session:
         _reset_state(session)
+        secret = upstox_token_request.get_notifier_secret(session, settings=get_settings())
 
     with TestClient(app) as client:
         status_res = client.get("/api/providers/upstox/notifier/status")
         assert status_res.status_code == 200
-        notifier_url = str(status_res.json()["data"]["recommended_notifier_url"])
-        secret = notifier_url.rsplit("/", 1)[-1]
+        assert "***REDACTED***" in str(status_res.json()["data"]["recommended_notifier_url"])
         bad_secret = f"{secret}-bad"
         res = client.post(
             f"/api/providers/upstox/notifier/{bad_secret}",
@@ -77,6 +77,53 @@ def test_secret_route_mismatch_returns_200_and_records_warning(tmp_path: Path) -
             .order_by(OperateEvent.ts.desc())
         ).all()
         assert len(warnings) >= 1
+
+
+def test_legacy_notifier_route_is_disabled() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/providers/upstox/notifier",
+            json={"client_id": "attacker", "access_token": "plaintext-token"},
+        )
+
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "upstox_legacy_notifier_disabled"
+
+
+def test_notifier_rejects_missing_request_nonce(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    init_db()
+    settings = _settings(tmp_path)
+
+    monkeypatch.setattr(
+        upstox_token_request,
+        "_request_upstox_token",
+        lambda **_kwargs: {
+            "status": "success",
+            "data": {
+                "authorization_expiry": (datetime.now(UTC) + timedelta(hours=2)).isoformat()
+            },
+        },
+    )
+    with Session(engine) as session:
+        _reset_state(session)
+        run, _ = upstox_token_request.request_token_run(session, settings=settings, source="test")
+        result = upstox_token_request.process_notifier_payload(
+            session,
+            settings=settings,
+            payload={
+                "client_id": "client-v34",
+                "access_token": "token-without-nonce",
+                "message_type": "access_token",
+            },
+            nonce=None,
+            secret_valid=True,
+            verify_upstream=False,
+            source="test",
+        )
+
+    assert run.correlation_nonce
+    assert result["accepted"] is False
+    assert result["reason"] == upstox_token_request.REASON_NONCE_MISMATCH
 
 
 def test_digest_dedup_prevents_duplicate_events(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -111,6 +158,8 @@ def test_digest_dedup_prevents_duplicate_events(tmp_path: Path, monkeypatch) -> 
             settings=settings,
             payload=payload,
             nonce=run.correlation_nonce,
+            secret_valid=True,
+            verify_upstream=False,
             source="test",
         )
         second = upstox_token_request.process_notifier_payload(
@@ -118,12 +167,15 @@ def test_digest_dedup_prevents_duplicate_events(tmp_path: Path, monkeypatch) -> 
             settings=settings,
             payload=payload,
             nonce=run.correlation_nonce,
+            secret_valid=True,
+            verify_upstream=False,
             source="test",
         )
         assert first["accepted"] is True
         assert second["deduplicated"] is True
         rows = session.exec(select(UpstoxNotifierEvent)).all()
         assert len(rows) == 1
+        assert rows[0].raw_payload_json["access_token"] == "***REDACTED***"
 
 
 def test_pending_run_transitions_to_approved(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -157,6 +209,8 @@ def test_pending_run_transitions_to_approved(tmp_path: Path, monkeypatch) -> Non
                 "message_type": "access_token",
             },
             nonce=run.correlation_nonce,
+            secret_valid=True,
+            verify_upstream=False,
             source="test",
         )
         assert out["accepted"] is True

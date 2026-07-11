@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date as dt_date, datetime
+from datetime import date as dt_date
 from pathlib import Path
 import time
 from uuid import uuid4
